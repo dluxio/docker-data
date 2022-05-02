@@ -5,10 +5,11 @@ const { svg2png } = require('svg-png-converter');
 const safeEval = require('safe-eval');
 const sharp = require("sharp");
 
+console.log(config.dbcs)
 const pool = new Pool({
  connectionString: config.dbcs
 });
-
+console.log({pool})
 var RAM = {}
 
 exports.start = (array) => {
