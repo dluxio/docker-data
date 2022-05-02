@@ -6,10 +6,7 @@ const safeEval = require('safe-eval');
 const sharp = require("sharp");
 
 const pool = new Pool({
- connectionString: config.dbcs,
- ssl: {
- rejectUnauthorized: false
- }
+ connectionString: config.dbcs
 });
 
 var RAM = {}
