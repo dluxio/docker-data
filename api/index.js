@@ -381,6 +381,7 @@ function getNewPosts(amount, offset){
             else{
                 for(item in res.rows){
                     res.rows[item].url = `/dlux/@${res.rows[item].author}/${res.rows[item].permlink}`
+                    res.rows[item].l2votes = res.rows[item].votes
                 }
                 r(res.rows);
             }
