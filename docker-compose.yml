@@ -19,7 +19,7 @@ services:
       - "3001:3001"
     environment:
       - PORT=3001
-      - DB_HOST=postgres://postgres:postgres@postgres:5432/public?sslmode=disable
+      - DB_HOST=postgres://postgres:postgres@db:5432/public?sslmode=disable
     logging:
       options:
         max-size: "2m"
