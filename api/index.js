@@ -68,7 +68,7 @@ exports.getPromotedPosts = (req, res, next) => {
         off = 0
     }
     res.setHeader('Content-Type', 'application/json')
-    getPromotedPosts(amt, off)
+    getDBPromotedPosts(amt, off)
         .then(r =>{
             res.send(JSON.stringify({
                         result: r,
@@ -207,7 +207,7 @@ exports.getPFP = (req, res, next) => {
 }
 
 
-function getPromotedPosts(amount, offset){
+function getDBPromotedPosts(amount, offset){
     let off = offset,
         amt = amount
         if(!amount)amt = 50
@@ -373,7 +373,7 @@ function getNewPosts(amount, offset){
         if(!amount)amt = 50
         if(!off)off = 0
     return new Promise ((r,e)=>{
-        pool.query(`SELECT author, permlink, block, votes, voteweight, promote, paid FROM posts ORDER BY block DESC OFFSET ${off} ROWS FETCH FIRST ${amt} ROWS ONLY;`, (err, res) => {
+        pool.query(`SELECT * FROM posts ORDER BY block DESC OFFSET ${off} ROWS FETCH FIRST ${amt} ROWS ONLY;`, (err, res) => {
             if (err) {
                 console.log(`Error - Failed to select some new`);
                 e(err);
