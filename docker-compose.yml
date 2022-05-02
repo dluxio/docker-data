@@ -1,4 +1,4 @@
-version: '3.8'
+version: '3.3'
 services:
   db:
     image: postgres:14.1-alpine
@@ -7,7 +7,7 @@ services:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
     ports:
-      - '5431:5431'
+      - '5432:5432'
     volumes: 
       - db:/var/lib/postgresql/data
   api:
@@ -19,7 +19,7 @@ services:
       - "3001:3001"
     environment:
       - PORT=3001
-      - DB_HOST=postgres://postgres:postgres@db:5431
+      - DB_HOST=postgres://postgres:postgres@db:5432
     logging:
       options:
         max-size: "2m"
