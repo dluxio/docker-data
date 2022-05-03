@@ -67,24 +67,43 @@ exports.getSearchResults = (req, res, next) => {
     if (off < 0) {
         off = 0
     }
-    pool.query(`SELECT *
+    getSearchResults(req.params.search_term, amt, off)
+    .then(r => {
+        res.send(
+          JSON.stringify(
+            {
+              result: r,
+              node: config.username,
+            },
+            null,
+            3
+          )
+        );
+    })
+}
+
+function getSearchResults(st, amt, off){
+    return new Promise((r, e) => {
+        pool.query(
+          `SELECT *
                 FROM posts
-                WHERE to_tsvector(author  || ' ' || permlink) @@ to_tsquery('${req.params.search_term}')
+                WHERE to_tsvector(author  || ' ' || permlink) @@ to_tsquery('${st}')
                 ORDER BY block DESC
-                OFFSET ${off} ROWS FETCH FIRST ${amt} ROWS ONLY;`, (err, res) => {
-        if (err) {
-            console.log(`Error - Failed to select some new from ${table}`);
-            e(err);
-        }
-        else {
-            for (item in res.rows) {
-                res.rows[item].url = `/dlux/@${res.rows[item].author}/${res.rows[item].permlink}`
+                OFFSET ${off} ROWS FETCH FIRST ${amt} ROWS ONLY;`,
+          (err, res) => {
+            if (err) {
+              console.log(`Error - Failed to select some new from ${table}`);
+              e(err);
+            } else {
+              for (item in res.rows) {
+                res.rows[
+                  item
+                ].url = `/dlux/@${res.rows[item].author}/${res.rows[item].permlink}`;
+              }
+              r(res.rows);
             }
-            res.send(JSON.stringify({
-                result: res.rows,
-                node: config.username
-            }, null, 3))
-        }
+          }
+        );
     })
 }
 
