@@ -87,7 +87,8 @@ function getSearchResults(st, amt, off){
         pool.query(
           `SELECT *
                 FROM posts
-                WHERE to_tsvector('english', author  || ' ' || permlink) @@ to_tsquery('english', '${st}')
+                WHERE author LIKE '%${st}%'
+                    OR permlink LIKE '%${st}%';
                 ORDER BY block DESC
                 OFFSET ${off} ROWS FETCH FIRST ${amt} ROWS ONLY;`,
           (err, res) => {
