@@ -12,6 +12,7 @@ api.get('/api/:api_type/:api_call', API.hive_api);
 api.get("/dapps/@:author/:permlink", API.getPostRoute);
 api.get('/dapps/@:author', API.getAuthorPosts);
 api.get('/new', API.getNewPosts);
+api.get('/search/:search_term', API.getSearchResults);
 api.get('/trending', API.getTrendingPosts);
 api.get('/promoted', API.getPromotedPosts);
 api.get('/pfp/:user', API.getPFP);
