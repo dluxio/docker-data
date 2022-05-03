@@ -57,8 +57,8 @@ function getStats(table) {
 }
 
 exports.getSearchResults = (req, res, next) => {
-    let amt = parseInt(req.query.a),
-        off = parseInt(req.query.o)
+    let amt = parseInt(req.query.a) || 50,
+        off = parseInt(req.query.o) || 0
     if (amt < 1) {
         amt = 50
     } else if (amt > 100) {
