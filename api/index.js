@@ -88,7 +88,7 @@ function getSearchResults(st, amt, off){
           `SELECT *
                 FROM posts
                 WHERE author LIKE '%${st}%'
-                    OR permlink LIKE '%${st}%';
+                    OR permlink LIKE '%${st}%'
                 ORDER BY block DESC
                 OFFSET ${off} ROWS FETCH FIRST ${amt} ROWS ONLY;`,
           (err, res) => {
