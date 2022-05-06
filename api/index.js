@@ -80,24 +80,24 @@ exports.getSearchResults = (req, res, next) => {
     })
 }
 
-pool.query(
-  `CREATE TABLE history (
-	txid VARCHAR PRIMARY KEY,
-	p1 VARCHAR,
-	p2 VARCHAR,
-	block VARCHAR,
-	item VARCHAR,
-    l2txid VARCHAR
-);`,
-  (err, res) => {
-    if (err) {
-      console.log(`Error - Failed to create table history`);
-      e(err);
-    } else {
-      console.log(`Success - Table history created`);
-    }
-  }
-);
+// pool.query(
+//   `CREATE TABLE history (
+// 	txid VARCHAR PRIMARY KEY,
+// 	p1 VARCHAR,
+// 	p2 VARCHAR,
+// 	block VARCHAR,
+// 	item VARCHAR,
+//     l2txid VARCHAR
+// );`,
+//   (err, res) => {
+//     if (err) {
+//       console.log(`Error - Failed to create table history`);
+//       e(err);
+//     } else {
+//       console.log(`Success - Table history created`);
+//     }
+//   }
+// );
 
 var {changes} = require('./changes')
 insertData(0)
