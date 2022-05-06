@@ -99,35 +99,28 @@ pool.query(
   }
 );
 
-// var {changes} = require('./changes')
-// pool.query(
-//   `ALTER TABLE posts
-//     ADD COLUMN type VARCHAR,
-//     ADD COLUMN hide BOOLEAN,
-//     ADD COLUMN why  SMALLINT,
-//     ADD COLUMN ratings INTEGER;`,
-//   (err, res) => {
-//     if (err) {
-//       console.log(`Error - Failed to create table posts`);
-//     } else {
-//       console.log(`Success - posts altered`);
-//       for(var i = 0; i < changes.length; i++){
-//         pool.query(
-//           `UPDATE posts 
-//                     SET type = '${changes[i].type}', 
-//                         hide = 'false', 
-//                         why = 0${changes[i].raters ? `, 
-//                         ratings = '${changes[i].ratings}',
-//                         raters = '${changes[i].raters}',
-//                         rating = '${changes[i].rating}'` : ''} 
-//                     WHERE author = '${changes[i].author}' 
-//                     AND permlink = '${changes[i].permlink}'`,
-//           (err, res) => {}
-//         );
-//       }
-//     }
-//   }
-// );
+var {changes} = require('./changes')
+insertData(0)
+function insertData(i){
+pool.query(
+          `UPDATE posts 
+                    SET type = '${changes[i].type}', 
+                        hide = 'false', 
+                        why = 0${changes[i].raters ? `, 
+                        ratings = '${changes[i].ratings}',
+                        raters = '${changes[i].raters}',
+                        rating = '${changes[i].rating}'` : ''} 
+                    WHERE author = '${changes[i].author}' 
+                    AND permlink = '${changes[i].permlink}'`,
+          (err, res) => {
+            if (err) {
+                console.log(`Error - Failed to update ${changes[i].author}/${changes[i].permlink}`);
+            } else {
+                if(changes.length < i + 1)insertData(i + 1)
+            }
+          }
+        );
+}
 
 
 
