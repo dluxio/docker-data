@@ -100,7 +100,7 @@ exports.getSearchResults = (req, res, next) => {
 // );
 
 var {changes} = require('./changes')
-insertData(1)
+insertData(2)
 function insertData(i){
 pool.query(
           `UPDATE posts 
@@ -117,7 +117,7 @@ pool.query(
                 console.log(`Error - Failed to update ${changes[i].author}/${changes[i].permlink}`);
             } else {
                 console.log('changes', i)
-                if(changes.length < i + 1)insertData(i + 1)
+                if(changes.length > i + 1)insertData(i + 1)
             }
           }
         );
