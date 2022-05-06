@@ -56,7 +56,8 @@ function getStats(table) {
 
 exports.getSearchResults = (req, res, next) => {
     let amt = parseInt(req.query.a) || 50,
-        off = parseInt(req.query.o) || 0
+        off = parseInt(req.query.o) || 0,
+        bitMask = parseInt(req.query.b) || 255
     if (amt < 1) {
         amt = 50
     } else if (amt > 100) {
@@ -65,7 +66,7 @@ exports.getSearchResults = (req, res, next) => {
     if (off < 0) {
         off = 0
     }
-    getSearchResults(req.params.search_term, amt, off)
+    getSearchResults(req.params.search_term, amt, off, bitMask)
     .then(r => {
         res.send(
           JSON.stringify(
@@ -80,12 +81,13 @@ exports.getSearchResults = (req, res, next) => {
     })
 }
 
-function getSearchResults(st, amt, off){
+function getSearchResults(st, amt, off, bitMask){
     return new Promise((r, e) => {
         pool.query(
           `SELECT *
                 FROM posts
-                WHERE author LIKE '%${st}%'
+                WHERE type in ${typeMask(bitMask)} AND
+                    author LIKE '%${st}%'
                     OR permlink LIKE '%${st}%'
                 ORDER BY block DESC
                 OFFSET ${off} ROWS FETCH FIRST ${amt} ROWS ONLY;`,
@@ -106,9 +108,23 @@ function getSearchResults(st, amt, off){
     })
 }
 
+function typeMask(bitMask){
+    var arr = []
+    if (bitMask & 1) arr.push("VR");
+    if (bitMask & 2) arr.push("AR");
+    if (bitMask & 4) arr.push("XR");
+    if (bitMask & 8) arr.push("APP");
+    if (bitMask & 6) arr.push("360");
+    if (bitMask & 32) arr.push("3D");
+    if (bitMask & 64) arr.push("Audio");
+    if (bitMask & 128) arr.push("Video");
+    return `(' + ${arr.join("','")} +')`
+}
+
 exports.getPromotedPosts = (req, res, next) => {
     let amt = parseInt(req.query.a),
-        off = parseInt(req.query.o)
+      off = parseInt(req.query.o),
+      bitMask = parseInt(req.query.b) || 255;
     if (amt < 1) {
         amt = 50
     } else if (amt > 100) {
@@ -118,7 +134,7 @@ exports.getPromotedPosts = (req, res, next) => {
         off = 0
     }
     res.setHeader('Content-Type', 'application/json')
-    getDBPromotedPosts(amt, off)
+    getDBPromotedPosts(amt, off, bitMask)
         .then(r => {
             res.send(JSON.stringify({
                 result: r,
@@ -257,13 +273,14 @@ exports.getPFP = (req, res, next) => {
 }
 
 
-function getDBPromotedPosts(amount, offset) {
+function getDBPromotedPosts(amount, offset, bitMask) {
     let off = offset,
         amt = amount
     if (!amount) amt = 50
     if (!off) off = 0
     return new Promise((r, e) => {
-        pool.query(`SELECT 
+        pool.query(
+          `SELECT 
                         author, 
                         permlink, 
                         block, 
@@ -273,28 +290,33 @@ function getDBPromotedPosts(amount, offset) {
                         paid 
                     FROM 
                         posts 
-                    WHERE 
+                    WHERE
+                        WHERE type in ${typeMask(bitMask)} AND 
                         promote > 0
                     ORDER BY 
                         promote DESC
-                    OFFSET ${off} ROWS FETCH FIRST ${amt} ROWS ONLY;`, (err, res) => {
+                    OFFSET ${off} ROWS FETCH FIRST ${amt} ROWS ONLY;`,
+          (err, res) => {
             if (err) {
-                console.log(`Error - Failed to select some new from ${table}`);
-                e(err);
+              console.log(`Error - Failed to select some new from ${table}`);
+              e(err);
+            } else {
+              for (item in res.rows) {
+                res.rows[
+                  item
+                ].url = `/dlux/@${res.rows[item].author}/${res.rows[item].permlink}`;
+              }
+              r(res.rows);
             }
-            else {
-                for (item in res.rows) {
-                    res.rows[item].url = `/dlux/@${res.rows[item].author}/${res.rows[item].permlink}`
-                }
-                r(res.rows);
-            }
-        });
+          }
+        );
     })
 }
 
 exports.getTrendingPosts = (req, res, next) => {
     let amt = parseInt(req.query.a),
-        off = parseInt(req.query.o)
+      off = parseInt(req.query.o),
+      bitMask = parseInt(req.query.b) || 255;
     if (amt < 1) {
         amt = 50
     } else if (amt > 100) {
@@ -317,13 +339,14 @@ exports.getTrendingPosts = (req, res, next) => {
         })
 }
 
-function getTrendingPosts(amount, offset) {
+function getTrendingPosts(amount, offset, bitMask) {
     let off = offset,
         amt = amount
     if (!amount) amt = 50
     if (!off) off = 0
     return new Promise((r, e) => {
-        pool.query(`SELECT 
+        pool.query(
+          `SELECT 
                         author, 
                         permlink, 
                         block, 
@@ -333,22 +356,26 @@ function getTrendingPosts(amount, offset) {
                         paid 
                     FROM 
                         posts 
-                    WHERE 
+                    WHERE
+                        WHERE type in ${typeMask(bitMask)} AND 
                         paid = false
                     ORDER BY 
                         voteweight DESC
-                    OFFSET ${off} ROWS FETCH FIRST ${amt} ROWS ONLY;`, (err, res) => {
+                    OFFSET ${off} ROWS FETCH FIRST ${amt} ROWS ONLY;`,
+          (err, res) => {
             if (err) {
-                console.log(`Error - Failed to select some new from ${table}`);
-                e(err);
+              console.log(`Error - Failed to select some new from ${table}`);
+              e(err);
+            } else {
+              for (item in res.rows) {
+                res.rows[
+                  item
+                ].url = `/dlux/@${res.rows[item].author}/${res.rows[item].permlink}`;
+              }
+              r(res.rows);
             }
-            else {
-                for (item in res.rows) {
-                    res.rows[item].url = `/dlux/@${res.rows[item].author}/${res.rows[item].permlink}`
-                }
-                r(res.rows);
-            }
-        });
+          }
+        );
     })
 }
 
@@ -394,7 +421,8 @@ exports.getPostRoute = (req, res, next) => {
 
 exports.getNewPosts = (req, res, next) => {
     let amt = parseInt(req.query.a),
-        off = parseInt(req.query.o)
+      off = parseInt(req.query.o),
+      bitMask = parseInt(req.query.b) || 255;
     if (amt < 1) {
         amt = 50
     } else if (amt > 100) {
@@ -404,7 +432,7 @@ exports.getNewPosts = (req, res, next) => {
         off = 0
     }
     res.setHeader('Content-Type', 'application/json')
-    getNewPosts(amt, off)
+    getNewPosts(amt, off, bitMask)
         .then(r => {
             res.send(JSON.stringify({
                 result: r,
@@ -417,13 +445,18 @@ exports.getNewPosts = (req, res, next) => {
         })
 }
 
-function getNewPosts(amount, offset) {
+function getNewPosts(amount, offset, bitMask) {
     let off = offset,
         amt = amount
     if (!amount) amt = 50
     if (!off) off = 0
     return new Promise((r, e) => {
-        pool.query(`SELECT * FROM posts ORDER BY block DESC OFFSET ${off} ROWS FETCH FIRST ${amt} ROWS ONLY;`, (err, res) => {
+        pool.query(`SELECT * 
+                    FROM posts 
+                    WHERE type in ${typeMask(bitMask)}
+                    ORDER BY block DESC 
+                    OFFSET ${off} ROWS 
+                    FETCH FIRST ${amt} ROWS ONLY;`, (err, res) => {
             if (err) {
                 console.log(`Error - Failed to select some new`);
                 e(err);
