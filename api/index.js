@@ -80,51 +80,6 @@ exports.getSearchResults = (req, res, next) => {
     })
 }
 
-// pool.query(
-//   `CREATE TABLE history (
-// 	txid VARCHAR PRIMARY KEY,
-// 	p1 VARCHAR,
-// 	p2 VARCHAR,
-// 	block VARCHAR,
-// 	item VARCHAR,
-//     l2txid VARCHAR
-// );`,
-//   (err, res) => {
-//     if (err) {
-//       console.log(`Error - Failed to create table history`);
-//       e(err);
-//     } else {
-//       console.log(`Success - Table history created`);
-//     }
-//   }
-// );
-
-var {changes} = require('./changes')
-insertData(2)
-function insertData(i){
-pool.query(
-          `UPDATE posts 
-                    SET type = '${changes[i].type}', 
-                        hide = 'false', 
-                        why = 0${changes[i].raters ? `, 
-                        ratings = '${changes[i].ratings}',
-                        raters = '${changes[i].raters}',
-                        rating = '${changes[i].rating}'` : ''} 
-                    WHERE author = '${changes[i].author}' 
-                    AND permlink = '${changes[i].permlink}'`,
-          (err, res) => {
-            if (err) {
-                console.log(`Error - Failed to update ${changes[i].author}/${changes[i].permlink}`);
-            } else {
-                console.log('changes', i)
-                if(changes.length > i + 1)insertData(i + 1)
-            }
-          }
-        );
-}
-
-
-
 function getSearchResults(st, amt, off){
     return new Promise((r, e) => {
         pool.query(
