@@ -114,7 +114,7 @@ function typeMask(bitMask){
     if (bitMask & 2) arr.push("AR");
     if (bitMask & 4) arr.push("XR");
     if (bitMask & 8) arr.push("APP");
-    if (bitMask & 6) arr.push("360");
+    if (bitMask & 16) arr.push("360");
     if (bitMask & 32) arr.push("3D");
     if (bitMask & 64) arr.push("Audio");
     if (bitMask & 128) arr.push("Video");
