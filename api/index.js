@@ -118,7 +118,7 @@ function typeMask(bitMask){
     if (bitMask & 32) arr.push("3D");
     if (bitMask & 64) arr.push("Audio");
     if (bitMask & 128) arr.push("Video");
-    return `(' + ${arr.join("','")} +')`
+    return `('${arr.join("','")}')`
 }
 
 exports.getPromotedPosts = (req, res, next) => {
