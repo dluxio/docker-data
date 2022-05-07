@@ -86,7 +86,7 @@ function getSearchResults(st, amt, off, bitMask){
         pool.query(
           `SELECT *
                 FROM posts
-                WHERE type in ${typeMask(bitMask)} AND
+                WHERE type IN ${typeMask(bitMask)} AND
                     author LIKE '%${st}%'
                     OR permlink LIKE '%${st}%'
                 ORDER BY block DESC
@@ -291,7 +291,7 @@ function getDBPromotedPosts(amount, offset, bitMask) {
                     FROM 
                         posts 
                     WHERE
-                        WHERE type in ${typeMask(bitMask)} AND 
+                        WHERE type IN ${typeMask(bitMask)} AND 
                         promote > 0
                     ORDER BY 
                         promote DESC
@@ -357,7 +357,7 @@ function getTrendingPosts(amount, offset, bitMask) {
                     FROM 
                         posts 
                     WHERE
-                        WHERE type in ${typeMask(bitMask)} AND 
+                        WHERE type IN ${typeMask(bitMask)} AND 
                         paid = false
                     ORDER BY 
                         voteweight DESC
@@ -453,7 +453,7 @@ function getNewPosts(amount, offset, bitMask) {
     return new Promise((r, e) => {
         pool.query(`SELECT * 
                     FROM posts 
-                    WHERE type in ${typeMask(bitMask)}
+                    WHERE type IN ${typeMask(bitMask)}
                     ORDER BY block DESC 
                     OFFSET ${off} ROWS 
                     FETCH FIRST ${amt} ROWS ONLY;`, (err, res) => {
