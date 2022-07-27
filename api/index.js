@@ -1,7 +1,6 @@
 const { Pool } = require('pg');
 const config = require('../config');
-const fetch = require('node-fetch');
-const { svg2png } = require('svg-png-converter');
+const fetch = require('node-fetch')
 const safeEval = require('safe-eval');
 const sharp = require("sharp");
 
@@ -190,8 +189,9 @@ exports.tickers = (req, res, next) => {
 
 function fetchDex(tok) {
   fetch(`${tickers[tok].api}/dex`)
-    .then((r) => j.json())
-    .then((dex) => {
+    .then((r) => r.json())
+    .then((res) => {
+        const dex = res.markets
       tickers[tok].tick = dex.hbd.tick;
       tickers[tok].hbd_tick = dex.hive.tick;
       var change = tickers[tok].tick;
@@ -205,7 +205,7 @@ function fetchDex(tok) {
           change = dex.hive.his[trade].price;
         }
       }
-      tickers[tok].change = parseFloat((dex.hbd.tick / change) * 100).toFixed(
+      tickers[tok].change = parseFloat(((dex.hbd.tick / change)-1) * 100).toFixed(
         4
       );
     });
@@ -215,9 +215,9 @@ function getTickers() {
   for (var tok in tickers) {
     fetchDex(tok);
   }
-  setTimeout(getTickers(), 60000);
+  setTimeout(()=>{getTickers();},60000)
 }
-exports.startTickers = getTickers();
+getTickers();
 
 function getDetails(uid, script, opt) {
     return new Promise((resolve, reject) => {
@@ -231,10 +231,10 @@ function makePNG(uid, script, opt) {
         const NFT = opt ? safeEval(`(//${RAM[script]}\n)('${uid}','${opt}')`) : safeEval(`(//${RAM[script]}\n)('${uid}')`)
         if (NFT.HTML.substr(0, 4) == '<svg') {
             SVG2PNG({
-                input: NFT.HTML.trim(),
-                encoding: 'buffer',
-                format: 'jpeg'
-            })
+              input: Buffer.from(NFT.HTML.trim(), "base64"),
+              encoding: "buffer",
+              format: "jpeg",
+            });
         }
         else {
             var string = NFT.HTML.trim()
@@ -257,9 +257,13 @@ function makePNG(uid, script, opt) {
                 })
         }
         function SVG2PNG(ip) {
-            svg2png(ip)
-                .then(img => { resolve([img, 'jpeg']) })
-                .catch(e => { reject(e) })
+            sharp(ip.input).resize(500).toBuffer((err, buf) => {
+              if (err) {
+                reject(err);
+              } else {
+                resolve([buf, type]);
+              }
+            });
         }
     })
 }

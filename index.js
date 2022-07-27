@@ -38,5 +38,3 @@ fetch(`${config.dluxapi}api/sets`)
 })
 .catch(e=>console.log(e))
 
-
-API.startTickers();
