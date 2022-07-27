@@ -20,6 +20,7 @@ api.get('/details/:script/:uid', API.detailsNFT);
 api.get('/img/details/:set/:uid', API.detailsNFT);
 api.get('/render/:script/:uid', API.renderNFT);
 api.get('/img/render/:set/:uid', API.renderNFT);
+api.get("/hc/tickers", API.tickers);
 
 http.listen(config.port, function() {
     console.log(`DLUX DATA API listening on port ${config.port}`);
@@ -36,3 +37,6 @@ fetch(`${config.dluxapi}api/sets`)
     API.start(scripts)
 })
 .catch(e=>console.log(e))
+
+
+API.startTickers();

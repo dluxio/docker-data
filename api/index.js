@@ -147,6 +147,78 @@ exports.getPromotedPosts = (req, res, next) => {
         })
 }
 
+var tickers = {
+  duat: {
+    api: "https://duat.hivehoneycomb.com",
+    token: "DUAT",
+    tick: "",
+    hbd_tick: "",
+    change: "",
+  },
+  dlux: {
+    api: "https://token.dlux.io",
+    token: "DLUX",
+    tick: "",
+    hbd_tick: "",
+    change: "",
+  },
+  larynx: {
+    api: "https://spkinstant.hivehoneycomb.com",
+    token: "LARYNX",
+    tick: "",
+    hbd_tick: "",
+    change: "",
+  },
+};
+
+exports.tickers = (req, res, next) => {
+  var r = [];
+  for (var token in tickers) {
+    r.push(tickers[token]);
+  }
+  res.send(
+    JSON.stringify(
+      {
+        tickers: r,
+        node: config.username,
+      },
+      null,
+      3
+    )
+  );
+};
+
+function fetchDex(tok) {
+  fetch(`${tickers[tok].api}/dex`)
+    .then((r) => j.json())
+    .then((dex) => {
+      tickers[tok].tick = dex.hbd.tick;
+      tickers[tok].hbd_tick = dex.hive.tick;
+      var change = tickers[tok].tick;
+      var time = new Date().now;
+      const now = new Date().now;
+      for (var trade in dex.hive.his) {
+        if (
+          dex.hive.his[trade].t < time &&
+          dex.hive.his[trade].t > now - 86400000
+        ) {
+          change = dex.hive.his[trade].price;
+        }
+      }
+      tickers[tok].change = parseFloat((dex.hbd.tick / change) * 100).toFixed(
+        4
+      );
+    });
+}
+
+function getTickers() {
+  for (var tok in tickers) {
+    fetchDex(tok);
+  }
+  setTimeout(getTickers(), 60000);
+}
+exports.startTickers = getTickers();
+
 function getDetails(uid, script, opt) {
     return new Promise((resolve, reject) => {
         const NFT = opt.exe ? safeEval(`(//${RAM[script]}\n)('${uid}','${opt.exe}')`) : safeEval(`(//${RAM[script]}\n)('${uid}')`)
