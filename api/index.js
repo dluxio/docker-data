@@ -192,8 +192,8 @@ function fetchDex(tok) {
     .then((r) => r.json())
     .then((res) => {
         const dex = res.markets
-      tickers[tok].tick = dex.hbd.tick;
-      tickers[tok].hbd_tick = dex.hive.tick;
+      tickers[tok].tick = dex.hive.tick;
+      tickers[tok].hbd_tick = dex.hbd.tick;
       var change = tickers[tok].tick;
       var time = new Date().now;
       const now = new Date().now;
@@ -205,7 +205,7 @@ function fetchDex(tok) {
           change = dex.hive.his[trade].price;
         }
       }
-      tickers[tok].change = parseFloat(((dex.hbd.tick / change)-1) * 100).toFixed(
+      tickers[tok].change = parseFloat(((dex.hive.tick / change)-1) * 100).toFixed(
         4
       );
     });
