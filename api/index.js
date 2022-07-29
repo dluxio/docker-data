@@ -210,6 +210,10 @@ function fetchDex(tok) {
         ) {
           change = dex.hive.his[trade].price;
           time = dex.hive.his[trade].t;
+        }
+        if (
+          dex.hive.his[trade].t > now - 86400000
+        ) {
           vol += dex.hive.his[trade].target_vol;
         }
       }
