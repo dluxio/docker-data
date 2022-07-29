@@ -202,6 +202,7 @@ function fetchDex(tok) {
       var change = tickers[tok].tick;
       var time = new Date().getTime();
       const now = new Date().getTime();
+      var vol = 0
       for (var trade in dex.hive.his) {
         if (
           dex.hive.his[trade].t < time &&
@@ -209,11 +210,13 @@ function fetchDex(tok) {
         ) {
           change = dex.hive.his[trade].price;
           time = dex.hive.his[trade].t;
+          vol += dex.hive.his[trade].target_vol;
         }
       }
       tickers[tok].change = parseFloat(
         (dex.hive.tick / change - 1) * 100
       ).toFixed(4);
+      tickers[tok].vol = vol
     });
 }
 
