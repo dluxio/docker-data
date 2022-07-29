@@ -202,13 +202,11 @@ function fetchDex(tok) {
       var change = tickers[tok].tick;
       var time = new Date().getTime();
       const now = new Date().getTime();
-      console.log({time,now})
       for (var trade in dex.hive.his) {
         if (
           dex.hive.his[trade].t < time &&
           dex.hive.his[trade].t > now - 86400000
         ) {
-            console.log(dex.hive.his[trade].t);
           change = dex.hive.his[trade].price;
           time = dex.hive.his[trade].t;
         }
