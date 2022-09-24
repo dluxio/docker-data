@@ -249,12 +249,16 @@ function makePNG(uid, script, opt) {
       ? safeEval(`(//${RAM[script]}\n)('${uid}','${opt}')`)
       : safeEval(`(//${RAM[script]}\n)('${uid}')`);
     if (NFT.HTML.substr(0, 4) == "<svg") {
-      SVG2PNG({
-        input: Buffer.from(NFT.HTML.trim(), "base64"),
-        encoding: "buffer",
-        format: "jpeg",
-      });
+      SVG2PNG(
+        {
+          input: Buffer.from(NFT.HTML.trim()),
+          encoding: "buffer",
+          format: "jpeg",
+        },
+        
+      );
     } else {
+      console.log('PNG')
       var string = NFT.HTML.trim();
       var i = 2,
         type = string.split("data:image/")[1].split(";")[0],
@@ -284,16 +288,23 @@ function makePNG(uid, script, opt) {
           }
         });
     }
-    function SVG2PNG(ip) {
-      sharp(ip.input)
-        .resize(500)
-        .toBuffer((err, buf) => {
-          if (err) {
-            reject(err);
-          } else {
-            resolve([buf, type]);
-          }
-        });
+    function SVG2PNG(ip, native = {width: 500, height: 500}) {
+      if (native.width > 500 || native.height > 500){
+
+      }
+        sharp(ip.input)
+          .resize(333, 333, {
+            kernel: sharp.kernel.nearest,
+            fit: "contain",
+          })
+          .toBuffer((err, buf) => {
+            if (err) {
+              console.log(err);
+              reject(err);
+            } else {
+              resolve([buf, ip.format]);
+            }
+          });
     }
   });
 }
@@ -372,6 +383,7 @@ exports.getPFP = (req, res, next) => {
             ? json.result[0].nft.s.split(",")[1]
             : "";
         let uid = json.result[0].pfp.split(":")[1] || "";
+        console.log({user, uid, script})
         makePNG(uid, script, exe)
           .then((img) => {
             res.setHeader("Content-Type", `image/${img[1]}`);
