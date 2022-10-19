@@ -434,8 +434,7 @@ function getDBPromotedPosts(amount, offset, bitMask) {
                         paid 
                     FROM 
                         posts 
-                    WHERE
-                        WHERE type IN ${typeMask(bitMask)} AND 
+                    WHERE type IN ${typeMask(bitMask)} AND 
                         promote > 0
                     ORDER BY 
                         promote DESC
@@ -505,8 +504,7 @@ function getTrendingPosts(amount, offset, bitMask) {
                         paid 
                     FROM 
                         posts 
-                    WHERE
-                        WHERE type IN ${typeMask(bitMask)} AND 
+                    WHERE type IN ${typeMask(bitMask)} AND 
                         paid = false
                     ORDER BY 
                         voteweight DESC
