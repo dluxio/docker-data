@@ -21,6 +21,8 @@ api.get("/img/details/:set/:uid", API.detailsNFT);
 api.get("/render/:script/:uid", API.renderNFT);
 api.get("/img/render/:set/:uid", API.renderNFT);
 api.get("/hc/tickers", API.tickers);
+api.get("/create/@:author", API.createAuthor);
+api.post("/create/@:author", API.createAuthorPost);
 
 http.listen(config.port, function () {
   console.log(`DLUX DATA API listening on port ${config.port}`);

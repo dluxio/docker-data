@@ -3,6 +3,7 @@ const config = require("../config");
 const fetch = require("node-fetch");
 const safeEval = require("safe-eval");
 const sharp = require("sharp");
+const e = require("express");
 
 const pool = new Pool({
   connectionString: config.dbcs,
@@ -54,6 +55,36 @@ function getStats(table) {
   });
 }
 
+exports.createAuthorPost = (req, res, next) => {
+  getSearchResults(req.params.search_term, amt, off, bitMask).then((r) => {
+    res.send(
+      JSON.stringify(
+        {
+          result: r,
+          node: config.username,
+        },
+        null,
+        3
+      )
+    );
+  });
+};
+
+exports.createAuthor = (req, res, next) => {
+  getSearchResults(req.params.search_term, amt, off, bitMask).then((r) => {
+    res.send(
+      JSON.stringify(
+        {
+          result: r,
+          node: config.username,
+        },
+        null,
+        3
+      )
+    );
+  });
+};
+
 exports.getSearchResults = (req, res, next) => {
   let amt = parseInt(req.query.a) || 50,
     off = parseInt(req.query.o) || 0,
@@ -80,16 +111,43 @@ exports.getSearchResults = (req, res, next) => {
   });
 };
 
+function getPendingAccounts(account) {
+  return new Promise((r, e) => {
+    pool.query(
+      `SELECT *
+        FROM pending
+        WHERE type IN ${typeMask(bitMask)} AND
+            author LIKE '%${st}%'
+            OR permlink LIKE '%${st}%'
+        ORDER BY block DESC
+        OFFSET ${off} ROWS FETCH FIRST ${amt} ROWS ONLY;`,
+      (err, res) => {
+        if (err) {
+          console.log(`Error - Failed to select some new from ${table}`);
+          e(err);
+        } else {
+          for (item in res.rows) {
+            res.rows[
+              item
+            ].url = `/dlux/@${res.rows[item].author}/${res.rows[item].permlink}`;
+          }
+          r(res.rows);
+        }
+      }
+    );
+  });
+}
+
 function getSearchResults(st, amt, off, bitMask) {
   return new Promise((r, e) => {
     pool.query(
       `SELECT *
-                FROM posts
-                WHERE type IN ${typeMask(bitMask)} AND
-                    author LIKE '%${st}%'
-                    OR permlink LIKE '%${st}%'
-                ORDER BY block DESC
-                OFFSET ${off} ROWS FETCH FIRST ${amt} ROWS ONLY;`,
+          FROM posts
+          WHERE type IN ${typeMask(bitMask)} AND
+              author LIKE '%${st}%'
+              OR permlink LIKE '%${st}%'
+          ORDER BY block DESC
+          OFFSET ${off} ROWS FETCH FIRST ${amt} ROWS ONLY;`,
       (err, res) => {
         if (err) {
           console.log(`Error - Failed to select some new from ${table}`);
@@ -221,7 +279,8 @@ function fetchDex(tok) {
         (dex.hive.tick / change - 1) * 100
       ).toFixed(4);
       tickers[tok].vol = vol
-    });
+    })
+    .catch(e  => console.log(e))
 }
 
 function getTickers() {
