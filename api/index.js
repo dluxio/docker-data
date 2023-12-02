@@ -15,7 +15,7 @@ exports.start = (array) => {
     pop(array[script], script);
   }
   function pop(script, set) {
-    fetch(`https://ipfs.io/ipfs/${script}`)
+    fetch(`https://ipfs.dlux.io/ipfs/${script}`)
       .then((r) => r.text())
       .then((text) => {
         RAM[script] = text;
@@ -307,6 +307,7 @@ function makePNG(uid, script, opt) {
     const NFT = opt
       ? safeEval(`(//${RAM[script]}\n)('${uid}','${opt}')`)
       : safeEval(`(//${RAM[script]}\n)('${uid}')`);
+    console.log('NFT String:', NFT.HTML.substr(0, 4))
     if (NFT.HTML.substr(0, 4) == "<svg") {
       console.log("SVG")
       SVG2PNG({
@@ -451,7 +452,7 @@ exports.getPFP = (req, res, next) => {
             res.send(
               JSON.stringify(
                 {
-                  result: "Error or no PFP set.",
+                  result: "Error in Image Generation.",
                   error: e,
                 },
                 null,
