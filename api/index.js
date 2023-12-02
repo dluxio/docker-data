@@ -14,7 +14,7 @@ exports.start = (array) => {
     pop(array[script], script);
   }
   function pop(script, set) {
-    fetch(`https://ipfs.io/ipfs/${script}`)
+    fetch(`https://ipfs.dlux.io/ipfs/${script}`)
       .then((r) => r.text())
       .then((text) => {
         if(text.substr(0,99) == '<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"utf-8\" />\n<meta name=\"viewport\" content='){
