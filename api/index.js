@@ -454,7 +454,7 @@ exports.getPFP = (req, res, next) => {
                   result: "Error in Image Generation.",
                   error: e,
                   script,
-                  text: RAM[script].substr(0, 100) + '...',
+                  text: RAM[script]?.substr(0, 100) + '...',
                 },
                 null,
                 3
