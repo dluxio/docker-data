@@ -304,6 +304,7 @@ function getDetails(uid, script, opt) {
 
 function makePNG(uid, script, opt) {
   return new Promise((resolve, reject) => {
+    console.log(RAM[script])
     const NFT = opt
       ? safeEval(`(//${RAM[script]}\n)('${uid}','${opt}')`)
       : safeEval(`(//${RAM[script]}\n)('${uid}')`);
