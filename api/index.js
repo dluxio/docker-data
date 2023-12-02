@@ -3,7 +3,6 @@ const config = require("../config");
 const fetch = require("node-fetch");
 const safeEval = require("safe-eval");
 const sharp = require("sharp");
-const e = require("express");
 
 const pool = new Pool({
   connectionString: config.dbcs,
@@ -15,13 +14,13 @@ exports.start = (array) => {
     pop(array[script], script);
   }
   function pop(script, set) {
-    fetch(`https://ipfs.dlux.io/ipfs/${script}`)
+    fetch(`https://ipfs.io/ipfs/${script}`)
       .then((r) => r.text())
       .then((text) => {
         RAM[script] = text;
         RAM[set] = script;
       })
-      .catch((e) => console.log(e));
+      .catch((e) => pop(script, set));
   }
 };
 
@@ -304,11 +303,10 @@ function getDetails(uid, script, opt) {
 
 function makePNG(uid, script, opt) {
   return new Promise((resolve, reject) => {
-    console.log(RAM[script])
+    if(!RAM[script])reject('Script is not loaded')
     const NFT = opt
       ? safeEval(`(//${RAM[script]}\n)('${uid}','${opt}')`)
       : safeEval(`(//${RAM[script]}\n)('${uid}')`);
-    console.log('NFT String:', NFT.HTML.substr(0, 4))
     if (NFT.HTML.substr(0, 4) == "<svg") {
       console.log("SVG")
       SVG2PNG({
@@ -455,6 +453,8 @@ exports.getPFP = (req, res, next) => {
                 {
                   result: "Error in Image Generation.",
                   error: e,
+                  script,
+                  text: RAM[script].substr(0, 100) + '...',
                 },
                 null,
                 3
