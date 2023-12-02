@@ -308,14 +308,12 @@ function makePNG(uid, script, opt) {
       ? safeEval(`(//${RAM[script]}\n)('${uid}','${opt}')`)
       : safeEval(`(//${RAM[script]}\n)('${uid}')`);
     if (NFT.HTML.substr(0, 4) == "<svg") {
-      SVG2PNG(
-        {
+      console.log("SVG")
+      SVG2PNG({
           input: Buffer.from(NFT.HTML.trim()),
           encoding: "buffer",
           format: "jpeg",
-        },
-        
-      );
+        });
     } else {
       console.log('PNG')
       var string = NFT.HTML.trim();
