@@ -17,8 +17,12 @@ exports.start = (array) => {
     fetch(`https://ipfs.io/ipfs/${script}`)
       .then((r) => r.text())
       .then((text) => {
-        RAM[script] = text;
-        RAM[set] = script;
+        if(text.substr(0,99) == '<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"utf-8\" />\n<meta name=\"viewport\" content='){
+          pop(script, set)
+        } else {
+          RAM[script] = text;
+          RAM[set] = script;
+        }
       })
       .catch((e) => pop(script, set));
   }
