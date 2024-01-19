@@ -283,16 +283,6 @@ exports.stats = (req, res, next) => {
       }
     }
   );
-  res.send(
-    JSON.stringify(
-      {
-        number_of_dApps: r,
-        node: config.username,
-      },
-      null,
-      3
-    )
-  );
 };
 
 function fetchDex(tok) {
