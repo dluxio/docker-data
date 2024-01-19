@@ -257,7 +257,7 @@ exports.stats = (req, res, next) => {
   pool.query(
     `SELECT COUNT(*) AS record_count
     FROM posts;`,
-    (err, res) => {
+    (err, r) => {
       if (err) {
         res.send(
           JSON.stringify(
@@ -273,7 +273,7 @@ exports.stats = (req, res, next) => {
         res.send(
           JSON.stringify(
             {
-              number_of_dApps: res.rows[0].record_count,
+              number_of_dApps: r.rows[0].record_count,
               node: config.username,
             },
             null,
