@@ -253,6 +253,48 @@ exports.tickers = (req, res, next) => {
   );
 };
 
+exports.stats = (req, res, next) => {
+  pool.query(
+    `SELECT COUNT(*) AS record_count
+    FROM posts;`,
+    (err, res) => {
+      if (err) {
+        res.send(
+          JSON.stringify(
+            {
+              error: err,
+              node: config.username,
+            },
+            null,
+            3
+          )
+        );
+      } else {
+        res.send(
+          JSON.stringify(
+            {
+              number_of_dApps: res.rows[0].record_count,
+              node: config.username,
+            },
+            null,
+            3
+          )
+        );
+      }
+    }
+  );
+  res.send(
+    JSON.stringify(
+      {
+        number_of_dApps: r,
+        node: config.username,
+      },
+      null,
+      3
+    )
+  );
+};
+
 function fetchDex(tok) {
   fetch(`${tickers[tok].api}/dex`)
     .then((r) => r.json())
