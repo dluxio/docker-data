@@ -214,21 +214,21 @@ exports.getPromotedPosts = (req, res, next) => {
 
 var tickers = {
   duat: {
-    api: "https://duat.hivehoneycomb.com",
+    api: "https://duat.hivehoneycomb.com/",
     token: "DUAT",
     tick: "",
     hbd_tick: "",
     change: "",
   },
   dlux: {
-    api: "https://token.dlux.io",
+    api: config.dluxapi,
     token: "DLUX",
     tick: "",
     hbd_tick: "",
     change: "",
   },
   larynx: {
-    api: "https://spkinstant.hivehoneycomb.com",
+    api: "https://spkinstant.hivehoneycomb.com/",
     token: "LARYNX",
     tick: "",
     hbd_tick: "",
@@ -286,7 +286,7 @@ exports.stats = (req, res, next) => {
 };
 
 function fetchDex(tok) {
-  fetch(`${tickers[tok].api}/dex`)
+  fetch(`${tickers[tok].api}dex`)
     .then((r) => r.json())
     .then((res) => {
       const dex = res.markets;
@@ -1342,7 +1342,7 @@ exports.getpic = (req, res, next) => {
             .profile_image;
         } catch (e) {
           i = 2;
-          image = "https://a.ipfs.dlux.io/images/user-icon.svg";
+          image = "https://ipfs.dlux.io/images/user-icon.svg";
         }
       }
       if (image) {
@@ -1358,11 +1358,11 @@ exports.getpic = (req, res, next) => {
                   .profile_image;
               } catch (e) {
                 i = 2;
-                image = "https://a.ipfs.dlux.io/images/user-icon.svg";
+                image = "https://ipfs.dlux.io/images/user-icon.svg";
               }
             } else {
               i = 2;
-              image = "https://a.ipfs.dlux.io/images/user-icon.svg";
+              image = "https://ipfs.dlux.io/images/user-icon.svg";
             }
             fetch(image)
               .then((response) => {
@@ -1370,7 +1370,7 @@ exports.getpic = (req, res, next) => {
               })
               .catch((e) => {
                 if (i == 1) {
-                  image = "https://a.ipfs.dlux.io/images/user-icon.svg";
+                  image = "https://ipfs.dlux.io/images/user-icon.svg";
                   fetch(image)
                     .then((response) => {
                       response.body.pipe(res);
@@ -1407,7 +1407,7 @@ exports.getblog = (req, res, next) => {
     .then((r) => {
       var out = { items: [] };
       for (i in r.result) {
-        r.result[i].media = { m: "https://a.ipfs.dlux.io/images/400X200.gif" };
+        r.result[i].media = { m: "https://ipfs.dlux.io/images/400X200.gif" };
       }
       out.id = r.id;
       out.jsonrpc = r.jsonrpc;
