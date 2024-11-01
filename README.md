@@ -9,7 +9,7 @@ Make any neccesary changes to docker-compose.yml
 Run on the same machine as an instance of HoneyComb
 
 Place the following line as modified in the Honeycomb .env
-`DATABASE_URL=postgres://postgres:postgres@db:5432/postgres?sslmode=disable`
+`DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable`
 
 Install docker and run with docker compose.
 

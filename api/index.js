@@ -17,7 +17,7 @@ exports.start = (array) => {
     fetch(`https://ipfs.dlux.io/ipfs/${script}`)
       .then((r) => r.text())
       .then((text) => {
-        if(text.substr(0,99) == '<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"utf-8\" />\n<meta name=\"viewport\" content='){
+        if (text.substr(0, 99) == '<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"utf-8\" />\n<meta name=\"viewport\" content=') {
           pop(script, set)
         } else {
           RAM[script] = text;
@@ -315,7 +315,7 @@ function fetchDex(tok) {
       ).toFixed(4);
       tickers[tok].vol = vol
     })
-    .catch(e  => console.log(e))
+    .catch(e => console.log(e))
 }
 
 function getTickers() {
@@ -339,17 +339,31 @@ function getDetails(uid, script, opt) {
 
 function makePNG(uid, script, opt) {
   return new Promise((resolve, reject) => {
-    if(!RAM[script])reject('Script is not loaded')
+    if (!RAM[script]) {
+      fetch(`${config.dluxapi}api/sets`)
+        .then((r) => r.json())
+        .then((json) => {
+          let scripts = {};
+          for (var item = 0; item < json.result.length; item++) {
+            scripts[json.result[item].set] = json.result[item].script;
+            console.log(json.result[item].script);
+          }
+          exports.start(scripts);
+        })
+        .catch((e) => console.log(e));
+      
+      reject('Script is not loaded')
+    }
     const NFT = opt
       ? safeEval(`(//${RAM[script]}\n)('${uid}','${opt}')`)
       : safeEval(`(//${RAM[script]}\n)('${uid}')`);
     if (NFT.HTML.substr(0, 4) == "<svg") {
       console.log("SVG")
       SVG2PNG({
-          input: Buffer.from(NFT.HTML.trim()),
-          encoding: "buffer",
-          format: "jpeg",
-        });
+        input: Buffer.from(NFT.HTML.trim()),
+        encoding: "buffer",
+        format: "jpeg",
+      });
     } else {
       console.log('PNG')
       var string = NFT.HTML.trim();
@@ -381,23 +395,23 @@ function makePNG(uid, script, opt) {
           }
         });
     }
-    function SVG2PNG(ip, native = {width: 500, height: 500}) {
-      if (native.width > 500 || native.height > 500){
+    function SVG2PNG(ip, native = { width: 500, height: 500 }) {
+      if (native.width > 500 || native.height > 500) {
 
       }
-        sharp(ip.input)
-          .resize(333, 333, {
-            kernel: sharp.kernel.nearest,
-            fit: "contain",
-          })
-          .toBuffer((err, buf) => {
-            if (err) {
-              console.log(err);
-              reject(err);
-            } else {
-              resolve([buf, ip.format]);
-            }
-          });
+      sharp(ip.input)
+        .resize(333, 333, {
+          kernel: sharp.kernel.nearest,
+          fit: "contain",
+        })
+        .toBuffer((err, buf) => {
+          if (err) {
+            console.log(err);
+            reject(err);
+          } else {
+            resolve([buf, ip.format]);
+          }
+        });
     }
   });
 }
@@ -476,7 +490,8 @@ exports.getPFP = (req, res, next) => {
             ? json.result[0].nft.s.split(",")[1]
             : "";
         let uid = json.result[0].pfp.split(":")[1] || "";
-        console.log({user, uid, script})
+        console.log({ user, uid, script })
+
         makePNG(uid, script, exe)
           .then((img) => {
             res.setHeader("Content-Type", `image/${img[1]}`);
@@ -1072,7 +1087,7 @@ exports.coin = (req, res, next) => {
     }
     try {
       govt = state.gov.t - coll;
-    } catch (e) {}
+    } catch (e) { }
     for (bal in state.gov) {
       if (bal != "t") {
         supply += state.gov[bal];
@@ -1088,9 +1103,8 @@ exports.coin = (req, res, next) => {
       }
     }
     let info = {};
-    let check = `supply check:state:${
-      state.stats.tokenSupply
-    } vs check: ${supply}: ${state.stats.tokenSupply - supply}`;
+    let check = `supply check:state:${state.stats.tokenSupply
+      } vs check: ${supply}: ${state.stats.tokenSupply - supply}`;
     if (state.stats.tokenSupply != supply) {
       info = { lbal, gov, govt, pow, powt, con };
     }
