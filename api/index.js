@@ -9,6 +9,30 @@ const pool = new Pool({
 });
 var RAM = {};
 
+var {changes} = require('./changes')
+insertData(1)
+function insertData(i){
+pool.query(
+          `UPDATE posts 
+                    SET type = '${changes[i].type}', 
+                        hide = 'false', 
+                        why = 0${changes[i].raters ? `, 
+                        ratings = '${changes[i].ratings}',
+                        raters = '${changes[i].raters}',
+                        rating = '${changes[i].rating}'` : ''} 
+                    WHERE author = '${changes[i].author}' 
+                    AND permlink = '${changes[i].permlink}'`,
+          (err, res) => {
+            if (err) {
+                console.log(`Error - Failed to update ${changes[i].author}/${changes[i].permlink}`);
+            } else {
+                console.log('changes', i)
+                if(changes.length < i + 1)insertData(i + 1)
+            }
+          }
+        );
+}
+
 exports.start = (array) => {
   for (script in array) {
     pop(array[script], script);
@@ -221,7 +245,7 @@ var tickers = {
     change: "",
   },
   dlux: {
-    api: config.dluxapi,
+    api: config.honeycombapi,
     token: "DLUX",
     tick: "",
     hbd_tick: "",
@@ -340,7 +364,7 @@ function getDetails(uid, script, opt) {
 function makePNG(uid, script, opt) {
   return new Promise((resolve, reject) => {
     if (!RAM[script]) {
-      fetch(`${config.dluxapi}api/sets`)
+      fetch(`${config.honeycombapi}api/sets`)
         .then((r) => r.json())
         .then((json) => {
           let scripts = {};
@@ -480,7 +504,7 @@ exports.renderNFT = (req, res, next) => {
 
 exports.getPFP = (req, res, next) => {
   let user = req.params.user;
-  fetch(`${config.dluxapi}api/pfp/${user}`)
+  fetch(`${config.honeycombapi}api/pfp/${user}`)
     .then((r) => r.json())
     .then((json) => {
       if (json.result != "No Profile Picture Set or Owned") {

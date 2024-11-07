@@ -29,7 +29,7 @@ http.listen(config.port, function () {
   console.log(`DLUX DATA API listening on port ${config.port}`);
 });
 
-fetch(`${config.dluxapi}api/sets`)
+fetch(`${config.honeycombapi}api/sets`)
   .then((r) => r.json())
   .then((json) => {
     let scripts = {};
