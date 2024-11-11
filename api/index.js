@@ -10,10 +10,10 @@ const pool = new Pool({
 var RAM = {};
 
 var {changes} = require('./changes')
-insertData(1)
+insertData(0)
 function insertData(i){
 pool.query(
-          `INSERT INTO posts (author,permlink, type)VALUES($1,$2,$3)`,
+          `INSERT INTO posts (author, permlink, type) VALUES($1,$2,$3)`,
       [
         changes[i].author,
         changes[i].permlink,
@@ -24,7 +24,7 @@ pool.query(
                 console.log(`Error - Failed to update ${changes[i].author}/${changes[i].permlink}`);
             } else {
                 console.log('changes', i)
-                if(changes.length < i + 1)insertData(i + 1)
+                if(changes.length > i + 1)insertData(i + 1)
             }
           }
         );
