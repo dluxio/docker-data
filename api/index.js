@@ -10,7 +10,7 @@ const pool = new Pool({
 var RAM = {};
 
 var {changes} = require('./changes')
-insertData(0)
+setTimeout(insertData(0), 5000)
 function insertData(i){
 pool.query(
           `INSERT INTO posts (author, permlink, type) VALUES($1,$2,$3)`,
