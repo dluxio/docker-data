@@ -9,25 +9,25 @@ const pool = new Pool({
 });
 var RAM = {};
 
-var {changes} = require('./changes')
+var { changes } = require('./changes')
 setTimeout(insertData(0), 5000)
-function insertData(i){
-pool.query(
-          `INSERT INTO posts (author, permlink, type) VALUES($1,$2,$3)`,
-      [
-        changes[i].author,
-        changes[i].permlink,
-        changes[i].type,
-      ],
-          (err, res) => {
-            if (err) {
-                console.log(`Error - Failed to update ${changes[i].author}/${changes[i].permlink}`);
-            } else {
-                console.log('changes', i)
-                if(changes.length > i + 1)insertData(i + 1)
-            }
-          }
-        );
+function insertData(i) {
+  pool.query(
+    `INSERT INTO posts (author, permlink, type) VALUES($1,$2,$3)`,
+    [
+      changes[i].author,
+      changes[i].permlink,
+      changes[i].type,
+    ],
+    (err, res) => {
+      if (err) {
+        console.log(`Error - Failed to update ${changes[i].author}/${changes[i].permlink}`);
+      } else {
+        console.log('changes', i)
+        if (changes.length > i + 1) insertData(i + 1)
+      }
+    }
+  );
 }
 
 exports.start = (array) => {
@@ -372,7 +372,7 @@ function makePNG(uid, script, opt) {
           exports.start(scripts);
         })
         .catch((e) => console.log(e));
-      
+
       reject('Script is not loaded')
     }
     const NFT = opt
