@@ -19,5 +19,5 @@ CREATE TABLE posts (
 
 CREATE TABLE statssi (
     string varchar(255) NOT NULL,
-    int integer,
+    int integer
 );
