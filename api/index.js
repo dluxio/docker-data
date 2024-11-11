@@ -13,15 +13,12 @@ var {changes} = require('./changes')
 insertData(1)
 function insertData(i){
 pool.query(
-          `UPDATE posts 
-                    SET type = '${changes[i].type}', 
-                        hide = 'false', 
-                        why = 0${changes[i].raters ? `, 
-                        ratings = '${changes[i].ratings}',
-                        raters = '${changes[i].raters}',
-                        rating = '${changes[i].rating}'` : ''} 
-                    WHERE author = '${changes[i].author}' 
-                    AND permlink = '${changes[i].permlink}'`,
+          `INSERT INTO posts(author,permlink, type)VALUES($1,$2,$3)`,
+      [
+        changes[i].author,
+        changes[i].permlink,
+        changes[i].type,
+      ],
           (err, res) => {
             if (err) {
                 console.log(`Error - Failed to update ${changes[i].author}/${changes[i].permlink}`);
