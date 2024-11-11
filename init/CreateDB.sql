@@ -1,3 +1,4 @@
+```sql
 CREATE TABLE posts (
     author varchar(16) NOT NULL,
     permlink varchar(255) NOT NULL,
@@ -21,3 +22,4 @@ CREATE TABLE statssi (
     string varchar(255) NOT NULL,
     int integer,
 );
+```
