@@ -14,7 +14,8 @@ CREATE TABLE posts (
     type varchar(16),
     rating int,
     ratings int,
-    raters varchar(255)
+    raters varchar(255),
+    PRIMARY KEY (author, permlink)
 );
 
 CREATE TABLE statssi (
