@@ -13,7 +13,7 @@ var {changes} = require('./changes')
 insertData(1)
 function insertData(i){
 pool.query(
-          `INSERT INTO posts(author,permlink, type)VALUES($1,$2,$3)`,
+          `INSERT INTO posts (author,permlink, type)VALUES($1,$2,$3)`,
       [
         changes[i].author,
         changes[i].permlink,
