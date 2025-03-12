@@ -62,7 +62,7 @@ function pop(script, set, retriesLeft = 3) {
   }
 
   console.log(`Attempting to fetch script ${script}, retries left: ${retriesLeft}`);
-  return fetch(`http://172.17.0.1:8080/ipfs/${script}`, { timeout: 5000, redirect: 'follow' }) // Add timeout
+  return fetch(`https://ipfs.dlux.io/ipfs/${script}`, { timeout: 5000, redirect: 'follow' }) // Add timeout
     .then((r) => {
       console.log(`Received response for ${script}, status: ${r.status}`);
       return r.text();
