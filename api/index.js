@@ -380,6 +380,7 @@ function getDetails(uid, script, opt) {
 function makePNG(uid, script, opt) {
   return new Promise((resolve, reject) => {
     if (!RAM[script]) {
+      console.log('RAM', RAM)
       fetch(`${config.honeycombapi}api/sets`)
         .then((r) => r.json())
         .then((json) => {
