@@ -46,11 +46,13 @@ async function startApp() {
 
 startApp().then(() => insertData(changes));
 
-exports.start = (array) => {
-  console.log('Start with:', array)
+exports.start = async (array) => {
+  console.log('Start with:', array);
   for (const script in array) {
-    pop(array[script], script, 3); // Limit to 3 retries
+    console.log(`Calling pop for script ${array[script]} with set ${script}`);
+    await pop(array[script], script, 3); // Await each pop to catch issues
   }
+  console.log('Finished loading scripts');
 };
 
 function pop(script, set, retriesLeft = 3) {
@@ -58,8 +60,13 @@ function pop(script, set, retriesLeft = 3) {
     console.error(`Failed to load script ${script} after retries`);
     return;
   }
-  fetch(`https://ipfs.dlux.io/ipfs/${script}`)
-    .then((r) => r.text())
+
+  console.log(`Attempting to fetch script ${script}, retries left: ${retriesLeft}`);
+  return fetch(`https://ipfs.dlux.io/ipfs/${script}`, { timeout: 5000 }) // Add timeout
+    .then((r) => {
+      console.log(`Received response for ${script}, status: ${r.status}`);
+      return r.text();
+    })
     .then((text) => {
       if (text.startsWith("<!DOCTYPE html>")) {
         console.warn(`Retrying script ${script} due to HTML response`);
@@ -71,7 +78,7 @@ function pop(script, set, retriesLeft = 3) {
       }
     })
     .catch((e) => {
-      console.error(`Error fetching script ${script}: ${e}`);
+      console.error(`Error fetching script ${script}: ${e.message}`);
       setTimeout(() => pop(script, set, retriesLeft - 1), 1000);
     });
 }
