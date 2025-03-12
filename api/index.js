@@ -10,47 +10,70 @@ const pool = new Pool({
 var RAM = {};
 
 var { changes } = require('./changes')
-function insertData(i) {
-  pool.query(
-    `INSERT INTO posts (author, permlink, type) VALUES($1,$2,$3)`,
-    [
-      changes[i].author,
-      changes[i].permlink,
-      changes[i].type,
-    ],
-    (err, res) => {
-      if (err) {
-        console.log(`Error - Failed to update ${changes[i].author}/${changes[i].permlink}`);
-      } else {
-        console.log('changes', i)
-        if (changes.length > i + 1) insertData(i + 1)
-      }
+async function insertData(changes) {
+  const values = changes.map((change, i) => `($${i * 3 + 1}, $${i * 3 + 2}, $${i * 3 + 3})`).join(",");
+  const query = `INSERT INTO posts (author, permlink, type) VALUES ${values} ON CONFLICT DO NOTHING`;
+  const flatValues = changes.flatMap((change) => [change.author, change.permlink, change.type]);
+  try {
+    await pool.query(query, flatValues);
+    console.log(`Inserted ${changes.length} records`);
+  } catch (err) {
+    console.error("Batch insert failed:", err);
+  }
+}
+async function waitForDatabase(retries = 10, delay = 2000) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      await pool.query("SELECT 1");
+      console.log("Database is ready");
+      return true;
+    } catch (err) {
+      console.log(`Waiting for database... (${i + 1}/${retries})`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
-  );
+  }
+  throw new Error("Database connection failed after retries");
 }
 
-setTimeout(() => {
-  insertData(0)
-}, 5000)
+async function startApp() {
+  try {
+    await waitForDatabase();
+  } catch (err) {
+    console.error(err);
+    process.exit(1); // Exit if the database is unavailable
+  }
+}
+
+startApp().then(() => insertData(changes));
 
 exports.start = (array) => {
-  for (script in array) {
-    pop(array[script], script);
-  }
-  function pop(script, set) {
-    fetch(`https://ipfs.dlux.io/ipfs/${script}`)
-      .then((r) => r.text())
-      .then((text) => {
-        if (text.substr(0, 99) == '<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"utf-8\" />\n<meta name=\"viewport\" content=') {
-          pop(script, set)
-        } else {
-          RAM[script] = text;
-          RAM[set] = script;
-        }
-      })
-      .catch((e) => pop(script, set));
+  for (const script in array) {
+    pop(array[script], script, 3); // Limit to 3 retries
   }
 };
+
+function pop(script, set, retriesLeft = 3) {
+  if (retriesLeft <= 0) {
+    console.error(`Failed to load script ${script} after retries`);
+    return;
+  }
+  fetch(`https://ipfs.dlux.io/ipfs/${script}`)
+    .then((r) => r.text())
+    .then((text) => {
+      if (text.startsWith("<!DOCTYPE html>")) {
+        console.warn(`Retrying script ${script} due to HTML response`);
+        setTimeout(() => pop(script, set, retriesLeft - 1), 1000);
+      } else {
+        RAM[script] = text;
+        RAM[set] = script;
+        console.log(`Loaded script ${script}`);
+      }
+    })
+    .catch((e) => {
+      console.error(`Error fetching script ${script}: ${e}`);
+      setTimeout(() => pop(script, set, retriesLeft - 1), 1000);
+    });
+}
 
 exports.https_redirect = (req, res, next) => {
   if (process.env.NODE_ENV === "production") {
@@ -83,32 +106,16 @@ function getStats(table) {
 }
 
 exports.createAuthorPost = (req, res, next) => {
-  getSearchResults(req.params.search_term, amt, off, bitMask).then((r) => {
-    res.send(
-      JSON.stringify(
-        {
-          result: r,
-          node: config.username,
-        },
-        null,
-        3
-      )
-    );
+  const { amt = 50, off = 0, bitMask = 255 } = req.query;
+  getSearchResults(req.params.author, amt, off, bitMask).then((r) => {
+    res.send(JSON.stringify({ result: r, node: config.username }, null, 3));
   });
 };
 
 exports.createAuthor = (req, res, next) => {
-  getSearchResults(req.params.search_term, amt, off, bitMask).then((r) => {
-    res.send(
-      JSON.stringify(
-        {
-          result: r,
-          node: config.username,
-        },
-        null,
-        3
-      )
-    );
+  const { amt = 50, off = 0, bitMask = 255 } = req.query;
+  getSearchResults(req.params.author, amt, off, bitMask).then((r) => {
+    res.send(JSON.stringify({ result: r, node: config.username }, null, 3));
   });
 };
 
@@ -342,14 +349,23 @@ function fetchDex(tok) {
     .catch(e => console.log(e))
 }
 
-function getTickers() {
-  for (var tok in tickers) {
-    fetchDex(tok);
+let isFetchingTickers = false;
+
+async function getTickers() {
+  if (isFetchingTickers) return;
+  isFetchingTickers = true;
+  try {
+    for (const tok in tickers) {
+      await fetchDex(tok);
+    }
+  } catch (e) {
+    console.error("Ticker fetch error:", e);
+  } finally {
+    isFetchingTickers = false;
+    setTimeout(getTickers, 60000);
   }
-  setTimeout(() => {
-    getTickers();
-  }, 60000);
 }
+
 getTickers();
 
 function getDetails(uid, script, opt) {
