@@ -522,6 +522,7 @@ exports.getPFP = (req, res, next) => {
             res.send(img[0]);
           })
           .catch((e) => {
+            exports.start([script])
             res.setHeader("Content-Type", "application/json");
             res.send(
               JSON.stringify(
