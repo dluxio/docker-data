@@ -62,20 +62,16 @@ function pop(script, set, retriesLeft = 3) {
   }
 
   console.log(`Attempting to fetch script ${script}, retries left: ${retriesLeft}`);
-  return fetch(`https://ipfs.dlux.io/ipfs/${script}`, { timeout: 5000, redirect: 'follow' }) // Add timeout
+  return fetch(`https://ipfs.dlux.io/ipfs/${script}`)
     .then((r) => {
       console.log(`Received response for ${script}, status: ${r.status}`);
-      return r.text();
+      if(r.status !== 200)setTimeout(() => pop(script, set, retriesLeft - 1), 1000);
+      else return r.text();
     })
     .then((text) => {
-      if (text.startsWith("<!DOCTYPE html>")) {
-        console.warn(`Retrying script ${script} due to HTML response`);
-        setTimeout(() => pop(script, set, retriesLeft - 1), 1000);
-      } else {
         RAM[script] = text;
         RAM[set] = script;
         console.log(`Loaded script ${script}`);
-      }
     })
     .catch((e) => {
       console.error(`Error fetching script ${script}: ${e.message}`);
