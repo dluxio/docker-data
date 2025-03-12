@@ -47,6 +47,7 @@ async function startApp() {
 startApp().then(() => insertData(changes));
 
 exports.start = (array) => {
+  console.log('Start with:', array)
   for (const script in array) {
     pop(array[script], script, 3); // Limit to 3 retries
   }
