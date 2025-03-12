@@ -62,7 +62,7 @@ function pop(script, set, retriesLeft = 3) {
   }
 
   console.log(`Attempting to fetch script ${script}, retries left: ${retriesLeft}`);
-  return fetch(`http://host.docker.internal:8080/ipfs/${script}`, { timeout: 5000 }) // Add timeout
+  return fetch(`https://ipfs.dlux.io/ipfs/${script}`, { timeout: 5000 }) // Add timeout
     .then((r) => {
       console.log(`Received response for ${script}, status: ${r.status}`);
       return r.text();
