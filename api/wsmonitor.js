@@ -37,7 +37,7 @@ class PaymentChannelMonitor {
             ? process.env.ALLOWED_ORIGINS.split(',')
             : [
                 'http://localhost:8080',
-                'http://localhost:3000',
+                'http://localhost:5507',
                 'https://dlux.io',
                 'https://www.dlux.io', 
                 'https://vue.dlux.io'
