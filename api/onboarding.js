@@ -779,29 +779,22 @@ router.use(cors({
           };
         }
         
-        // Fix crypto rates if missing or invalid - ensure ALL fields are populated
-        const hasValidRate = cryptoRates[symbol] && 
-                            cryptoRates[symbol].amount_needed != null && 
-                            cryptoRates[symbol].total_amount != null && 
-                            cryptoRates[symbol].final_cost_usd != null;
+        // Just calculate everything fresh - no point in checking stored values
+        const priceUsd = cryptoRates[symbol]?.price_usd || config.fallback_price_usd || 100;
+        const networkFeeSurcharge = transferCosts[symbol].avg_fee_usd * 0.2; // 20% of network fee
+        const totalCostUsd = accountCreationCost + networkFeeSurcharge;
+        const amountNeeded = totalCostUsd / priceUsd;
+        const transferFee = transferCosts[symbol].avg_fee_crypto;
         
-        if (!hasValidRate) {
-          const priceUsd = cryptoRates[symbol]?.price_usd || config.fallback_price_usd || 100;
-          const networkFeeSurcharge = transferCosts[symbol].avg_fee_usd * 0.2; // 20% of network fee
-          const totalCostUsd = accountCreationCost + networkFeeSurcharge;
-          const amountNeeded = totalCostUsd / priceUsd;
-          const transferFee = transferCosts[symbol].avg_fee_crypto;
-          
-          // Always rebuild the crypto rate object to ensure all fields are present
-          cryptoRates[symbol] = {
-            price_usd: priceUsd,
-            amount_needed: amountNeeded,
-            transfer_fee: transferFee,
-            total_amount: amountNeeded + transferFee,
-            network_fee_surcharge_usd: networkFeeSurcharge,
-            final_cost_usd: totalCostUsd
-          };
-        }
+        // Always recalculate to ensure all fields are correct
+        cryptoRates[symbol] = {
+          price_usd: priceUsd,
+          amount_needed: amountNeeded,
+          transfer_fee: transferFee,
+          total_amount: amountNeeded + transferFee,
+          network_fee_surcharge_usd: networkFeeSurcharge,
+          final_cost_usd: totalCostUsd
+        };
       });
       
       // Force recalculation of account_creation_cost_usd to ensure it's never null
