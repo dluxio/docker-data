@@ -1144,7 +1144,121 @@ router.use(cors({
     }
   });
   
-  // 4. Check payment channel status
+  // 4. Check payment channel status (for URL restoration)
+  router.get('/api/onboarding/payment/status/:channelId', async (req, res) => {
+    try {
+      const { channelId } = req.params;
+      
+      const client = await pool.connect();
+      try {
+        const result = await client.query(`
+          SELECT pc.*
+          FROM payment_channels pc
+          WHERE pc.channel_id = $1
+        `, [channelId]);
+        
+        if (result.rows.length === 0) {
+          return res.status(404).json({
+            success: false,
+            error: 'Payment channel not found'
+          });
+        }
+        
+        const channel = result.rows[0];
+        
+        // Determine status message and details
+        const now = new Date();
+        const isExpired = now > new Date(channel.expires_at);
+        let statusMessage = 'Unknown';
+        let statusDetails = '';
+        let progress = 0;
+        
+        if (isExpired && channel.status === 'pending') {
+          statusMessage = '⏰ Payment expired';
+          statusDetails = 'Payment window has closed. Please start a new payment.';
+          progress = 0;
+        } else {
+          switch (channel.status) {
+            case 'pending':
+              if (!channel.tx_hash) {
+                statusMessage = '💳 Waiting for payment';
+                statusDetails = `Send ${channel.amount_crypto} ${channel.crypto_type} to the address with the specified memo.`;
+                progress = 20;
+              } else {
+                statusMessage = '🔍 Payment detected, waiting for confirmations';
+                statusDetails = `Transaction found: ${channel.tx_hash.substring(0, 10)}...`;
+                progress = 40;
+              }
+              break;
+            case 'confirming':
+              const confirmations = channel.confirmations || 0;
+              const required = CRYPTO_CONFIG[channel.crypto_type]?.confirmations_required || 1;
+              statusMessage = `⏳ Confirming transaction (${confirmations}/${required})`;
+              statusDetails = 'Waiting for network confirmations. This may take a few minutes.';
+              progress = 40 + (confirmations / required) * 30;
+              break;
+            case 'confirmed':
+              statusMessage = '⚙️ Creating HIVE account';
+              statusDetails = 'Payment confirmed! Generating your HIVE account...';
+              progress = 80;
+              break;
+            case 'completed':
+              statusMessage = '🎉 Account created successfully!';
+              statusDetails = `Welcome to HIVE, @${channel.username}!`;
+              progress = 100;
+              break;
+            case 'failed':
+              statusMessage = '❌ Account creation failed';
+              statusDetails = 'Something went wrong. Please contact support.';
+              progress = 0;
+              break;
+          }
+        }
+        
+        res.json({
+          success: true,
+          channel: {
+            channelId: channel.channel_id,
+            username: channel.username,
+            status: channel.status,
+            statusMessage,
+            statusDetails,
+            progress,
+            cryptoType: channel.crypto_type,
+            amountFormatted: `${parseFloat(channel.amount_crypto).toFixed(CRYPTO_CONFIG[channel.crypto_type]?.decimals === 18 ? 6 : CRYPTO_CONFIG[channel.crypto_type]?.decimals || 6)} ${channel.crypto_type}`,
+            address: channel.payment_address,
+            memo: channel.memo,
+            confirmations: channel.confirmations,
+            confirmationsRequired: CRYPTO_CONFIG[channel.crypto_type]?.confirmations_required || 1,
+            createdAt: channel.created_at,
+            confirmedAt: channel.confirmed_at,
+            accountCreatedAt: channel.account_created_at,
+            expiresAt: channel.expires_at,
+            txHash: channel.tx_hash,
+            publicKeys: channel.public_keys,
+            isExpired: isExpired,
+            timeLeft: Math.max(0, Math.floor((new Date(channel.expires_at) - new Date()) / (1000 * 60))), // minutes left
+            instructions: channel.status === 'pending' ? [
+              `Send exactly ${parseFloat(channel.amount_crypto).toFixed(CRYPTO_CONFIG[channel.crypto_type]?.decimals === 18 ? 6 : CRYPTO_CONFIG[channel.crypto_type]?.decimals || 6)} ${channel.crypto_type} to the address above`,
+              `Include the memo: ${channel.memo}`,
+              `Payment expires in ${Math.max(0, Math.floor((new Date(channel.expires_at) - new Date()) / (1000 * 60 * 60)))} hours`,
+              `Account will be created automatically after ${CRYPTO_CONFIG[channel.crypto_type]?.confirmations_required || 1} confirmation(s)`
+            ] : []
+          }
+        });
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      console.error('Error checking channel status:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to check channel status'
+      });
+    }
+  });
+  
+  // 4b. Check payment channel status (alternative endpoint)
   router.get('/api/onboarding/channel/:channelId/status', async (req, res) => {
     try {
       const { channelId } = req.params;
