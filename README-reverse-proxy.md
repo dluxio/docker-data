@@ -214,8 +214,18 @@ server {
         proxy_send_timeout 7d;
         proxy_read_timeout 7d;
         
-        # Disable buffering for real-time communication
+        # Critical for WebSocket stability - fixes code 1006 issues
         proxy_buffering off;
+        proxy_cache off;
+        proxy_set_header X-Accel-Buffering no;
+        
+        # WebSocket frame size limits (adjust as needed)
+        client_max_body_size 64k;
+        proxy_max_temp_file_size 0;
+        
+        # Ensure proper connection handling
+        proxy_redirect off;
+        proxy_set_header Connection "upgrade";
     }
     
     # API endpoints

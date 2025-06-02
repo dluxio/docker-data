@@ -1,6 +1,29 @@
 const WebSocket = require('ws');
 const { pool } = require('../index');
 
+// Helper function to explain WebSocket close codes
+function getCloseCodeMeaning(code) {
+    const codes = {
+        1000: 'Normal Closure',
+        1001: 'Going Away (e.g., server going down)',
+        1002: 'Protocol Error',
+        1003: 'Unsupported Data (e.g., text when expecting binary)',
+        1004: 'Reserved',
+        1005: 'No Status Received',
+        1006: 'Abnormal Closure (no close frame received)',
+        1007: 'Invalid Data (e.g., malformed UTF-8)',
+        1008: 'Policy Violation',
+        1009: 'Message Too Big',
+        1010: 'Missing Extension',
+        1011: 'Internal Server Error',
+        1012: 'Service Restart',
+        1013: 'Try Again Later',
+        1014: 'Bad Gateway',
+        1015: 'TLS Handshake Failure'
+    };
+    return codes[code] || `Unknown code: ${code}`;
+}
+
 class PaymentChannelMonitor {
     constructor() {
         this.wss = null;
@@ -56,9 +79,14 @@ class PaymentChannelMonitor {
             const clientIP = req.socket.remoteAddress;
             const userAgent = req.headers['user-agent'];
             const origin = req.headers.origin;
+            const connectionId = Math.random().toString(36).substring(7);
             
-            console.log(`WebSocket connection established from ${clientIP} (Origin: ${origin})`);
+            console.log(`WebSocket connection established from ${clientIP} (Origin: ${origin}) [ID: ${connectionId}]`);
             console.log(`User Agent: ${userAgent}`);
+            console.log(`Connection state: ${ws.readyState} (1=OPEN)`);
+            
+            // Store connection ID for debugging
+            ws.connectionId = connectionId;
 
             ws.on('message', async (message) => {
                 try {
@@ -82,8 +110,9 @@ class PaymentChannelMonitor {
             });
 
             ws.on('close', (code, reason) => {
-                console.log(`WebSocket connection closed - Code: ${code}, Reason: ${reason || 'No reason'}`);
+                console.log(`WebSocket connection closed [ID: ${ws.connectionId}] - Code: ${code}, Reason: ${reason || 'No reason'}`);
                 console.log(`Client was: ${clientIP} (Origin: ${origin})`);
+                console.log(`Close code meaning: ${getCloseCodeMeaning(code)}`);
                 this.removeClient(ws);
             });
 
@@ -94,18 +123,32 @@ class PaymentChannelMonitor {
 
             // Send initial connection confirmation with error handling
             try {
-                const welcomeMessage = {
-                    type: 'connected',
-                    message: 'WebSocket connection established',
-                    timestamp: new Date().toISOString(),
-                    server: 'DLUX Payment Monitor'
-                };
+                // Wait a moment to ensure connection is fully established
+                setTimeout(() => {
+                    if (ws.readyState === WebSocket.OPEN) {
+                        const welcomeMessage = {
+                            type: 'connected',
+                            message: 'WebSocket connection established',
+                            timestamp: new Date().toISOString(),
+                            server: 'DLUX Payment Monitor'
+                        };
+                        
+                        console.log('Sending welcome message:', JSON.stringify(welcomeMessage));
+                        
+                        try {
+                            ws.send(JSON.stringify(welcomeMessage));
+                            console.log('Welcome message sent successfully');
+                        } catch (sendError) {
+                            console.error('Error sending welcome message:', sendError);
+                            console.log('WebSocket state at error:', ws.readyState);
+                        }
+                    } else {
+                        console.log('WebSocket not in OPEN state, not sending welcome message. State:', ws.readyState);
+                    }
+                }, 100); // Wait 100ms for connection to stabilize
                 
-                console.log('Sending welcome message:', JSON.stringify(welcomeMessage));
-                ws.send(JSON.stringify(welcomeMessage));
             } catch (error) {
-                console.error('Failed to send welcome message:', error);
-                ws.close(1011, 'Server error during initialization');
+                console.error('Failed to setup welcome message:', error);
             }
         });
 
