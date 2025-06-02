@@ -3,6 +3,7 @@ const { pool } = require('../index');
 const crypto = require('crypto');
 const axios = require('axios');
 const cors = require('cors');
+const { PaymentChannelMonitor } = require('./wsmonitor');
 
 const router = express.Router();
 
@@ -54,15 +55,43 @@ router.use(cors({
           )
         `);
   
+        // Payment addresses are now stored in environment/config
+        // This allows shared addresses for cost optimization
+  
+        // Payment channels - tracks individual payment sessions
         await client.query(`
-          CREATE TABLE IF NOT EXISTS payment_addresses (
+          CREATE TABLE IF NOT EXISTS payment_channels (
             id SERIAL PRIMARY KEY,
+            channel_id VARCHAR(100) UNIQUE NOT NULL,
+            username VARCHAR(50) NOT NULL,
             crypto_type VARCHAR(10) NOT NULL,
-            address VARCHAR(255) NOT NULL,
-            is_used BOOLEAN DEFAULT FALSE,
-            used_at TIMESTAMP NULL,
-            payment_id VARCHAR(255) NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            payment_address VARCHAR(255) NOT NULL,
+            amount_crypto DECIMAL(20,8) NOT NULL,
+            amount_usd DECIMAL(10,6) NOT NULL,
+            memo VARCHAR(255),
+            status VARCHAR(20) DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            confirmed_at TIMESTAMP,
+            account_created_at TIMESTAMP,
+            tx_hash VARCHAR(255),
+            confirmations INTEGER DEFAULT 0,
+            expires_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP + INTERVAL '24 hours'),
+            public_keys JSONB,
+            recovery_data JSONB
+          )
+        `);
+  
+        // Payment confirmations and monitoring
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS payment_confirmations (
+            id SERIAL PRIMARY KEY,
+            channel_id VARCHAR(100) REFERENCES payment_channels(channel_id),
+            tx_hash VARCHAR(255) NOT NULL,
+            block_height BIGINT,
+            confirmations INTEGER DEFAULT 0,
+            amount_received DECIMAL(20,8),
+            detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            processed_at TIMESTAMP
           )
         `);
   
@@ -111,8 +140,15 @@ router.use(cors({
           CREATE INDEX IF NOT EXISTS idx_payments_expires ON onboarding_payments(expires_at);
           CREATE INDEX IF NOT EXISTS idx_requests_request_id ON onboarding_requests(request_id);
           CREATE INDEX IF NOT EXISTS idx_requests_username ON onboarding_requests(username);
-          CREATE INDEX IF NOT EXISTS idx_addresses_crypto_type ON payment_addresses(crypto_type);
-          CREATE INDEX IF NOT EXISTS idx_addresses_is_used ON payment_addresses(is_used);
+          CREATE INDEX IF NOT EXISTS idx_channels_payment_address ON payment_channels(payment_address);
+          CREATE INDEX IF NOT EXISTS idx_channels_channel_id ON payment_channels(channel_id);
+          CREATE INDEX IF NOT EXISTS idx_channels_status ON payment_channels(status);
+          CREATE INDEX IF NOT EXISTS idx_channels_crypto_type ON payment_channels(crypto_type);
+          CREATE INDEX IF NOT EXISTS idx_channels_username ON payment_channels(username);
+          CREATE INDEX IF NOT EXISTS idx_channels_created ON payment_channels(created_at);
+          CREATE INDEX IF NOT EXISTS idx_channels_expires ON payment_channels(expires_at);
+          CREATE INDEX IF NOT EXISTS idx_confirmations_channel ON payment_confirmations(channel_id);
+          CREATE INDEX IF NOT EXISTS idx_confirmations_tx_hash ON payment_confirmations(tx_hash);
           CREATE INDEX IF NOT EXISTS idx_crypto_prices_symbol ON crypto_prices(symbol);
           CREATE INDEX IF NOT EXISTS idx_crypto_prices_updated ON crypto_prices(updated_at);
           CREATE INDEX IF NOT EXISTS idx_transfer_costs_crypto ON transfer_costs(crypto_type);
@@ -130,7 +166,15 @@ router.use(cors({
     }
   };
   
-  // Crypto configuration with network details
+  // Shared payment addresses (reused across all payments)
+  const PAYMENT_ADDRESSES = {
+    SOL: process.env.SOL_PAYMENT_ADDRESS || '11111111111111111111111111111111', // Replace with real address
+    ETH: process.env.ETH_PAYMENT_ADDRESS || '0x0000000000000000000000000000000000000000', // Replace with real address
+    MATIC: process.env.MATIC_PAYMENT_ADDRESS || '0x0000000000000000000000000000000000000000', // Replace with real address
+    BNB: process.env.BNB_PAYMENT_ADDRESS || '0x0000000000000000000000000000000000000000' // Replace with real address
+  };
+  
+  // Crypto configuration with network details and payment channel support
   const CRYPTO_CONFIG = {
     SOL: {
       name: 'Solana',
@@ -138,6 +182,9 @@ router.use(cors({
       decimals: 9,
       avg_transfer_fee: 0.000005, // 5000 lamports typical
       fallback_price_usd: 100,
+      payment_type: 'address', // Uses address-based payments
+      confirmations_required: 1,
+      block_time_seconds: 0.4,
       rpc_endpoints: [
         'https://api.mainnet-beta.solana.com',
         'https://solana-api.projectserum.com'
@@ -149,6 +196,9 @@ router.use(cors({
       decimals: 18,
       avg_transfer_fee: 0.002, // Estimated 21000 gas * 100 gwei
       fallback_price_usd: 2500,
+      payment_type: 'address', // Uses address-based payments
+      confirmations_required: 2,
+      block_time_seconds: 12,
       rpc_endpoints: [
         'https://mainnet.infura.io/v3/YOUR_KEY',
         'https://eth-mainnet.alchemyapi.io/v2/YOUR_KEY'
@@ -160,6 +210,9 @@ router.use(cors({
       decimals: 18,
       avg_transfer_fee: 0.01, // Usually much lower, but being conservative
       fallback_price_usd: 0.8,
+      payment_type: 'address', // Uses address-based payments
+      confirmations_required: 10,
+      block_time_seconds: 2,
       rpc_endpoints: [
         'https://polygon-rpc.com',
         'https://rpc-mainnet.maticvigil.com'
@@ -171,6 +224,9 @@ router.use(cors({
       decimals: 18,
       avg_transfer_fee: 0.0005, // BSC transfer fee
       fallback_price_usd: 300,
+      payment_type: 'address', // Uses address-based payments
+      confirmations_required: 3,
+      block_time_seconds: 3,
       rpc_endpoints: [
         'https://bsc-dataseed.binance.org',
         'https://bsc-dataseed1.defibit.io'
@@ -539,40 +595,127 @@ router.use(cors({
     return 'dlux_' + crypto.randomBytes(16).toString('hex');
   };
   
-  const generateMemo = (username, paymentId) => {
-    return `DLUX Account: ${username} | ID: ${paymentId}`;
+  const generateChannelId = () => {
+    return 'CH_' + crypto.randomBytes(16).toString('hex');
   };
   
-  // Get an unused payment address for a crypto type
-  const getPaymentAddress = async (cryptoType) => {
+  const generateMemo = (username, channelId) => {
+    return `DLUX Account: ${username} | CH: ${channelId}`;
+  };
+  
+  // Get shared payment address for a crypto type
+  const getPaymentAddress = (cryptoType) => {
+    const address = PAYMENT_ADDRESSES[cryptoType];
+    if (!address || address.includes('0000000') || address.includes('1111111')) {
+      throw new Error(`Payment address for ${cryptoType} not configured. Please set ${cryptoType}_PAYMENT_ADDRESS environment variable.`);
+    }
+    
+    return {
+      address,
+      crypto_type: cryptoType,
+      shared: true // Indicates this is a shared address
+    };
+  };
+  
+  // Create a new payment channel
+  const createPaymentChannel = async (username, cryptoType, amountCrypto, amountUsd, paymentAddress, memo, publicKeys = null) => {
     const client = await pool.connect();
     try {
-      const result = await client.query(
-        'SELECT * FROM payment_addresses WHERE crypto_type = $1 AND is_used = FALSE LIMIT 1',
-        [cryptoType]
-      );
+      const channelId = generateChannelId();
       
-      if (result.rows.length === 0) {
-        throw new Error(`No available ${cryptoType} addresses`);
+      const result = await client.query(`
+        INSERT INTO payment_channels 
+        (channel_id, username, crypto_type, payment_address, amount_crypto, amount_usd, memo, public_keys)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING *
+      `, [channelId, username, cryptoType, paymentAddress.address, amountCrypto, amountUsd, memo, JSON.stringify(publicKeys)]);
+      
+      return {
+        ...result.rows[0],
+        address: paymentAddress.address,
+        shared: paymentAddress.shared
+      };
+    } finally {
+      client.release();
+    }
+  };
+  
+  // Get payment channels (for admin/monitoring)
+  const getPaymentChannels = async (limit = 100, offset = 0, status = null, days = 7) => {
+    const client = await pool.connect();
+    try {
+      let query = `
+        SELECT 
+          pc.*,
+          pa.address,
+          pa.public_key,
+          pa.derivation_path,
+          pc.created_at,
+          pc.confirmed_at,
+          pc.account_created_at,
+          CASE 
+            WHEN pc.status = 'completed' THEN pc.account_created_at - pc.created_at
+            WHEN pc.status = 'confirmed' THEN pc.confirmed_at - pc.created_at
+            ELSE NULL
+          END as processing_time
+        FROM payment_channels pc
+        WHERE pc.created_at >= CURRENT_TIMESTAMP - INTERVAL '$1 days'
+      `;
+      
+      const params = [days];
+      
+      if (status) {
+        query += ` AND pc.status = $${params.length + 1}`;
+        params.push(status);
       }
       
-      return result.rows[0];
+      query += ` ORDER BY pc.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+      params.push(limit, offset);
+      
+      const result = await client.query(query, params);
+      
+      // Get total count for pagination
+      let countQuery = `
+        SELECT COUNT(*) as total
+        FROM payment_channels pc
+        WHERE pc.created_at >= CURRENT_TIMESTAMP - INTERVAL '$1 days'
+      `;
+      
+      const countParams = [days];
+      if (status) {
+        countQuery += ` AND pc.status = $2`;
+        countParams.push(status);
+      }
+      
+      const countResult = await client.query(countQuery, countParams);
+      
+      return {
+        channels: result.rows,
+        total: parseInt(countResult.rows[0].total),
+        pagination: {
+          limit,
+          offset,
+          has_more: (offset + result.rows.length) < parseInt(countResult.rows[0].total)
+        }
+      };
     } finally {
       client.release();
     }
   };
   
-  // Mark address as used
-  const markAddressUsed = async (addressId, paymentId) => {
-    const client = await pool.connect();
-    try {
-      await client.query(
-        'UPDATE payment_addresses SET is_used = TRUE, used_by = $1 WHERE id = $2',
-        [paymentId, addressId]
-      );
-    } finally {
-      client.release();
+  // Simple authentication middleware (replace with proper auth in production)
+  const authMiddleware = (req, res, next) => {
+    const authHeader = req.headers.authorization;
+    const validToken = process.env.ADMIN_TOKEN || 'admin123'; // Set in production!
+    
+    if (!authHeader || authHeader !== `Bearer ${validToken}`) {
+      return res.status(401).json({
+        success: false,
+        error: 'Unauthorized - valid Bearer token required'
+      });
     }
+    
+    next();
   };
   
   // API Routes
@@ -681,16 +824,16 @@ router.use(cors({
     }
   });
   
-  // 2. Initiate cryptocurrency payment (updated to use new pricing)
+  // 2. Initiate cryptocurrency payment (updated to require all public keys)
   router.post('/api/onboarding/payment/initiate', async (req, res) => {
     try {
-      const { username, cryptoType } = req.body;
+      const { username, cryptoType, publicKeys } = req.body;
   
       // Validate input
-      if (!username || !cryptoType) {
+      if (!username || !cryptoType || !publicKeys) {
         return res.status(400).json({
           success: false,
-          error: 'Username and crypto type are required'
+          error: 'Username, crypto type, and public keys are required'
         });
       }
   
@@ -699,6 +842,84 @@ router.use(cors({
           success: false,
           error: 'Unsupported cryptocurrency'
         });
+      }
+  
+      // Validate all required public keys are provided
+      const requiredKeys = ['owner', 'active', 'posting', 'memo'];
+      const missingKeys = requiredKeys.filter(key => !publicKeys[key] || !publicKeys[key].trim());
+      
+      if (missingKeys.length > 0) {
+        return res.status(400).json({
+          success: false,
+          error: `Missing required public keys: ${missingKeys.join(', ')}`,
+          requiredKeys: {
+            owner: 'Owner public key (highest authority)',
+            active: 'Active public key (financial operations)', 
+            posting: 'Posting public key (social operations)',
+            memo: 'Memo public key (encrypted messages)'
+          }
+        });
+      }
+  
+      // Validate public key format (basic HIVE key validation)
+      const validatePublicKey = (key, keyType) => {
+        if (!key || typeof key !== 'string') {
+          throw new Error(`${keyType} key must be a string`);
+        }
+        
+        const trimmed = key.trim();
+        if (!trimmed.startsWith('STM') && !trimmed.startsWith('TST')) {
+          throw new Error(`${keyType} key must start with STM or TST`);
+        }
+        
+        if (trimmed.length < 50 || trimmed.length > 60) {
+          throw new Error(`${keyType} key has invalid length`);
+        }
+        
+        return trimmed;
+      };
+  
+      try {
+        const validatedKeys = {
+          owner: validatePublicKey(publicKeys.owner, 'Owner'),
+          active: validatePublicKey(publicKeys.active, 'Active'),
+          posting: validatePublicKey(publicKeys.posting, 'Posting'),
+          memo: validatePublicKey(publicKeys.memo, 'Memo')
+        };
+        
+        // Store the validated keys for later use
+        publicKeys.validated = validatedKeys;
+        
+      } catch (keyError) {
+        return res.status(400).json({
+          success: false,
+          error: `Invalid public key: ${keyError.message}`,
+          help: 'Public keys should be in HIVE format (STMxxx... or TSTxxx...) and 50-60 characters long'
+        });
+      }
+  
+      // Check if username is already being processed or completed
+      const client = await pool.connect();
+      try {
+        const existingChannel = await client.query(
+          'SELECT channel_id, status FROM payment_channels WHERE username = $1 AND status IN ($2, $3, $4)',
+          [username, 'pending', 'confirmed', 'completed']
+        );
+        
+        if (existingChannel.rows.length > 0) {
+          const existing = existingChannel.rows[0];
+          return res.status(409).json({
+            success: false,
+            error: `Account "${username}" is already being processed`,
+            existingChannel: {
+              channelId: existing.channel_id,
+              status: existing.status
+            },
+            suggestion: 'Choose a different username or check the status of your existing request'
+          });
+        }
+      } finally {
+        client.release();
       }
   
       // Get current pricing
@@ -725,58 +946,51 @@ router.use(cors({
         });
       }
   
-      const client = await pool.connect();
-      try {
-        // Generate payment details
-        const paymentId = generatePaymentId();
-        const paymentAddress = await getPaymentAddress(cryptoType);
-        const memo = generateMemo(username, paymentId);
-        const expiresAt = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
+      // Generate payment details
+      const paymentAddress = getPaymentAddress(cryptoType);
+      const memo = generateMemo(username, generateChannelId());
   
-        // Store payment record
-        await client.query(
-          `INSERT INTO onboarding_payments 
-           (payment_id, username, crypto_type, amount_crypto, amount_usd, payment_address, memo, expires_at) 
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [
-            paymentId,
-            username,
-            cryptoType,
-            cryptoRate.total_amount,
-            cryptoRate.final_cost_usd, // Use the per-crypto price
-            paymentAddress.address,
-            memo,
-            expiresAt
+      // Create payment channel with provided public keys
+      const channel = await createPaymentChannel(
+        username,
+        cryptoType,
+        cryptoRate.total_amount,
+        cryptoRate.final_cost_usd, // Use the per-crypto price
+        paymentAddress,
+        memo,
+        publicKeys.validated // Store the validated public keys
+      );
+  
+      res.json({
+        success: true,
+        payment: {
+          channelId: channel.channel_id,
+          username,
+          cryptoType,
+          amount: parseFloat(cryptoRate.total_amount),
+          amountFormatted: `${parseFloat(cryptoRate.total_amount).toFixed(CRYPTO_CONFIG[cryptoType].decimals === 18 ? 6 : CRYPTO_CONFIG[cryptoType].decimals)} ${cryptoType}`,
+          amountUSD: parseFloat(cryptoRate.final_cost_usd),
+          address: paymentAddress.address,
+          memo,
+          expiresAt: channel.expires_at,
+          network: CRYPTO_CONFIG[cryptoType].name,
+          confirmationsRequired: CRYPTO_CONFIG[cryptoType].confirmations_required,
+          estimatedConfirmationTime: `${Math.ceil(CRYPTO_CONFIG[cryptoType].block_time_seconds * CRYPTO_CONFIG[cryptoType].confirmations_required / 60)} minutes`,
+          publicKeysStored: {
+            owner: publicKeys.validated.owner,
+            active: publicKeys.validated.active, 
+            posting: publicKeys.validated.posting,
+            memo: publicKeys.validated.memo
+          },
+          instructions: [
+            `Send exactly ${parseFloat(cryptoRate.total_amount).toFixed(CRYPTO_CONFIG[cryptoType].decimals === 18 ? 6 : CRYPTO_CONFIG[cryptoType].decimals)} ${cryptoType} to the address above`,
+            `Include the memo: ${memo}`,
+            `Payment expires in 24 hours`,
+            `Account will be created automatically after ${CRYPTO_CONFIG[cryptoType].confirmations_required} confirmation(s)`,
+            `HIVE account @${username} will be created with your provided public keys`
           ]
-        );
-  
-        // Mark address as used
-        await markAddressUsed(paymentAddress.id, paymentId);
-  
-        res.json({
-          success: true,
-          payment: {
-            id: paymentId,
-            username,
-            cryptoType,
-            amount: parseFloat(cryptoRate.total_amount),
-            amountFormatted: `${parseFloat(cryptoRate.total_amount).toFixed(CRYPTO_CONFIG[cryptoType].decimals === 18 ? 6 : CRYPTO_CONFIG[cryptoType].decimals)} ${cryptoType}`,
-            amountUSD: parseFloat(cryptoRate.final_cost_usd),
-            address: paymentAddress.address,
-            memo,
-            expiresAt: expiresAt.toISOString(),
-            network: CRYPTO_CONFIG[cryptoType].name,
-            instructions: [
-              `Send exactly ${parseFloat(cryptoRate.total_amount).toFixed(CRYPTO_CONFIG[cryptoType].decimals === 18 ? 6 : CRYPTO_CONFIG[cryptoType].decimals)} ${cryptoType} to the address above`,
-              `Include the memo: ${memo}`,
-              `Payment expires in 30 minutes`,
-              `Account will be created automatically after payment confirmation`
-            ]
-          }
-        });
-      } finally {
-        client.release();
-      }
+        }
+      });
     } catch (error) {
       console.error('Error initiating payment:', error);
       res.status(500).json({
@@ -786,7 +1000,180 @@ router.use(cors({
     }
   });
   
-  // 3. Check payment status
+  // 3. Admin endpoint - Get payment channels (last 7 days)
+  router.get('/api/onboarding/admin/channels', authMiddleware, async (req, res) => {
+    try {
+      const { 
+        limit = 50, 
+        offset = 0, 
+        status = null, 
+        days = 7,
+        crypto_type = null 
+      } = req.query;
+  
+      const client = await pool.connect();
+      try {
+        let query = `
+          SELECT 
+            pc.*,
+            CASE 
+              WHEN pc.status = 'completed' THEN EXTRACT(EPOCH FROM (pc.account_created_at - pc.created_at))
+              WHEN pc.status = 'confirmed' THEN EXTRACT(EPOCH FROM (pc.confirmed_at - pc.created_at))
+              ELSE NULL
+            END as processing_time_seconds,
+            COUNT(*) OVER() as total_count
+          FROM payment_channels pc
+          WHERE pc.created_at >= CURRENT_TIMESTAMP - INTERVAL '${parseInt(days)} days'
+        `;
+        
+        const params = [];
+        
+        if (status) {
+          query += ` AND pc.status = $${params.length + 1}`;
+          params.push(status);
+        }
+        
+        if (crypto_type) {
+          query += ` AND pc.crypto_type = $${params.length + 1}`;
+          params.push(crypto_type.toUpperCase());
+        }
+        
+        query += ` ORDER BY pc.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+        params.push(parseInt(limit), parseInt(offset));
+        
+        const result = await client.query(query, params);
+        
+        // Get status summary
+        const summaryQuery = `
+          SELECT 
+            status, 
+            COUNT(*) as count,
+            SUM(amount_usd) as total_usd
+          FROM payment_channels 
+          WHERE created_at >= CURRENT_TIMESTAMP - INTERVAL '${parseInt(days)} days'
+          ${crypto_type ? `AND crypto_type = '${crypto_type.toUpperCase()}'` : ''}
+          GROUP BY status
+        `;
+        
+        const summaryResult = await client.query(summaryQuery);
+        
+        const channels = result.rows.map(row => ({
+          channelId: row.channel_id,
+          username: row.username,
+          cryptoType: row.crypto_type,
+          amountCrypto: parseFloat(row.amount_crypto),
+          amountUsd: parseFloat(row.amount_usd),
+          address: row.payment_address, // Now stored directly in the channel
+          memo: row.memo,
+          status: row.status,
+          confirmations: row.confirmations,
+          txHash: row.tx_hash,
+          createdAt: row.created_at,
+          confirmedAt: row.confirmed_at,
+          accountCreatedAt: row.account_created_at,
+          expiresAt: row.expires_at,
+          processingTimeSeconds: row.processing_time_seconds,
+          publicKeys: row.public_keys,
+          shared: true // All addresses are now shared
+        }));
+        
+        const summary = summaryResult.rows.reduce((acc, row) => {
+          acc[row.status] = {
+            count: parseInt(row.count),
+            totalUsd: parseFloat(row.total_usd || 0)
+          };
+          return acc;
+        }, {});
+        
+        const totalCount = result.rows.length > 0 ? parseInt(result.rows[0].total_count) : 0;
+        
+        res.json({
+          success: true,
+          channels,
+          summary,
+          pagination: {
+            limit: parseInt(limit),
+            offset: parseInt(offset),
+            total: totalCount,
+            hasMore: (parseInt(offset) + result.rows.length) < totalCount
+          },
+          filters: {
+            days: parseInt(days),
+            status,
+            cryptoType: crypto_type
+          }
+        });
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      console.error('Error fetching payment channels:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to fetch payment channels'
+      });
+    }
+  });
+  
+  // 4. Check payment channel status
+  router.get('/api/onboarding/channel/:channelId/status', async (req, res) => {
+    try {
+      const { channelId } = req.params;
+      
+      const client = await pool.connect();
+      try {
+        const result = await client.query(`
+          SELECT pc.*
+          FROM payment_channels pc
+          WHERE pc.channel_id = $1
+        `, [channelId]);
+        
+        if (result.rows.length === 0) {
+          return res.status(404).json({
+            success: false,
+            error: 'Payment channel not found'
+          });
+        }
+        
+        const channel = result.rows[0];
+        
+        res.json({
+          success: true,
+          channel: {
+            channelId: channel.channel_id,
+            username: channel.username,
+            status: channel.status,
+            cryptoType: channel.crypto_type,
+            amountCrypto: parseFloat(channel.amount_crypto),
+            amountUsd: parseFloat(channel.amount_usd),
+            address: channel.payment_address,
+            memo: channel.memo,
+            confirmations: channel.confirmations,
+            confirmationsRequired: CRYPTO_CONFIG[channel.crypto_type].confirmations_required,
+            createdAt: channel.created_at,
+            confirmedAt: channel.confirmed_at,
+            accountCreatedAt: channel.account_created_at,
+            expiresAt: channel.expires_at,
+            txHash: channel.tx_hash,
+            publicKeys: channel.public_keys,
+            isExpired: new Date() > new Date(channel.expires_at),
+            timeLeft: Math.max(0, Math.floor((new Date(channel.expires_at) - new Date()) / (1000 * 60))), // minutes left
+            shared: true // All addresses are shared
+          }
+        });
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      console.error('Error checking channel status:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to check channel status'
+      });
+    }
+  });
+  
+  // 5. Check payment status (legacy endpoint for backward compatibility)
   router.get('/api/onboarding/payment/:paymentId/status', async (req, res) => {
     try {
       const { paymentId } = req.params;
@@ -1043,21 +1430,18 @@ router.use(cors({
           ['pending']
         );
         
-        // Release unused addresses
-        await client.query(`
-          UPDATE payment_addresses 
-          SET is_used = FALSE, used_by = NULL 
-          WHERE used_by IN (
-            SELECT payment_id FROM onboarding_payments 
-            WHERE status = 'expired' OR expires_at < NOW()
-          )
-        `);
+        // Clean up expired payment channels
+        const channelsResult = await client.query(
+          'DELETE FROM payment_channels WHERE expires_at < NOW() AND status = $1',
+          ['pending']
+        );
         
         res.json({
           success: true,
           cleaned: {
             expiredPayments: paymentsResult.rowCount,
-            expiredRequests: requestsResult.rowCount
+            expiredRequests: requestsResult.rowCount,
+            expiredChannels: channelsResult.rowCount
           }
         });
       } finally {
@@ -1094,11 +1478,23 @@ router.use(cors({
     }
   };
   
+  // Initialize WebSocket monitor (to be called from main server)
+  const initializeWebSocketMonitor = (server) => {
+    if (!global.paymentMonitor) {
+      global.paymentMonitor = new PaymentChannelMonitor();
+      global.paymentMonitor.initialize(server);
+      console.log('✓ Payment channel WebSocket monitor initialized');
+    }
+    return global.paymentMonitor;
+  };
+  
   // Export the router and initialization function
   module.exports = { 
     router, 
     initializeOnboardingService,
-    setupDatabase 
+    initializeWebSocketMonitor,
+    setupDatabase,
+    PaymentChannelMonitor
   };
   
   // Auto-initialize if this file is run directly
