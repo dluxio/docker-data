@@ -9,10 +9,9 @@ const pool = new Pool({
 
 exports.pool = pool;
 
-
 const API = require("./api/index");
-const { router: onboardingRouter, setupDatabase } = require('./api/onboarding');
-const wsMonitor = initializeWebSocketMonitor(api);
+const { router: onboardingRouter, setupDatabase, initializeWebSocketMonitor } = require('./api/onboarding');
+
 async function initializeDatabase() {
   try {
     // Set up onboarding tables
@@ -27,6 +26,9 @@ async function initializeDatabase() {
 }
 
 var http = require("http").Server(api);
+
+// Initialize WebSocket monitor AFTER HTTP server is created
+const wsMonitor = initializeWebSocketMonitor(http);
 
 api.use(API.https_redirect);
 api.use(cors());
@@ -49,12 +51,14 @@ api.get("/hc/tickers", API.tickers);
 
 http.listen(config.port, async function () {
   console.log(`DLUX DATA API listening on port ${config.port}`);
+  console.log(`WebSocket server available at ws://localhost:${config.port}/ws/payment-monitor`);
   await initializeDatabase();
+  
   // Graceful shutdown
   process.on('SIGTERM', () => {
     console.log('SIGTERM received, shutting down gracefully...');
     wsMonitor.shutdown();
-    server.close(() => {
+    http.close(() => {
       console.log('Server closed');
       process.exit(0);
     });
@@ -63,7 +67,7 @@ http.listen(config.port, async function () {
   process.on('SIGINT', () => {
     console.log('SIGINT received, shutting down gracefully...');
     wsMonitor.shutdown();
-    server.close(() => {
+    http.close(() => {
       console.log('Server closed');
       process.exit(0);
     });
