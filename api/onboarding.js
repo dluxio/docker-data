@@ -8,7 +8,13 @@ const { PaymentChannelMonitor } = require('./wsmonitor');
 const router = express.Router();
 // CORS middleware for onboarding endpoints
 router.use(cors({
-    origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : ['http://localhost:8080', 'https://dlux.io', 'https://vue.dlux.io', 'https://www.dlux.io'],
+    origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : [
+        'http://localhost:8080',
+        'http://localhost:3000', 
+        'https://dlux.io',
+        'https://www.dlux.io',
+        'https://vue.dlux.io'
+    ],
     credentials: true
   }));
   

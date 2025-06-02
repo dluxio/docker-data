@@ -9,9 +9,47 @@ class PaymentChannelMonitor {
     }
 
     initialize(server) {
+        // Allowed origins for WebSocket connections
+        const allowedOrigins = process.env.ALLOWED_ORIGINS 
+            ? process.env.ALLOWED_ORIGINS.split(',')
+            : [
+                'http://localhost:8080',
+                'http://localhost:3000',
+                'https://dlux.io',
+                'https://www.dlux.io', 
+                'https://vue.dlux.io'
+            ];
+
         this.wss = new WebSocket.Server({
             server,
-            path: '/ws/payment-monitor'
+            path: '/ws/payment-monitor',
+            verifyClient: (info) => {
+                const origin = info.origin;
+                console.log(`WebSocket connection attempt from origin: ${origin}`);
+                
+                // Allow connections without origin (for testing tools)
+                if (!origin) {
+                    console.log('WebSocket connection allowed (no origin header)');
+                    return true;
+                }
+                
+                // Check if origin is in allowed list
+                const isAllowed = allowedOrigins.some(allowedOrigin => {
+                    // Handle both exact match and wildcard subdomains
+                    if (allowedOrigin === origin) return true;
+                    if (allowedOrigin.startsWith('https://*.') && origin.endsWith(allowedOrigin.substring(9))) return true;
+                    return false;
+                });
+                
+                if (isAllowed) {
+                    console.log(`WebSocket connection allowed from: ${origin}`);
+                } else {
+                    console.log(`WebSocket connection REJECTED from: ${origin}`);
+                    console.log(`Allowed origins: ${allowedOrigins.join(', ')}`);
+                }
+                
+                return isAllowed;
+            }
         });
 
         this.wss.on('connection', (ws, req) => {

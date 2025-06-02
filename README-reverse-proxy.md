@@ -31,6 +31,8 @@ your-domain.com {
         header_up X-Real-IP {remote}
         header_up X-Forwarded-For {remote}
         header_up X-Forwarded-Proto {scheme}
+        # Preserve origin header for WebSocket CORS validation
+        header_up Origin {http.request.header.Origin}
     }
     
     # Handle all other HTTP requests
@@ -83,6 +85,8 @@ your-domain.com {
         header_up X-Real-IP {remote}
         header_up X-Forwarded-For {remote}
         header_up X-Forwarded-Proto {scheme}
+        # Preserve origin header for WebSocket CORS validation
+        header_up Origin {http.request.header.Origin}
     }
     
     # API endpoints
@@ -202,6 +206,8 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        # Preserve origin header for WebSocket CORS validation
+        proxy_set_header Origin $http_origin;
         
         # WebSocket specific timeouts
         proxy_connect_timeout 7d;
