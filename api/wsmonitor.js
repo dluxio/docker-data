@@ -85,17 +85,24 @@ class PaymentChannelMonitor {
             console.log(`User Agent: ${userAgent}`);
             console.log(`Connection state: ${ws.readyState} (1=OPEN)`);
             
-            // Store connection ID for debugging
+            // Store connection ID and start time for debugging
             ws.connectionId = connectionId;
+            ws.connectionStartTime = Date.now();
+            ws.messageCount = 0;
 
             ws.on('message', async (message) => {
                 try {
-                    console.log(`WebSocket message received: ${message}`);
+                    console.log(`[ID: ${ws.connectionId}] WebSocket message received: ${message}`);
+                    console.log(`[ID: ${ws.connectionId}] Message length: ${message.length} bytes`);
+                    console.log(`[ID: ${ws.connectionId}] Message type: ${typeof message}`);
+                    
                     const data = JSON.parse(message);
+                    console.log(`[ID: ${ws.connectionId}] Parsed data:`, data);
+                    ws.messageCount++;
                     await this.handleMessage(ws, data);
                 } catch (error) {
-                    console.error('WebSocket message error:', error);
-                    console.error('Raw message that caused error:', message);
+                    console.error(`[ID: ${ws.connectionId}] WebSocket message error:`, error);
+                    console.error(`[ID: ${ws.connectionId}] Raw message that caused error:`, message);
                     
                     try {
                         ws.send(JSON.stringify({
@@ -104,15 +111,18 @@ class PaymentChannelMonitor {
                             details: error.message
                         }));
                     } catch (sendError) {
-                        console.error('Failed to send error message:', sendError);
+                        console.error(`[ID: ${ws.connectionId}] Failed to send error message:`, sendError);
                     }
                 }
             });
 
             ws.on('close', (code, reason) => {
+                const connectionTime = Date.now() - (ws.connectionStartTime || Date.now());
                 console.log(`WebSocket connection closed [ID: ${ws.connectionId}] - Code: ${code}, Reason: ${reason || 'No reason'}`);
                 console.log(`Client was: ${clientIP} (Origin: ${origin})`);
+                console.log(`Connection duration: ${connectionTime}ms`);
                 console.log(`Close code meaning: ${getCloseCodeMeaning(code)}`);
+                console.log(`Messages received during connection: ${ws.messageCount || 0}`);
                 this.removeClient(ws);
             });
 
@@ -121,12 +131,7 @@ class PaymentChannelMonitor {
                 this.removeClient(ws);
             });
 
-            // TEMPORARILY DISABLED: Send initial connection confirmation 
-            // This is disabled to test if immediate welcome message is causing code 1006
-            console.log('Welcome message disabled for testing - connection should stay open');
-            console.log('Client can send ping to test bidirectional communication');
-            
-            /* DISABLED FOR DEBUGGING
+            // Send initial connection confirmation with enhanced error handling
             try {
                 // Wait a moment to ensure connection is fully established
                 setTimeout(() => {
@@ -155,7 +160,6 @@ class PaymentChannelMonitor {
             } catch (error) {
                 console.error('Failed to setup welcome message:', error);
             }
-            */
         });
 
         console.log('WebSocket server initialized on path /ws/payment-monitor');
