@@ -6,7 +6,6 @@ const cors = require('cors');
 
 const router = express.Router();
 
-
 // CORS middleware for onboarding endpoints
 router.use(cors({
     origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : ['http://localhost:8080', 'https://dlux.io', 'https://vue.dlux.io', 'https://www.dlux.io'],
@@ -138,6 +137,7 @@ router.use(cors({
       coingecko_id: 'solana',
       decimals: 9,
       avg_transfer_fee: 0.000005, // 5000 lamports typical
+      fallback_price_usd: 100,
       rpc_endpoints: [
         'https://api.mainnet-beta.solana.com',
         'https://solana-api.projectserum.com'
@@ -148,6 +148,7 @@ router.use(cors({
       coingecko_id: 'ethereum',
       decimals: 18,
       avg_transfer_fee: 0.002, // Estimated 21000 gas * 100 gwei
+      fallback_price_usd: 2500,
       rpc_endpoints: [
         'https://mainnet.infura.io/v3/YOUR_KEY',
         'https://eth-mainnet.alchemyapi.io/v2/YOUR_KEY'
@@ -158,6 +159,7 @@ router.use(cors({
       coingecko_id: 'matic-network',
       decimals: 18,
       avg_transfer_fee: 0.01, // Usually much lower, but being conservative
+      fallback_price_usd: 0.8,
       rpc_endpoints: [
         'https://polygon-rpc.com',
         'https://rpc-mainnet.maticvigil.com'
@@ -168,6 +170,7 @@ router.use(cors({
       coingecko_id: 'binancecoin',
       decimals: 18,
       avg_transfer_fee: 0.0005, // BSC transfer fee
+      fallback_price_usd: 300,
       rpc_endpoints: [
         'https://bsc-dataseed.binance.org',
         'https://bsc-dataseed1.defibit.io'
@@ -270,35 +273,58 @@ router.use(cors({
           // For ETH, try to get current gas prices from free APIs
           if (symbol === 'ETH') {
             try {
-              // Try gas station API first (no key required)
-              const gasResponse = await fetch('https://ethgasstation.info/json/ethgasAPI.json');
-              if (gasResponse.ok) {
-                const gasData = await gasResponse.json();
-                if (gasData.standard) {
-                  const standardGwei = gasData.standard / 10; // Gas station returns in deciseconds
-                  avgFee = (21000 * standardGwei * 1e-9); // 21000 gas limit * price in ETH
-                  
-                  if (standardGwei > 100) congestion = 'high';
-                  else if (standardGwei > 50) congestion = 'medium';
-                  else congestion = 'low';
-                }
-              } else {
-                // Fallback to another gas API without key requirement
-                const blocknativeResponse = await fetch('https://api.blocknative.com/gasprices/blockprices');
-                if (blocknativeResponse.ok) {
-                  const blocknativeData = await blocknativeResponse.json();
-                  if (blocknativeData.blockPrices && blocknativeData.blockPrices[0]) {
-                    const standardGwei = blocknativeData.blockPrices[0].estimatedPrices[1].price;
-                    avgFee = (21000 * standardGwei * 1e-9);
+              // Try a simpler gas API first
+              let gasSuccess = false;
+              
+              try {
+                const gasNowResponse = await fetch('https://www.gasnow.org/api/v3/gas/price');
+                if (gasNowResponse.ok) {
+                  const gasNowData = await gasNowResponse.json();
+                  if (gasNowData.data && gasNowData.data.standard) {
+                    const standardGwei = gasNowData.data.standard / 1e9; // Convert wei to gwei
+                    avgFee = (21000 * standardGwei * 1e-9); // 21000 gas limit * price in ETH
+                    gasSuccess = true;
                     
                     if (standardGwei > 100) congestion = 'high';
                     else if (standardGwei > 50) congestion = 'medium';
                     else congestion = 'low';
                   }
                 }
+              } catch (gasNowError) {
+                console.log('GasNow API failed, trying alternative...');
+              }
+              
+              // If GasNow failed, try gas station API
+              if (!gasSuccess) {
+                try {
+                  const gasResponse = await fetch('https://ethgasstation.info/json/ethgasAPI.json');
+                  if (gasResponse.ok) {
+                    const gasData = await gasResponse.json();
+                    if (gasData.standard) {
+                      const standardGwei = gasData.standard / 10; // Gas station returns in deciseconds
+                      avgFee = (21000 * standardGwei * 1e-9); // 21000 gas limit * price in ETH
+                      gasSuccess = true;
+                      
+                      if (standardGwei > 100) congestion = 'high';
+                      else if (standardGwei > 50) congestion = 'medium';
+                      else congestion = 'low';
+                    }
+                  }
+                } catch (gasStationError) {
+                  console.log('Gas Station API failed, using default');
+                }
+              }
+              
+              // If all APIs failed, ensure we have a valid default
+              if (!gasSuccess) {
+                console.log('All ETH gas APIs failed, using fallback estimate');
+                avgFee = config.avg_transfer_fee; // Use the default 0.002 ETH
+                congestion = 'unknown';
               }
             } catch (gasError) {
-              console.log('Could not fetch ETH gas prices, using default');
+              console.log('ETH gas estimation completely failed, using default:', gasError.message);
+              avgFee = config.avg_transfer_fee; // Ensure we always have a valid fee
+              congestion = 'unknown';
             }
           }
           
@@ -323,22 +349,15 @@ router.use(cors({
     }
   
     calculateAccountCreationPrice(hivePrice, transferCosts) {
-      // Formula: 3x HIVE price + 50% + 20% of average transfer cost
+      // Formula: Base account creation cost = (3x HIVE price) * 1.5
+      // Then each crypto adds 20% of its own network fee
       const basePrice = hivePrice * 3; // 3x HIVE price
-      const withMarkup = basePrice * 1.5; // Add 50%
-      
-      // Calculate average transfer cost across all supported cryptos (filter out null/invalid values)
-      const validTransferCosts = Object.values(transferCosts).filter(cost => cost && cost.avg_fee_usd != null && !isNaN(cost.avg_fee_usd));
-      const avgTransferCostUsd = validTransferCosts.length > 0 
-        ? validTransferCosts.reduce((sum, cost) => sum + cost.avg_fee_usd, 0) / validTransferCosts.length
-        : 0.005; // Default fallback value
-      
-      const finalPrice = withMarkup + (avgTransferCostUsd * 0.2); // Add 20% of avg transfer cost
+      const accountCreationCost = basePrice * 1.5; // Add 50% markup - this is the base cost for all
       
       return {
         base_cost_usd: basePrice,
-        final_cost_usd: finalPrice,
-        avg_transfer_cost_usd: avgTransferCostUsd
+        account_creation_cost_usd: accountCreationCost, // Fixed base cost
+        // Note: Individual crypto costs calculated per-crypto in the crypto rates section
       };
     }
   
@@ -394,13 +413,20 @@ router.use(cors({
           }
           
           // Calculate crypto rates for account creation
+          // Each crypto has: base account cost + (20% of its network fee)
           const cryptoRates = {};
           for (const [symbol, priceData] of Object.entries(cryptoPrices)) {
+            const networkFeeSurcharge = transferCosts[symbol].avg_fee_usd * 0.2; // 20% of network fee
+            const totalCostUsd = pricingData.account_creation_cost_usd + networkFeeSurcharge;
+            const amountNeeded = totalCostUsd / priceData.price;
+            
             cryptoRates[symbol] = {
               price_usd: priceData.price,
-              amount_needed: pricingData.final_cost_usd / priceData.price,
+              amount_needed: amountNeeded,
               transfer_fee: transferCosts[symbol].avg_fee_crypto,
-              total_amount: (pricingData.final_cost_usd / priceData.price) + transferCosts[symbol].avg_fee_crypto
+              total_amount: amountNeeded + transferCosts[symbol].avg_fee_crypto,
+              network_fee_surcharge_usd: networkFeeSurcharge,
+              final_cost_usd: totalCostUsd
             };
           }
           
@@ -412,7 +438,7 @@ router.use(cors({
             [
               hiveData.price,
               pricingData.base_cost_usd,
-              pricingData.final_cost_usd,
+              pricingData.account_creation_cost_usd, // This is the fixed base cost
               JSON.stringify(cryptoRates),
               JSON.stringify(transferCosts)
             ]
@@ -426,8 +452,14 @@ router.use(cors({
           
           this.lastUpdate = new Date();
           console.log(`Pricing update completed successfully at ${this.lastUpdate.toISOString()}`);
-          console.log(`Final account creation cost: $${pricingData.final_cost_usd.toFixed(6)} USD`);
+          console.log(`Base account creation cost: $${pricingData.account_creation_cost_usd.toFixed(6)} USD`);
           console.log(`HIVE price: $${hiveData.price.toFixed(6)} USD`);
+          
+          // Log per-crypto pricing
+          console.log('Per-crypto final costs:');
+          Object.entries(cryptoRates).forEach(([symbol, data]) => {
+            console.log(`  ${symbol}: $${data.final_cost_usd.toFixed(6)} USD (base + $${data.network_fee_surcharge_usd.toFixed(6)} network fee)`);
+          });
           
         } finally {
           client.release();
@@ -550,15 +582,76 @@ router.use(cors({
     try {
       const pricing = await pricingService.getLatestPricing();
       
+      // Parse JSON fields and ensure valid data
+      let cryptoRates = {};
+      let transferCosts = {};
+      
+      try {
+        // Parse stored JSON data
+        if (typeof pricing.crypto_rates === 'string') {
+          cryptoRates = JSON.parse(pricing.crypto_rates);
+        } else if (pricing.crypto_rates && typeof pricing.crypto_rates === 'object') {
+          cryptoRates = pricing.crypto_rates;
+        }
+        
+        if (typeof pricing.transfer_costs === 'string') {
+          transferCosts = JSON.parse(pricing.transfer_costs);
+        } else if (pricing.transfer_costs && typeof pricing.transfer_costs === 'object') {
+          transferCosts = pricing.transfer_costs;
+        }
+      } catch (parseError) {
+        console.error('Error parsing pricing JSON data:', parseError);
+      }
+      
+      // Ensure we have valid pricing values
+      const hivePrice = pricing.hive_price_usd ? parseFloat(pricing.hive_price_usd) : 0.30;
+      const accountCreationCost = pricing.final_cost_usd ? parseFloat(pricing.final_cost_usd) : (0.90 * 1.5); // final_cost_usd is now the base account creation cost
+      const baseCost = pricing.base_cost_usd ? parseFloat(pricing.base_cost_usd) : 0.90;
+      
+      // Ensure all crypto currencies have complete data
+      Object.keys(CRYPTO_CONFIG).forEach(symbol => {
+        const config = CRYPTO_CONFIG[symbol];
+        
+        // Fix transfer costs first if missing or invalid
+        if (!transferCosts[symbol] || transferCosts[symbol].avg_fee_usd == null) {
+          const priceUsd = cryptoRates[symbol]?.price_usd || config.fallback_price_usd || 100;
+          const avgFeeCrypto = config.avg_transfer_fee;
+          
+          transferCosts[symbol] = {
+            avg_fee_crypto: avgFeeCrypto,
+            avg_fee_usd: avgFeeCrypto * priceUsd,
+            network_congestion: 'normal'
+          };
+        }
+        
+        // Fix crypto rates if missing or invalid
+        if (!cryptoRates[symbol] || cryptoRates[symbol].amount_needed == null) {
+          const priceUsd = cryptoRates[symbol]?.price_usd || config.fallback_price_usd || 100;
+          const networkFeeSurcharge = transferCosts[symbol].avg_fee_usd * 0.2; // 20% of network fee
+          const totalCostUsd = accountCreationCost + networkFeeSurcharge;
+          const amountNeeded = totalCostUsd / priceUsd;
+          const transferFee = transferCosts[symbol].avg_fee_crypto;
+          
+          cryptoRates[symbol] = {
+            price_usd: priceUsd,
+            amount_needed: amountNeeded,
+            transfer_fee: transferFee,
+            total_amount: amountNeeded + transferFee,
+            network_fee_surcharge_usd: networkFeeSurcharge,
+            final_cost_usd: totalCostUsd
+          };
+        }
+      });
+      
       res.json({
         success: true,
         pricing: {
           timestamp: pricing.updated_at,
-          hive_price_usd: pricing.hive_price_usd ? parseFloat(pricing.hive_price_usd) : null,
-          account_creation_cost_usd: pricing.final_cost_usd ? parseFloat(pricing.final_cost_usd) : null,
-          base_cost_usd: pricing.base_cost_usd ? parseFloat(pricing.base_cost_usd) : null,
-          crypto_rates: pricing.crypto_rates || {},
-          transfer_costs: pricing.transfer_costs || {},
+          hive_price_usd: hivePrice,
+          account_creation_cost_usd: accountCreationCost, // Fixed base cost for all
+          base_cost_usd: baseCost,
+          crypto_rates: cryptoRates, // Each crypto now has its own final_cost_usd
+          transfer_costs: transferCosts,
           supported_currencies: Object.keys(CRYPTO_CONFIG)
         }
       });
@@ -571,11 +664,18 @@ router.use(cors({
           hive_price_usd: 0.30,
           account_creation_cost_usd: 3.00,
           crypto_rates: {
-            SOL: { price_usd: 100, amount_needed: 0.03, total_amount: 0.030005 },
-            ETH: { price_usd: 2500, amount_needed: 0.0012, total_amount: 0.0032 },
-            MATIC: { price_usd: 0.8, amount_needed: 3.75, total_amount: 3.76 },
-            BNB: { price_usd: 300, amount_needed: 0.01, total_amount: 0.0105 }
-          }
+            SOL: { price_usd: 100, amount_needed: 0.03, total_amount: 0.030005, transfer_fee: 0.000005 },
+            ETH: { price_usd: 2500, amount_needed: 0.0012, total_amount: 0.0032, transfer_fee: 0.002 },
+            MATIC: { price_usd: 0.8, amount_needed: 3.75, total_amount: 3.76, transfer_fee: 0.01 },
+            BNB: { price_usd: 300, amount_needed: 0.01, total_amount: 0.0105, transfer_fee: 0.0005 }
+          },
+          transfer_costs: {
+            SOL: { avg_fee_crypto: 0.000005, avg_fee_usd: 0.0005, network_congestion: 'normal' },
+            ETH: { avg_fee_crypto: 0.002, avg_fee_usd: 5.0, network_congestion: 'normal' },
+            MATIC: { avg_fee_crypto: 0.01, avg_fee_usd: 0.008, network_congestion: 'normal' },
+            BNB: { avg_fee_crypto: 0.0005, avg_fee_usd: 0.15, network_congestion: 'normal' }
+          },
+          supported_currencies: Object.keys(CRYPTO_CONFIG)
         }
       });
     }
@@ -603,9 +703,22 @@ router.use(cors({
   
       // Get current pricing
       const pricing = await pricingService.getLatestPricing();
-      const cryptoRate = pricing.crypto_rates[cryptoType];
       
-      if (!cryptoRate) {
+      // Parse crypto rates if they're stored as JSON string
+      let cryptoRates = {};
+      try {
+        if (typeof pricing.crypto_rates === 'string') {
+          cryptoRates = JSON.parse(pricing.crypto_rates);
+        } else if (pricing.crypto_rates && typeof pricing.crypto_rates === 'object') {
+          cryptoRates = pricing.crypto_rates;
+        }
+      } catch (parseError) {
+        console.error('Error parsing crypto rates:', parseError);
+      }
+      
+      const cryptoRate = cryptoRates[cryptoType];
+      
+      if (!cryptoRate || !cryptoRate.total_amount) {
         return res.status(500).json({
           success: false,
           error: 'Pricing data not available for this cryptocurrency'
@@ -630,7 +743,7 @@ router.use(cors({
             username,
             cryptoType,
             cryptoRate.total_amount,
-            pricing.final_cost_usd,
+            cryptoRate.final_cost_usd, // Use the per-crypto price
             paymentAddress.address,
             memo,
             expiresAt
@@ -648,7 +761,7 @@ router.use(cors({
             cryptoType,
             amount: parseFloat(cryptoRate.total_amount),
             amountFormatted: `${parseFloat(cryptoRate.total_amount).toFixed(CRYPTO_CONFIG[cryptoType].decimals === 18 ? 6 : CRYPTO_CONFIG[cryptoType].decimals)} ${cryptoType}`,
-            amountUSD: parseFloat(pricing.final_cost_usd),
+            amountUSD: parseFloat(cryptoRate.final_cost_usd),
             address: paymentAddress.address,
             memo,
             expiresAt: expiresAt.toISOString(),
