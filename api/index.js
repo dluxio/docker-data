@@ -277,7 +277,7 @@ const tickers = {
     vol: 0
   },
   larynx: {
-    api: "https://spktest.hivehoneycomb.com/",
+    api: "https://spktest.dlux.io/",
     token: "LARYNX",
     tick: "",
     hbd_tick: "",
@@ -285,7 +285,7 @@ const tickers = {
     vol: 0
   },
   spk: {
-    api: "https://spktest.hivehoneycomb.com/spk/",
+    api: "https://spktest.dlux.io/spk/",
     token: "SPK",
     tick: "",
     hbd_tick: "",
@@ -293,7 +293,7 @@ const tickers = {
     vol: 0
   },
   broca: {
-    api: "https://spktest.hivehoneycomb.com/broca/",
+    api: "https://spktest.dlux.io/broca/",
     token: "BROCA",
     tick: "",
     hbd_tick: "",
