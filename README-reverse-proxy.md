@@ -19,7 +19,7 @@ Caddy is the easiest option with automatic HTTPS via Let's Encrypt.
 your-domain.com {
     # Enable automatic HTTPS
     
-    # Handle WebSocket connections
+    # Handle WebSocket connections - CRITICAL FIX for Code 1006
     @websockets {
         header Connection *Upgrade*
         header Upgrade websocket
@@ -33,6 +33,14 @@ your-domain.com {
         header_up X-Forwarded-Proto {scheme}
         # Preserve origin header for WebSocket CORS validation
         header_up Origin {http.request.header.Origin}
+        
+        # CRITICAL: Disable buffering to prevent frame corruption
+        flush_interval -1
+        # Ensure proper WebSocket handling
+        transport http {
+            # Disable response buffering for WebSocket
+            response_buffer_size 0
+        }
     }
     
     # Handle all other HTTP requests
@@ -365,6 +373,57 @@ sudo tail -f /var/log/nginx/dlux-api.error.log
 ```
 
 ## Troubleshooting
+
+### **URGENT: Code 1006 (Abnormal Closure) After Welcome Message**
+
+If you see logs like:
+```
+Welcome message sent successfully
+WebSocket connection closed [ID: xxx] - Code: 1006, Reason: 
+Close code meaning: Abnormal Closure (no close frame received)
+```
+
+**This is a reverse proxy WebSocket frame corruption issue.** Apply these fixes:
+
+#### For Caddy:
+```caddy
+@websockets path /ws/*
+reverse_proxy @websockets localhost:3000 {
+    # CRITICAL FIXES for Code 1006
+    flush_interval -1
+    transport http {
+        response_buffer_size 0
+    }
+    header_up Origin {http.request.header.Origin}
+}
+```
+
+#### For Nginx:
+```nginx
+location /ws/ {
+    proxy_pass http://dlux_api;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    
+    # CRITICAL FIXES for Code 1006
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_set_header X-Accel-Buffering no;
+    proxy_max_temp_file_size 0;
+    
+    # Essential WebSocket headers
+    proxy_set_header Host $host;
+    proxy_set_header Origin $http_origin;
+}
+```
+
+#### Quick Test:
+1. Apply the reverse proxy fixes above
+2. Restart your reverse proxy
+3. Test WebSocket connection - should stay open without immediate closure
+
+### **Standard Troubleshooting**
 
 1. **WebSocket connection fails**: Check that the upgrade headers are properly set
 2. **CORS issues**: Verify the CORS headers in your reverse proxy configuration

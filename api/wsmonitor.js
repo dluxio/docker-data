@@ -121,7 +121,12 @@ class PaymentChannelMonitor {
                 this.removeClient(ws);
             });
 
-            // Send initial connection confirmation with error handling
+            // TEMPORARILY DISABLED: Send initial connection confirmation 
+            // This is disabled to test if immediate welcome message is causing code 1006
+            console.log('Welcome message disabled for testing - connection should stay open');
+            console.log('Client can send ping to test bidirectional communication');
+            
+            /* DISABLED FOR DEBUGGING
             try {
                 // Wait a moment to ensure connection is fully established
                 setTimeout(() => {
@@ -150,6 +155,7 @@ class PaymentChannelMonitor {
             } catch (error) {
                 console.error('Failed to setup welcome message:', error);
             }
+            */
         });
 
         console.log('WebSocket server initialized on path /ws/payment-monitor');
