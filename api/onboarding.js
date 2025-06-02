@@ -605,8 +605,8 @@ router.use(cors({
       
       // Ensure we have valid pricing values
       const hivePrice = pricing.hive_price_usd ? parseFloat(pricing.hive_price_usd) : 0.30;
-      const accountCreationCost = pricing.final_cost_usd ? parseFloat(pricing.final_cost_usd) : (0.90 * 1.5); // final_cost_usd is now the base account creation cost
       const baseCost = pricing.base_cost_usd ? parseFloat(pricing.base_cost_usd) : 0.90;
+      const accountCreationCost = pricing.final_cost_usd ? parseFloat(pricing.final_cost_usd) : (baseCost * 1.5); // Calculate from base cost if not stored
       
       // Ensure all crypto currencies have complete data
       Object.keys(CRYPTO_CONFIG).forEach(symbol => {
