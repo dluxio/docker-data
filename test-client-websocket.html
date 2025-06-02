@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DLUX WebSocket Client Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+        }
+        .success { background-color: #d4edda; color: #155724; }
+        .error { background-color: #f8d7da; color: #721c24; }
+        .info { background-color: #d1ecf1; color: #0c5460; }
+        .warning { background-color: #fff3cd; color: #856404; }
+        #log {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            padding: 15px;
+            height: 400px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin: 5px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #6c757d; cursor: not-allowed; }
+        input, select {
+            padding: 8px;
+            margin: 5px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+        }
+        .controls {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔌 DLUX WebSocket Client Test</h1>
+    <p>This page tests WebSocket connections to your DLUX API server to help debug connection issues.</p>
+
+    <div class="controls">
+        <h3>Connection Settings</h3>
+        <label>
+            Server URL:
+            <input type="text" id="serverUrl" value="wss://data.dlux.io/ws/payment-monitor" style="width: 300px;">
+        </label>
+        <br>
+        <label>
+            Test Channel ID:
+            <input type="text" id="channelId" value="CH_test123" placeholder="Enter channel ID to test">
+        </label>
+        <br>
+        <button onclick="connect()" id="connectBtn">Connect</button>
+        <button onclick="disconnect()" id="disconnectBtn" disabled>Disconnect</button>
+        <button onclick="sendPing()" id="pingBtn" disabled>Send Ping</button>
+        <button onclick="subscribe()" id="subscribeBtn" disabled>Subscribe to Channel</button>
+        <button onclick="clearLog()" id="clearBtn">Clear Log</button>
+    </div>
+
+    <div id="status" class="status info">Ready to connect</div>
+
+    <h3>WebSocket Log</h3>
+    <div id="log"></div>
+
+    <script>
+        let ws = null;
+        let connectionStartTime = null;
+
+        function log(message, type = 'info') {
+            const timestamp = new Date().toISOString();
+            const logDiv = document.getElementById('log');
+            const prefix = type === 'error' ? '❌' : type === 'success' ? '✅' : type === 'warning' ? '⚠️' : 'ℹ️';
+            logDiv.textContent += `[${timestamp}] ${prefix} ${message}\n`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        function updateStatus(message, type = 'info') {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type}`;
+        }
+
+        function updateButtons(connected) {
+            document.getElementById('connectBtn').disabled = connected;
+            document.getElementById('disconnectBtn').disabled = !connected;
+            document.getElementById('pingBtn').disabled = !connected;
+            document.getElementById('subscribeBtn').disabled = !connected;
+        }
+
+        function connect() {
+            const url = document.getElementById('serverUrl').value;
+            
+            log(`Attempting to connect to: ${url}`);
+            updateStatus('Connecting...', 'warning');
+            connectionStartTime = Date.now();
+
+            try {
+                ws = new WebSocket(url);
+
+                ws.onopen = function(event) {
+                    const connectionTime = Date.now() - connectionStartTime;
+                    log(`✅ WebSocket connected successfully in ${connectionTime}ms`, 'success');
+                    updateStatus('Connected', 'success');
+                    updateButtons(true);
+                };
+
+                ws.onmessage = function(event) {
+                    log(`📨 Message received: ${event.data}`);
+                    
+                    try {
+                        const data = JSON.parse(event.data);
+                        log(`📋 Parsed message: ${JSON.stringify(data, null, 2)}`);
+                        
+                        // Handle specific message types
+                        switch(data.type) {
+                            case 'connected':
+                                log('🎉 Server sent connection confirmation', 'success');
+                                break;
+                            case 'pong':
+                                log('🏓 Pong received from server', 'success');
+                                break;
+                            case 'error':
+                                log(`❌ Server error: ${data.message}`, 'error');
+                                break;
+                            case 'status_update':
+                                log(`📊 Status update for channel ${data.channelId}: ${data.status}`, 'info');
+                                break;
+                            default:
+                                log(`❓ Unknown message type: ${data.type}`, 'warning');
+                        }
+                    } catch (parseError) {
+                        log(`❌ Failed to parse message: ${parseError.message}`, 'error');
+                    }
+                };
+
+                ws.onclose = function(event) {
+                    const connectionTime = connectionStartTime ? Date.now() - connectionStartTime : 0;
+                    log(`🔌 WebSocket closed - Code: ${event.code}, Reason: "${event.reason}" (after ${connectionTime}ms)`, 'warning');
+                    
+                    if (event.code === 1000) {
+                        updateStatus('Disconnected normally', 'info');
+                    } else {
+                        updateStatus(`Connection closed with error (${event.code})`, 'error');
+                    }
+                    
+                    updateButtons(false);
+                    ws = null;
+                };
+
+                ws.onerror = function(event) {
+                    const connectionTime = connectionStartTime ? Date.now() - connectionStartTime : 0;
+                    log(`❌ WebSocket error occurred (after ${connectionTime}ms)`, 'error');
+                    log(`Error details: ${JSON.stringify(event)}`, 'error');
+                    updateStatus('Connection error', 'error');
+                };
+
+            } catch (error) {
+                log(`❌ Failed to create WebSocket: ${error.message}`, 'error');
+                updateStatus('Failed to connect', 'error');
+            }
+        }
+
+        function disconnect() {
+            if (ws) {
+                log('🔌 Manually disconnecting...');
+                ws.close(1000, 'Manual disconnect');
+            }
+        }
+
+        function sendPing() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                const message = { type: 'ping' };
+                log(`📤 Sending ping: ${JSON.stringify(message)}`);
+                ws.send(JSON.stringify(message));
+            } else {
+                log('❌ Cannot send ping - WebSocket not connected', 'error');
+            }
+        }
+
+        function subscribe() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                const channelId = document.getElementById('channelId').value;
+                if (!channelId) {
+                    log('❌ Please enter a channel ID', 'error');
+                    return;
+                }
+                
+                const message = { type: 'subscribe', channelId: channelId };
+                log(`📤 Subscribing to channel: ${JSON.stringify(message)}`);
+                ws.send(JSON.stringify(message));
+            } else {
+                log('❌ Cannot subscribe - WebSocket not connected', 'error');
+            }
+        }
+
+        function clearLog() {
+            document.getElementById('log').textContent = '';
+        }
+
+        // Log initial state
+        log('🚀 DLUX WebSocket Client Test initialized');
+        log('Ready to test WebSocket connections');
+        
+        // Add some helpful info
+        log('💡 Tips:');
+        log('  - Check browser dev tools for additional error details');
+        log('  - Try connecting to different server URLs');
+        log('  - Watch the server logs for connection attempts');
+        log('  - Test both ping and channel subscription features');
+    </script>
+</body>
+</html> 

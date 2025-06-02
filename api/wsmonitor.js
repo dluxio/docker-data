@@ -53,60 +53,108 @@ class PaymentChannelMonitor {
         });
 
         this.wss.on('connection', (ws, req) => {
-            console.log('WebSocket connection established');
+            const clientIP = req.socket.remoteAddress;
+            const userAgent = req.headers['user-agent'];
+            const origin = req.headers.origin;
+            
+            console.log(`WebSocket connection established from ${clientIP} (Origin: ${origin})`);
+            console.log(`User Agent: ${userAgent}`);
 
             ws.on('message', async (message) => {
                 try {
+                    console.log(`WebSocket message received: ${message}`);
                     const data = JSON.parse(message);
                     await this.handleMessage(ws, data);
                 } catch (error) {
                     console.error('WebSocket message error:', error);
-                    ws.send(JSON.stringify({
-                        type: 'error',
-                        message: 'Invalid message format'
-                    }));
+                    console.error('Raw message that caused error:', message);
+                    
+                    try {
+                        ws.send(JSON.stringify({
+                            type: 'error',
+                            message: 'Invalid message format',
+                            details: error.message
+                        }));
+                    } catch (sendError) {
+                        console.error('Failed to send error message:', sendError);
+                    }
                 }
             });
 
-            ws.on('close', () => {
+            ws.on('close', (code, reason) => {
+                console.log(`WebSocket connection closed - Code: ${code}, Reason: ${reason || 'No reason'}`);
+                console.log(`Client was: ${clientIP} (Origin: ${origin})`);
                 this.removeClient(ws);
-                console.log('WebSocket connection closed');
             });
 
             ws.on('error', (error) => {
-                console.error('WebSocket error:', error);
+                console.error(`WebSocket error from ${clientIP}:`, error);
                 this.removeClient(ws);
             });
 
-            // Send initial connection confirmation
-            ws.send(JSON.stringify({
-                type: 'connected',
-                message: 'WebSocket connection established'
-            }));
+            // Send initial connection confirmation with error handling
+            try {
+                const welcomeMessage = {
+                    type: 'connected',
+                    message: 'WebSocket connection established',
+                    timestamp: new Date().toISOString(),
+                    server: 'DLUX Payment Monitor'
+                };
+                
+                console.log('Sending welcome message:', JSON.stringify(welcomeMessage));
+                ws.send(JSON.stringify(welcomeMessage));
+            } catch (error) {
+                console.error('Failed to send welcome message:', error);
+                ws.close(1011, 'Server error during initialization');
+            }
         });
 
         console.log('WebSocket server initialized on path /ws/payment-monitor');
     }
 
     async handleMessage(ws, data) {
-        switch (data.type) {
-            case 'subscribe':
-                await this.subscribeToChannel(ws, data.channelId);
-                break;
-            case 'unsubscribe':
-                this.unsubscribeFromChannel(ws, data.channelId);
-                break;
-            case 'payment_sent':
-                await this.handlePaymentSent(data.channelId, data.txHash);
-                break;
-            case 'ping':
-                ws.send(JSON.stringify({ type: 'pong' }));
-                break;
-            default:
+        console.log(`Handling WebSocket message type: ${data.type}`, data);
+        
+        try {
+            switch (data.type) {
+                case 'subscribe':
+                    console.log(`Client subscribing to channel: ${data.channelId}`);
+                    await this.subscribeToChannel(ws, data.channelId);
+                    break;
+                case 'unsubscribe':
+                    console.log(`Client unsubscribing from channel: ${data.channelId}`);
+                    this.unsubscribeFromChannel(ws, data.channelId);
+                    break;
+                case 'payment_sent':
+                    console.log(`Payment sent notification for channel: ${data.channelId}, tx: ${data.txHash}`);
+                    await this.handlePaymentSent(data.channelId, data.txHash);
+                    break;
+                case 'ping':
+                    console.log('Ping received, sending pong');
+                    ws.send(JSON.stringify({ 
+                        type: 'pong',
+                        timestamp: new Date().toISOString()
+                    }));
+                    break;
+                default:
+                    console.log(`Unknown message type: ${data.type}`);
+                    ws.send(JSON.stringify({
+                        type: 'error',
+                        message: 'Unknown message type',
+                        receivedType: data.type
+                    }));
+            }
+        } catch (error) {
+            console.error('Error in handleMessage:', error);
+            try {
                 ws.send(JSON.stringify({
                     type: 'error',
-                    message: 'Unknown message type'
+                    message: 'Server error processing message',
+                    details: error.message
                 }));
+            } catch (sendError) {
+                console.error('Failed to send error response:', sendError);
+            }
         }
     }
 
@@ -165,26 +213,41 @@ class PaymentChannelMonitor {
     }
 
     async sendChannelStatus(channelId) {
+        console.log(`Sending channel status for: ${channelId}`);
+        
         try {
             const client = await pool.connect();
+            console.log('Database connection established for channel status');
+            
             try {
                 const result = await client.query(
                     'SELECT * FROM payment_channels WHERE channel_id = $1',
                     [channelId]
                 );
 
+                console.log(`Database query result: ${result.rows.length} rows found`);
+
                 if (result.rows.length === 0) {
+                    console.log(`Channel ${channelId} not found in database`);
                     this.broadcastToChannel(channelId, {
                         type: 'error',
-                        message: 'Payment channel not found'
+                        message: 'Payment channel not found',
+                        channelId: channelId
                     });
                     return;
                 }
 
                 const channel = result.rows[0];
+                console.log(`Found channel data for ${channelId}:`, {
+                    username: channel.username,
+                    status: channel.status,
+                    crypto_type: channel.crypto_type
+                });
+                
                 const status = this.determineDetailedStatus(channel);
+                console.log(`Determined status for ${channelId}:`, status);
 
-                this.broadcastToChannel(channelId, {
+                const statusMessage = {
                     type: 'status_update',
                     channelId,
                     status: status.code,
@@ -204,16 +267,29 @@ class PaymentChannelMonitor {
                         createdAt: channel.created_at,
                         isExpired: new Date() > new Date(channel.expires_at)
                     }
-                });
+                };
+
+                console.log(`Broadcasting status message for ${channelId}:`, JSON.stringify(statusMessage));
+                this.broadcastToChannel(channelId, statusMessage);
+                
             } finally {
                 client.release();
+                console.log('Database connection released');
             }
         } catch (error) {
-            console.error('Error sending channel status:', error);
-            this.broadcastToChannel(channelId, {
-                type: 'error',
-                message: 'Failed to get channel status'
-            });
+            console.error(`Error sending channel status for ${channelId}:`, error);
+            console.error('Error stack:', error.stack);
+            
+            try {
+                this.broadcastToChannel(channelId, {
+                    type: 'error',
+                    message: 'Failed to get channel status',
+                    details: error.message,
+                    channelId: channelId
+                });
+            } catch (broadcastError) {
+                console.error('Failed to broadcast error message:', broadcastError);
+            }
         }
     }
 
