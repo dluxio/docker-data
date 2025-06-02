@@ -7,7 +7,7 @@ const cors = require('cors');
 const router = express.Router();
 
 
-
+// CORS middleware for onboarding endpoints
 router.use(cors({
     origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : ['http://localhost:8080', 'https://dlux.io', 'https://vue.dlux.io', 'https://www.dlux.io'],
     credentials: true
@@ -267,19 +267,34 @@ router.use(cors({
           let avgFee = config.avg_transfer_fee; // Default estimate
           let congestion = 'normal';
           
-          // For ETH, try to get current gas prices
+          // For ETH, try to get current gas prices from free APIs
           if (symbol === 'ETH') {
             try {
-              const gasResponse = await fetch('https://api.etherscan.io/api?module=gastracker&action=gasoracle&apikey=YourApiKeyToken');
+              // Try gas station API first (no key required)
+              const gasResponse = await fetch('https://ethgasstation.info/json/ethgasAPI.json');
               if (gasResponse.ok) {
                 const gasData = await gasResponse.json();
-                if (gasData.status === '1') {
-                  const standardGwei = parseFloat(gasData.result.StandardGasPrice);
+                if (gasData.standard) {
+                  const standardGwei = gasData.standard / 10; // Gas station returns in deciseconds
                   avgFee = (21000 * standardGwei * 1e-9); // 21000 gas limit * price in ETH
                   
                   if (standardGwei > 100) congestion = 'high';
                   else if (standardGwei > 50) congestion = 'medium';
                   else congestion = 'low';
+                }
+              } else {
+                // Fallback to another gas API without key requirement
+                const blocknativeResponse = await fetch('https://api.blocknative.com/gasprices/blockprices');
+                if (blocknativeResponse.ok) {
+                  const blocknativeData = await blocknativeResponse.json();
+                  if (blocknativeData.blockPrices && blocknativeData.blockPrices[0]) {
+                    const standardGwei = blocknativeData.blockPrices[0].estimatedPrices[1].price;
+                    avgFee = (21000 * standardGwei * 1e-9);
+                    
+                    if (standardGwei > 100) congestion = 'high';
+                    else if (standardGwei > 50) congestion = 'medium';
+                    else congestion = 'low';
+                  }
                 }
               }
             } catch (gasError) {
@@ -312,8 +327,11 @@ router.use(cors({
       const basePrice = hivePrice * 3; // 3x HIVE price
       const withMarkup = basePrice * 1.5; // Add 50%
       
-      // Calculate average transfer cost across all supported cryptos
-      const avgTransferCostUsd = Object.values(transferCosts).reduce((sum, cost) => sum + cost.avg_fee_usd, 0) / Object.keys(transferCosts).length;
+      // Calculate average transfer cost across all supported cryptos (filter out null/invalid values)
+      const validTransferCosts = Object.values(transferCosts).filter(cost => cost && cost.avg_fee_usd != null && !isNaN(cost.avg_fee_usd));
+      const avgTransferCostUsd = validTransferCosts.length > 0 
+        ? validTransferCosts.reduce((sum, cost) => sum + cost.avg_fee_usd, 0) / validTransferCosts.length
+        : 0.005; // Default fallback value
       
       const finalPrice = withMarkup + (avgTransferCostUsd * 0.2); // Add 20% of avg transfer cost
       
@@ -536,11 +554,11 @@ router.use(cors({
         success: true,
         pricing: {
           timestamp: pricing.updated_at,
-          hive_price_usd: parseFloat(pricing.hive_price_usd),
-          account_creation_cost_usd: parseFloat(pricing.final_cost_usd),
-          base_cost_usd: parseFloat(pricing.base_cost_usd),
-          crypto_rates: pricing.crypto_rates,
-          transfer_costs: pricing.transfer_costs,
+          hive_price_usd: pricing.hive_price_usd ? parseFloat(pricing.hive_price_usd) : null,
+          account_creation_cost_usd: pricing.final_cost_usd ? parseFloat(pricing.final_cost_usd) : null,
+          base_cost_usd: pricing.base_cost_usd ? parseFloat(pricing.base_cost_usd) : null,
+          crypto_rates: pricing.crypto_rates || {},
+          transfer_costs: pricing.transfer_costs || {},
           supported_currencies: Object.keys(CRYPTO_CONFIG)
         }
       });
