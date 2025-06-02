@@ -3,7 +3,6 @@ const { Pool } = require("pg");
 const express = require("express");
 const cors = require("cors");
 const api = express();
-
 const pool = new Pool({
   connectionString: config.dbcs,
 });
@@ -13,7 +12,7 @@ exports.pool = pool;
 
 const API = require("./api/index");
 const { router: onboardingRouter, setupDatabase } = require('./api/onboarding');
-
+const wsMonitor = initializeWebSocketMonitor(api);
 async function initializeDatabase() {
   try {
     // Set up onboarding tables
@@ -51,4 +50,22 @@ api.get("/hc/tickers", API.tickers);
 http.listen(config.port, async function () {
   console.log(`DLUX DATA API listening on port ${config.port}`);
   await initializeDatabase();
+  // Graceful shutdown
+  process.on('SIGTERM', () => {
+    console.log('SIGTERM received, shutting down gracefully...');
+    wsMonitor.shutdown();
+    server.close(() => {
+      console.log('Server closed');
+      process.exit(0);
+    });
+  });
+  
+  process.on('SIGINT', () => {
+    console.log('SIGINT received, shutting down gracefully...');
+    wsMonitor.shutdown();
+    server.close(() => {
+      console.log('Server closed');
+      process.exit(0);
+    });
+  });
 });

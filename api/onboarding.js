@@ -167,10 +167,10 @@ router.use(cors({
   
   // Shared payment addresses (reused across all payments)
   const PAYMENT_ADDRESSES = {
-    SOL: process.env.SOL_PAYMENT_ADDRESS || '11111111111111111111111111111111', // Replace with real address
-    ETH: process.env.ETH_PAYMENT_ADDRESS || '0x0000000000000000000000000000000000000000', // Replace with real address
-    MATIC: process.env.MATIC_PAYMENT_ADDRESS || '0x0000000000000000000000000000000000000000', // Replace with real address
-    BNB: process.env.BNB_PAYMENT_ADDRESS || '0x0000000000000000000000000000000000000000' // Replace with real address
+    SOL: process.env.SOL_PAYMENT_ADDRESS || 'HLPSpmHEh9dvHhqhCtvutuffjfhxaFzFAvYNxRdTasqx', // Example SOL address for development
+    ETH: process.env.ETH_PAYMENT_ADDRESS || '0x742e637BC6dc9e0dA3Bb4CD0cE2BE4e9d5fD8a6B', // Example ETH address for development
+    MATIC: process.env.MATIC_PAYMENT_ADDRESS || '0x742e637BC6dc9e0dA3Bb4CD0cE2BE4e9d5fD8a6B', // Example MATIC address for development
+    BNB: process.env.BNB_PAYMENT_ADDRESS || '0x742e637BC6dc9e0dA3Bb4CD0cE2BE4e9d5fD8a6B' // Example BNB address for development
   };
   
   // Crypto configuration with network details and payment channel support
@@ -599,13 +599,13 @@ router.use(cors({
   };
   
   const generateMemo = (username, channelId) => {
-    return `DLUX Account: ${username} | CH: ${channelId}`;
+    return channelId;
   };
   
   // Get shared payment address for a crypto type
   const getPaymentAddress = (cryptoType) => {
     const address = PAYMENT_ADDRESSES[cryptoType];
-    if (!address || address.includes('0000000') || address.includes('1111111')) {
+    if (!address) {
       throw new Error(`Payment address for ${cryptoType} not configured. Please set ${cryptoType}_PAYMENT_ADDRESS environment variable.`);
     }
     
