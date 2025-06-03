@@ -2975,10 +2975,9 @@ router.post('/api/onboarding/request/validate', async (req, res) => {
 });
 
 // 5. Send friend account request
-router.post('/api/onboarding/request/send', authMiddleware, async (req, res) => {
+router.post('/api/onboarding/request/send', async (req, res) => {
     try {
-        const { requestedFrom, message, publicKeys } = req.body;
-        const requesterUsername = req.auth.account; // Use authenticated account
+        const { requesterUsername, requestedFrom, message, publicKeys } = req.body
 
         // Validate input
         if (!requestedFrom || !publicKeys) {
@@ -3030,7 +3029,7 @@ router.post('/api/onboarding/request/send', authMiddleware, async (req, res) => 
                 {
                     request_id: requestId,
                     requester_username: requesterUsername,
-                    message: message
+                    message: message || 'May I have an account?'
                 },
                 'normal',
                 7 * 24 // Expires in 7 days
