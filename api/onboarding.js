@@ -3488,7 +3488,7 @@ router.post('/api/onboarding/request/accept/:requestId', async (req, res) => {
                 error: 'Notification not found'
             });
         }
-
+        console.log(username)
         const client = await pool.connect();
         try {
             const result = await client.query(
