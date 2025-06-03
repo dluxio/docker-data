@@ -3286,7 +3286,7 @@ router.post('/api/onboarding/notifications/:notificationId/read', authMiddleware
     }
 });
 
-// 7. Dismiss notification
+// 7.1 PiggyBack on HIVE notifications to dismiss notifications
 router.post('/api/onboarding/notifications/:notificationId/dismiss', async (req, res) => {
     try {
         const { notificationId } = req.params;
@@ -3320,7 +3320,7 @@ router.post('/api/onboarding/notifications/:notificationId/dismiss', async (req,
             const result = await client.query(
                 `UPDATE user_notifications 
            SET status = 'dismissed', dismissed_at = CURRENT_TIMESTAMP
-           WHERE status != 'dismissed' AND username = $1
+           WHERE status != 'dismissed' AND username = $1 AND notification_type != 'account_request'
            RETURNING id, notification_type, data`,
                 [username]
             );
@@ -3373,16 +3373,96 @@ router.post('/api/onboarding/notifications/:notificationId/dismiss', async (req,
     }
 });
 
-// 8. Accept friend request (mark as completed)
-router.post('/api/onboarding/request/:requestId/accept', authMiddleware, async (req, res) => {
+// 7.2 Ignore Account Request
+router.post('/api/onboarding/notifications/:notificationId/ignore', authMiddleware, async (req, res) => {
     try {
-        const { requestId } = req.params;
-        const { txHash } = req.body;
+        const { notificationId } = req.params;
 
-        if (!txHash) {
-            return res.status(400).json({
+        
+        const username = req.headers['x-username']
+        
+
+        const client = await pool.connect();
+        try {
+            const result = await client.query(
+                `UPDATE user_notifications 
+           SET status = 'dismissed', dismissed_at = CURRENT_TIMESTAMP
+           WHERE id = $1 AND username = $2
+           RETURNING id, notification_type, data`,
+                [notificationId, username]
+            );
+
+            const notification = result.rows
+
+            if (notification.notification_type === 'account_request' && notification.data) {
+                try {
+                    const data = JSON.parse(notification.data);
+                    if (data.request_id) {
+                        await client.query(
+                            `UPDATE onboarding_requests 
+                SET status = 'ignored', updated_at = CURRENT_TIMESTAMP
+                WHERE request_id = $1`,
+                            [data.request_id]
+                        );
+
+                        // Notify the requester that their request was ignored
+                        await createNotification(
+                            data.requester_username,
+                            'request_status',
+                            'Account Request Update',
+                            `@${username} has declined your account creation request.`,
+                            { request_id: data.request_id, status: 'ignored' },
+                            'normal',
+                            24
+                        );
+                    }
+                } catch (parseError) {
+                    console.error('Error parsing notification data:', parseError);
+                }
+            }
+
+            res.json({
+                success: true,
+                message: 'Notifications dismissed'
+            });
+        } finally {
+            client.release();
+        }
+    } catch (error) {
+        console.error('Error dismissing notification:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to dismiss notification'
+        });
+    }
+});
+
+// 8. Accept friend request (mark as completed)
+router.post('/api/onboarding/request/:requestId/accept', async (req, res) => {
+    try {
+        const { notificationId } = req.params;
+
+        const transaction = await fetch(config.clientURL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                id: 1,
+                jsonrpc: '2.0',
+                method: 'condenser_api.get_transaction',
+                params: [notificationId]
+            })
+        });
+
+        const transactionResult = await transaction.json();
+        const tx = transactionResult.result;
+
+        let username
+        try {
+            username = tx.operations[0][1].new_account_name
+        } catch (error) {
+            return res.status(404).json({
                 success: false,
-                error: 'Transaction hash is required'
+                error: 'Notification not found'
             });
         }
 
@@ -3391,9 +3471,9 @@ router.post('/api/onboarding/request/:requestId/accept', authMiddleware, async (
             const result = await client.query(
                 `UPDATE onboarding_requests 
            SET status = $1, account_created_tx = $2, updated_at = CURRENT_TIMESTAMP
-           WHERE id = $3
+           WHERE requester_username = $3
            RETURNING requester_username`,
-                ['completed', txHash, requestId]
+                ['completed', notificationId, username]
             );
 
             if (result.rows.length === 0) {
@@ -3406,7 +3486,7 @@ router.post('/api/onboarding/request/:requestId/accept', authMiddleware, async (
             res.json({
                 success: true,
                 message: `Account creation completed for @${result.rows[0].requester_username}`,
-                txHash
+                txHash: notificationId
             });
         } finally {
             client.release();
