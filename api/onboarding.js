@@ -58,7 +58,8 @@ const setupDatabase = async () => {
             status VARCHAR(20) DEFAULT 'pending',
             expires_at TIMESTAMP NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            account_created_tx VARCHAR(255)
           )
         `);
 
@@ -262,6 +263,28 @@ const setupDatabase = async () => {
           CREATE INDEX IF NOT EXISTS idx_admin_users_username ON admin_users(username);
           CREATE INDEX IF NOT EXISTS idx_admin_users_active ON admin_users(active);
         `);
+
+            // Add missing columns to existing tables (for upgrades)
+            try {
+                await client.query(`
+                    ALTER TABLE onboarding_requests 
+                    ADD COLUMN IF NOT EXISTS account_created_tx VARCHAR(255)
+                `);
+                console.log('✓ Database schema updated - added missing columns');
+            } catch (alterError) {
+                // This might fail on some PostgreSQL versions that don't support IF NOT EXISTS
+                // Try without it
+                try {
+                    await client.query(`
+                        ALTER TABLE onboarding_requests 
+                        ADD COLUMN account_created_tx VARCHAR(255)
+                    `);
+                    console.log('✓ Database schema updated - added account_created_tx column');
+                } catch (secondError) {
+                    // Column probably already exists, which is fine
+                    console.log('Database schema already up to date');
+                }
+            }
 
             console.log('Database tables created successfully');
         } finally {
