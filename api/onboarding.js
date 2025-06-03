@@ -3477,40 +3477,85 @@ router.post('/api/onboarding/request/accept/:requestId', async (req, res) => {
         });
 
         const transactionResult = await transaction.json();
+        
+        if (!transactionResult.result) {
+            return res.status(404).json({
+                success: false,
+                error: 'Transaction not found'
+            });
+        }
+
         const tx = transactionResult.result;
 
-        let username
+        let username;
         try {
-            username = tx.operations[0][1].new_account_name
+            username = tx.operations[0][1].new_account_name;
         } catch (error) {
             return res.status(404).json({
                 success: false,
-                error: 'Notification not found'
+                error: 'Invalid transaction format - not an account creation transaction'
             });
         }
-        console.log(username)
+        
+        console.log('Extracted username:', username);
+
         const client = await pool.connect();
         try {
+            // First, find the request by username and verify it exists and is pending
+            const requestQuery = await client.query(
+                `SELECT request_id, username, status FROM onboarding_requests 
+                 WHERE username = $1 AND status = 'pending'
+                 ORDER BY created_at DESC LIMIT 1`,
+                [username]
+            );
+
+            if (requestQuery.rows.length === 0) {
+                return res.status(404).json({
+                    success: false,
+                    error: `No pending account request found for @${username}`
+                });
+            }
+
+            const request = requestQuery.rows[0];
+            console.log('Found request:', request.request_id);
+
+            // Now update the request
             const result = await client.query(
                 `UPDATE onboarding_requests 
-           SET status = $1, account_created_tx = $2, updated_at = CURRENT_TIMESTAMP
-           WHERE username = $3
-           RETURNING username`,
-                ['completed', requestId, username]
+                 SET status = $1, account_created_tx = $2, updated_at = CURRENT_TIMESTAMP
+                 WHERE request_id = $3
+                 RETURNING username, request_id`,
+                ['completed', requestId, request.request_id]
             );
 
             if (result.rows.length === 0) {
-                return res.status(404).json({
+                return res.status(500).json({
                     success: false,
-                    error: 'Request not found or already processed'
+                    error: 'Failed to update request'
                 });
             }
+
+            // Notify the requester that their account has been created
+            await createNotification(
+                username,
+                'account_created',
+                'HIVE Account Created!',
+                `Your HIVE account @${username} has been successfully created! Transaction: ${requestId}`,
+                {
+                    request_id: request.request_id,
+                    tx_id: requestId,
+                    username: username
+                },
+                'high',
+                168 // 7 days
+            );
 
             res.json({
                 success: true,
                 message: `Account creation completed for @${result.rows[0].username}`,
                 txHash: requestId,
-                id: result.rows[0].id
+                requestId: result.rows[0].request_id,
+                username: result.rows[0].username
             });
         } finally {
             client.release();
@@ -3519,7 +3564,8 @@ router.post('/api/onboarding/request/accept/:requestId', async (req, res) => {
         console.error('Error accepting request:', error);
         res.status(500).json({
             success: false,
-            error: 'Failed to accept request'
+            error: 'Failed to accept request',
+            details: error.message
         });
     }
 });
