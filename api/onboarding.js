@@ -4,6 +4,8 @@ const crypto = require('crypto');
 const axios = require('axios');
 const cors = require('cors');
 const { PaymentChannelMonitor } = require('./wsmonitor');
+const hiveTx = require('hive-tx');
+const config = require('../config');
 
 const router = express.Router();
 // CORS middleware for onboarding endpoints
@@ -59,6 +61,47 @@ router.use(cors({
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
           )
         `);
+
+        // User notifications system
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS user_notifications (
+            id SERIAL PRIMARY KEY,
+            username VARCHAR(50) NOT NULL,
+            notification_type VARCHAR(50) NOT NULL, -- 'account_request', 'payment_confirmed', 'account_created', etc.
+            title VARCHAR(255) NOT NULL,
+            message TEXT NOT NULL,
+            data JSONB, -- Additional data like request_id, channel_id, etc.
+            status VARCHAR(20) DEFAULT 'unread', -- 'unread', 'read', 'dismissed'
+            priority VARCHAR(10) DEFAULT 'normal', -- 'low', 'normal', 'high', 'urgent'
+            expires_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            read_at TIMESTAMP,
+            dismissed_at TIMESTAMP
+          )
+        `);
+
+        // Admin users management
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS admin_users (
+            id SERIAL PRIMARY KEY,
+            username VARCHAR(50) UNIQUE NOT NULL,
+            permissions JSONB DEFAULT '{"admin": true}', -- permissions object
+            added_by VARCHAR(50),
+            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_login TIMESTAMP,
+            active BOOLEAN DEFAULT true
+          )
+        `);
+
+        // Initialize default admin if none exist
+        const adminCheck = await client.query('SELECT COUNT(*) as count FROM admin_users WHERE active = true');
+        if (parseInt(adminCheck.rows[0].count) === 0) {
+          await client.query(`
+            INSERT INTO admin_users (username, permissions, added_by)
+            VALUES ($1, $2, 'system')
+          `, [config.username, JSON.stringify({ admin: true, super: true })]);
+          console.log(`✓ Default admin user created: @${config.username}`);
+        }
   
         // Payment addresses are now stored in environment/config
         // This allows shared addresses for cost optimization
@@ -137,6 +180,52 @@ router.use(cors({
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
           )
         `);
+
+        // Account Creation Token (ACT) management
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS act_balance (
+            id SERIAL PRIMARY KEY,
+            creator_account VARCHAR(50) NOT NULL,
+            act_balance INTEGER DEFAULT 0,
+            resource_credits BIGINT DEFAULT 0,
+            last_claim_time TIMESTAMP,
+            last_rc_check TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(creator_account)
+          )
+        `);
+
+        // Track HIVE account creation attempts and results  
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS hive_account_creations (
+            id SERIAL PRIMARY KEY,
+            channel_id VARCHAR(100) REFERENCES payment_channels(channel_id),
+            username VARCHAR(50) NOT NULL,
+            creation_method VARCHAR(20) NOT NULL, -- 'ACT' or 'DELEGATION'
+            act_used INTEGER DEFAULT 0,
+            hive_tx_id VARCHAR(255),
+            hive_block_num BIGINT,
+            creation_fee DECIMAL(20,8),
+            attempt_count INTEGER DEFAULT 1,
+            status VARCHAR(20) DEFAULT 'attempting', -- 'attempting', 'success', 'failed'
+            error_message TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            completed_at TIMESTAMP
+          )
+        `);
+
+        // RC costs tracking for real-time HIVE operation costs
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS rc_costs (
+            id SERIAL PRIMARY KEY,
+            operation_type VARCHAR(50) NOT NULL,
+            rc_needed BIGINT NOT NULL,
+            hp_needed DECIMAL(20,8) NOT NULL,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            api_timestamp TIMESTAMP NOT NULL,
+            UNIQUE(operation_type, api_timestamp)
+          )
+        `);
   
         // Indexes for performance
         await client.query(`
@@ -159,6 +248,19 @@ router.use(cors({
           CREATE INDEX IF NOT EXISTS idx_transfer_costs_crypto ON transfer_costs(crypto_type);
           CREATE INDEX IF NOT EXISTS idx_transfer_costs_updated ON transfer_costs(updated_at);
           CREATE INDEX IF NOT EXISTS idx_pricing_updated ON account_creation_pricing(updated_at);
+          CREATE INDEX IF NOT EXISTS idx_act_balance_creator ON act_balance(creator_account);
+          CREATE INDEX IF NOT EXISTS idx_hive_creations_channel ON hive_account_creations(channel_id);
+          CREATE INDEX IF NOT EXISTS idx_hive_creations_username ON hive_account_creations(username);
+          CREATE INDEX IF NOT EXISTS idx_hive_creations_status ON hive_account_creations(status);
+          CREATE INDEX IF NOT EXISTS idx_hive_creations_method ON hive_account_creations(creation_method);
+          CREATE INDEX IF NOT EXISTS idx_rc_costs_operation ON rc_costs(operation_type);
+          CREATE INDEX IF NOT EXISTS idx_rc_costs_timestamp ON rc_costs(api_timestamp);
+          CREATE INDEX IF NOT EXISTS idx_notifications_username ON user_notifications(username);
+          CREATE INDEX IF NOT EXISTS idx_notifications_status ON user_notifications(status);
+          CREATE INDEX IF NOT EXISTS idx_notifications_type ON user_notifications(notification_type);
+          CREATE INDEX IF NOT EXISTS idx_notifications_created ON user_notifications(created_at);
+          CREATE INDEX IF NOT EXISTS idx_admin_users_username ON admin_users(username);
+          CREATE INDEX IF NOT EXISTS idx_admin_users_active ON admin_users(active);
         `);
   
         console.log('Database tables created successfully');
@@ -594,6 +696,807 @@ router.use(cors({
   
   // Create pricing service instance
   const pricingService = new PricingService();
+
+  // HIVE Resource Credit Monitoring Service
+  class RCMonitoringService {
+    constructor() {
+      this.lastUpdate = null;
+      this.updateInterval = 3 * 60 * 60 * 1000; // 3 hours in milliseconds
+      this.isUpdating = false;
+      this.currentCosts = {};
+      this.rcApiUrl = 'https://beacon.peakd.com/api/rc/costs';
+    }
+
+    async fetchRCCosts() {
+      try {
+        console.log('Fetching latest RC costs from HIVE API...');
+        const response = await fetch(this.rcApiUrl);
+        
+        if (!response.ok) {
+          throw new Error(`RC API error: ${response.status} ${response.statusText}`);
+        }
+        
+        const data = await response.json();
+        
+        if (!data.timestamp || !data.costs || !Array.isArray(data.costs)) {
+          throw new Error('Invalid RC costs data format');
+        }
+
+        const apiTimestamp = new Date(data.timestamp);
+        const costs = {};
+        
+        // Parse the costs array into a more usable format
+        data.costs.forEach(cost => {
+          costs[cost.operation] = {
+            rc_needed: parseInt(cost.rc_needed),
+            hp_needed: parseFloat(cost.hp_needed)
+          };
+        });
+
+        console.log(`✓ Fetched RC costs for ${data.costs.length} operations (timestamp: ${apiTimestamp.toISOString()})`);
+        
+        return {
+          timestamp: apiTimestamp,
+          costs
+        };
+        
+      } catch (error) {
+        console.error('Error fetching RC costs:', error);
+        throw error;
+      }
+    }
+
+    async updateRCCosts() {
+      if (this.isUpdating) {
+        console.log('RC costs update already in progress, skipping...');
+        return;
+      }
+
+      this.isUpdating = true;
+      console.log('Starting RC costs update...');
+
+      try {
+        const rcData = await this.fetchRCCosts();
+        
+        const client = await pool.connect();
+        try {
+          // Store each operation's RC cost
+          for (const [operation, cost] of Object.entries(rcData.costs)) {
+            await client.query(`
+              INSERT INTO rc_costs (operation_type, rc_needed, hp_needed, api_timestamp)
+              VALUES ($1, $2, $3, $4)
+              ON CONFLICT (operation_type, api_timestamp) 
+              DO UPDATE SET 
+                rc_needed = EXCLUDED.rc_needed,
+                hp_needed = EXCLUDED.hp_needed,
+                timestamp = CURRENT_TIMESTAMP
+            `, [operation, cost.rc_needed, cost.hp_needed, rcData.timestamp]);
+          }
+
+          // Clean up old RC cost data (keep only last 30 days)
+          const cleanupDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+          const cleanupResult = await client.query(
+            'DELETE FROM rc_costs WHERE api_timestamp < $1', 
+            [cleanupDate]
+          );
+          
+          if (cleanupResult.rowCount > 0) {
+            console.log(`Cleaned up ${cleanupResult.rowCount} old RC cost records`);
+          }
+
+          // Update current costs cache
+          this.currentCosts = rcData.costs;
+          this.lastUpdate = new Date();
+
+          console.log(`✓ RC costs updated successfully at ${this.lastUpdate.toISOString()}`);
+          
+          // Log key operation costs
+          const keyOps = ['claim_account_operation', 'create_claimed_account_operation', 'account_create_operation'];
+          console.log('Key operation costs:');
+          keyOps.forEach(op => {
+            if (this.currentCosts[op]) {
+              const cost = this.currentCosts[op];
+              console.log(`  ${op}: ${(cost.rc_needed / 1e9).toFixed(2)}B RC (${cost.hp_needed.toFixed(2)} HP)`);
+            }
+          });
+
+        } finally {
+          client.release();
+        }
+      } catch (error) {
+        console.error('Error updating RC costs:', error);
+      } finally {
+        this.isUpdating = false;
+      }
+    }
+
+    async getLatestRCCosts() {
+      try {
+        const client = await pool.connect();
+        try {
+          // Get the most recent RC costs for all operations
+          const result = await client.query(`
+            SELECT DISTINCT ON (operation_type) 
+              operation_type, rc_needed, hp_needed, api_timestamp
+            FROM rc_costs 
+            ORDER BY operation_type, api_timestamp DESC
+          `);
+
+          const costs = {};
+          result.rows.forEach(row => {
+            costs[row.operation_type] = {
+              rc_needed: parseInt(row.rc_needed),
+              hp_needed: parseFloat(row.hp_needed),
+              timestamp: row.api_timestamp
+            };
+          });
+
+          // If no data in database, try to fetch fresh data
+          if (Object.keys(costs).length === 0) {
+            console.log('No RC costs in database, fetching fresh data...');
+            await this.updateRCCosts();
+            return this.currentCosts;
+          }
+
+          // Check if data is stale (older than 6 hours)
+          const latestTimestamp = Math.max(...result.rows.map(row => new Date(row.api_timestamp).getTime()));
+          const dataAge = Date.now() - latestTimestamp;
+          const maxAge = 6 * 60 * 60 * 1000; // 6 hours
+
+          if (dataAge > maxAge) {
+            console.log('RC costs data is stale, triggering background update...');
+            setImmediate(() => this.updateRCCosts());
+          }
+
+          return costs;
+        } finally {
+          client.release();
+        }
+      } catch (error) {
+        console.error('Error getting latest RC costs:', error);
+        return this.currentCosts; // Fallback to cached data
+      }
+    }
+
+    getRCCostForOperation(operation) {
+      return this.currentCosts[operation] || null;
+    }
+
+    startScheduledUpdates() {
+      // Initial update
+      this.updateRCCosts();
+      
+      // Schedule updates every 3 hours
+      setInterval(() => {
+        this.updateRCCosts();
+      }, this.updateInterval);
+      
+      console.log('✓ RC monitoring service started (updates every 3 hours)');
+    }
+  }
+
+  // Create RC monitoring service instance
+  const rcMonitoringService = new RCMonitoringService();
+
+  // HIVE Account Creation Service
+  class HiveAccountService {
+    constructor() {
+      this.creatorUsername = config.username;
+      this.creatorKey = config.key;
+      this.lastACTCheck = null;
+      this.lastRCCheck = null;
+      this.actBalance = 0;
+      this.resourceCredits = 0;
+      
+      if (!this.creatorKey) {
+        console.warn('⚠️  HIVE creator key not configured. Set KEY environment variable.');
+        console.warn('⚠️  Account creation will be disabled until key is provided.');
+      }
+    }
+
+    async getHiveAccount(username) {
+      try {
+        const response = await fetch(config.clientURL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'condenser_api.get_accounts',
+            params: [[username]],
+            id: 1
+          })
+        });
+
+        const result = await response.json();
+        if (result.result && result.result.length > 0) {
+          return result.result[0];
+        }
+        return null;
+      } catch (error) {
+        console.error(`Error checking HIVE account ${username}:`, error);
+        return null;
+      }
+    }
+
+    async checkResourceCredits() {
+      try {
+        const response = await fetch(config.clientURL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'rc_api.find_rc_accounts',
+            params: { accounts: [this.creatorUsername] },
+            id: 1
+          })
+        });
+
+        const result = await response.json();
+        if (result.result && result.result.rc_accounts && result.result.rc_accounts.length > 0) {
+          const rcAccount = result.result.rc_accounts[0];
+          this.resourceCredits = parseInt(rcAccount.rc_manabar.current_mana);
+          
+          // Update database
+          const client = await pool.connect();
+          try {
+            await client.query(`
+              INSERT INTO act_balance (creator_account, resource_credits, last_rc_check)
+              VALUES ($1, $2, CURRENT_TIMESTAMP)
+              ON CONFLICT (creator_account)
+              DO UPDATE SET 
+                resource_credits = EXCLUDED.resource_credits,
+                last_rc_check = EXCLUDED.last_rc_check,
+                updated_at = CURRENT_TIMESTAMP
+            `, [this.creatorUsername, this.resourceCredits]);
+          } finally {
+            client.release();
+          }
+          
+          return this.resourceCredits;
+        }
+      } catch (error) {
+        console.error('Error checking resource credits:', error);
+      }
+      return 0;
+    }
+
+    async claimAccountCreationTokens() {
+      try {
+        if (!this.creatorKey) {
+          console.log('No creator key available for claiming ACTs');
+          return false;
+        }
+
+        // Get real-time RC costs for claim_account operation
+        const rcCosts = await rcMonitoringService.getLatestRCCosts();
+        const claimAccountCost = rcCosts['claim_account_operation'];
+        
+        if (!claimAccountCost) {
+          console.log('RC cost data not available for claim_account_operation, using fallback');
+          // Fallback to a conservative estimate based on current data
+          const rcNeeded = 13686780357957; // From the API data
+          await this.checkResourceCredits();
+          
+          if (this.resourceCredits < rcNeeded) {
+            console.log(`Insufficient RCs for claiming ACT. Have: ${this.resourceCredits.toLocaleString()}, Need: ${rcNeeded.toLocaleString()}`);
+            return false;
+          }
+        } else {
+          const rcNeeded = claimAccountCost.rc_needed;
+          await this.checkResourceCredits();
+          
+          if (this.resourceCredits < rcNeeded) {
+            console.log(`Insufficient RCs for claiming ACT. Have: ${this.resourceCredits.toLocaleString()}, Need: ${rcNeeded.toLocaleString()} (${claimAccountCost.hp_needed.toFixed(2)} HP equivalent)`);
+            return false;
+          }
+          
+          console.log(`RC check passed. Using ${rcNeeded.toLocaleString()} RC (${claimAccountCost.hp_needed.toFixed(2)} HP equivalent) to claim ACT`);
+        }
+
+        console.log('Attempting to claim Account Creation Token...');
+
+        // Create claim_account operation
+        const claimAccountOp = [
+          'claim_account', 
+          {
+            creator: this.creatorUsername,
+            fee: '0.000 HIVE', // Free with RCs
+            extensions: []
+          }
+        ];
+
+        // Get dynamic global properties for transaction
+        const dgpResponse = await fetch(config.clientURL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'condenser_api.get_dynamic_global_properties',
+            params: [],
+            id: 1
+          })
+        });
+
+        const dgpResult = await dgpResponse.json();
+        const dgp = dgpResult.result;
+
+        // Build transaction
+        const tx = {
+          ref_block_num: dgp.head_block_number & 0xffff,
+          ref_block_prefix: Buffer.from(dgp.head_block_id, 'hex').readUInt32LE(4),
+          expiration: new Date(Date.now() + 60000).toISOString().slice(0, -5),
+          operations: [claimAccountOp],
+          extensions: []
+        };
+
+        // Sign and broadcast transaction
+        const signedTx = hiveTx.sign(tx, this.creatorKey);
+        
+        const broadcastResponse = await fetch(config.clientURL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'condenser_api.broadcast_transaction',
+            params: [signedTx],
+            id: 1
+          })
+        });
+
+        const broadcastResult = await broadcastResponse.json();
+        
+        if (broadcastResult.error) {
+          throw new Error(`Broadcast error: ${broadcastResult.error.message}`);
+        }
+
+        console.log('✓ Account Creation Token claimed successfully');
+        
+        // Update ACT balance in database
+        this.actBalance += 1;
+        const client = await pool.connect();
+        try {
+          await client.query(`
+            INSERT INTO act_balance (creator_account, act_balance, last_claim_time)
+            VALUES ($1, $2, CURRENT_TIMESTAMP)
+            ON CONFLICT (creator_account)
+            DO UPDATE SET 
+              act_balance = EXCLUDED.act_balance,
+              last_claim_time = EXCLUDED.last_claim_time,
+              updated_at = CURRENT_TIMESTAMP
+          `, [this.creatorUsername, this.actBalance]);
+        } finally {
+          client.release();
+        }
+
+        return true;
+        
+      } catch (error) {
+        console.error('Error claiming Account Creation Token:', error);
+        return false;
+      }
+    }
+
+    async createHiveAccount(username, publicKeys, channelId) {
+      try {
+        if (!this.creatorKey) {
+          throw new Error('Creator key not configured');
+        }
+
+        console.log(`Creating HIVE account: @${username}`);
+
+        // Check if account already exists
+        const existingAccount = await this.getHiveAccount(username);
+        if (existingAccount) {
+          throw new Error(`Account @${username} already exists on HIVE blockchain`);
+        }
+
+        // Check ACT balance and try to claim if needed
+        await this.updateACTBalance();
+        
+        let useACT = this.actBalance > 0;
+        let actUsed = 0;
+        let creationMethod = 'DELEGATION';
+        let creationFee = 3.0; // 3 HIVE delegation
+
+        if (useACT) {
+          creationMethod = 'ACT';
+          actUsed = 1;
+          creationFee = 0;
+        } else {
+          // Try to claim an ACT if we have enough RCs
+          const claimed = await this.claimAccountCreationTokens();
+          if (claimed) {
+            useACT = true;
+            creationMethod = 'ACT';
+            actUsed = 1;
+            creationFee = 0;
+          }
+        }
+
+        // Record the attempt in database
+        let creationAttemptId;
+        const client = await pool.connect();
+        try {
+          const result = await client.query(`
+            INSERT INTO hive_account_creations 
+            (channel_id, username, creation_method, act_used, creation_fee, status)
+            VALUES ($1, $2, $3, $4, $5, 'attempting')
+            RETURNING id
+          `, [channelId, username, creationMethod, actUsed, creationFee]);
+          
+          creationAttemptId = result.rows[0].id;
+        } finally {
+          client.release();
+        }
+
+        // Build account creation operation
+        let createAccountOp;
+        
+        if (useACT) {
+          // Use Account Creation Token
+          createAccountOp = [
+            'create_claimed_account',
+            {
+              creator: this.creatorUsername,
+              new_account_name: username,
+              owner: {
+                weight_threshold: 1,
+                account_auths: [],
+                key_auths: [[publicKeys.owner, 1]]
+              },
+              active: {
+                weight_threshold: 1,
+                account_auths: [],
+                key_auths: [[publicKeys.active, 1]]
+              },
+              posting: {
+                weight_threshold: 1,
+                account_auths: [],
+                key_auths: [[publicKeys.posting, 1]]
+              },
+              memo_key: publicKeys.memo,
+              json_metadata: JSON.stringify({
+                created_by: 'dlux.io',
+                creation_method: 'crypto_payment'
+              }),
+              extensions: []
+            }
+          ];
+        } else {
+          // Use HIVE delegation (fallback)
+          createAccountOp = [
+            'create_account',
+            {
+              fee: '3.000 HIVE',
+              creator: this.creatorUsername,
+              new_account_name: username,
+              owner: {
+                weight_threshold: 1,
+                account_auths: [],
+                key_auths: [[publicKeys.owner, 1]]
+              },
+              active: {
+                weight_threshold: 1,
+                account_auths: [],
+                key_auths: [[publicKeys.active, 1]]
+              },
+              posting: {
+                weight_threshold: 1,
+                account_auths: [],
+                key_auths: [[publicKeys.posting, 1]]
+              },
+              memo_key: publicKeys.memo,
+              json_metadata: JSON.stringify({
+                created_by: 'dlux.io',
+                creation_method: 'crypto_payment'
+              })
+            }
+          ];
+        }
+
+        // Get dynamic global properties for transaction
+        const dgpResponse = await fetch(config.clientURL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'condenser_api.get_dynamic_global_properties',
+            params: [],
+            id: 1
+          })
+        });
+
+        const dgpResult = await dgpResponse.json();
+        const dgp = dgpResult.result;
+
+        // Build transaction
+        const tx = {
+          ref_block_num: dgp.head_block_number & 0xffff,
+          ref_block_prefix: Buffer.from(dgp.head_block_id, 'hex').readUInt32LE(4),
+          expiration: new Date(Date.now() + 60000).toISOString().slice(0, -5),
+          operations: [createAccountOp],
+          extensions: []
+        };
+
+        // Sign and broadcast transaction
+        const signedTx = hiveTx.sign(tx, this.creatorKey);
+        
+        const broadcastResponse = await fetch(config.clientURL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'condenser_api.broadcast_transaction',
+            params: [signedTx],
+            id: 1
+          })
+        });
+
+        const broadcastResult = await broadcastResponse.json();
+        
+        if (broadcastResult.error) {
+          throw new Error(`Broadcast error: ${broadcastResult.error.message}`);
+        }
+
+        const txId = broadcastResult.result.id;
+        const blockNum = broadcastResult.result.block_num;
+
+        console.log(`✓ HIVE account @${username} created successfully! TX: ${txId}`);
+
+        // Update ACT balance if we used one
+        if (useACT) {
+          this.actBalance -= 1;
+          const updateClient = await pool.connect();
+          try {
+            await updateClient.query(`
+              UPDATE act_balance 
+              SET act_balance = $1, updated_at = CURRENT_TIMESTAMP
+              WHERE creator_account = $2
+            `, [this.actBalance, this.creatorUsername]);
+          } finally {
+            updateClient.release();
+          }
+        }
+
+        // Update creation record
+        const finalClient = await pool.connect();
+        try {
+          await finalClient.query(`
+            UPDATE hive_account_creations 
+            SET status = 'success', hive_tx_id = $1, hive_block_num = $2, completed_at = CURRENT_TIMESTAMP
+            WHERE id = $3
+          `, [txId, blockNum, creationAttemptId]);
+        } finally {
+          finalClient.release();
+        }
+
+        return {
+          success: true,
+          username,
+          txId,
+          blockNum,
+          creationMethod,
+          actUsed: actUsed > 0
+        };
+
+      } catch (error) {
+        console.error(`Error creating HIVE account @${username}:`, error);
+        
+        // Update creation record with error
+        if (creationAttemptId) {
+          const errorClient = await pool.connect();
+          try {
+            await errorClient.query(`
+              UPDATE hive_account_creations 
+              SET status = 'failed', error_message = $1, completed_at = CURRENT_TIMESTAMP
+              WHERE id = $2
+            `, [error.message, creationAttemptId]);
+          } finally {
+            errorClient.release();
+          }
+        }
+
+        throw error;
+      }
+    }
+
+    async updateACTBalance() {
+      try {
+        // Get current ACT balance from HIVE blockchain
+        const response = await fetch(config.clientURL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'condenser_api.get_accounts',
+            params: [[this.creatorUsername]],
+            id: 1
+          })
+        });
+
+        const result = await response.json();
+        if (result.result && result.result.length > 0) {
+          const account = result.result[0];
+          this.actBalance = account.pending_claimed_accounts || 0;
+          
+          // Update database
+          const client = await pool.connect();
+          try {
+            await client.query(`
+              INSERT INTO act_balance (creator_account, act_balance)
+              VALUES ($1, $2)
+              ON CONFLICT (creator_account)
+              DO UPDATE SET 
+                act_balance = EXCLUDED.act_balance,
+                updated_at = CURRENT_TIMESTAMP
+            `, [this.creatorUsername, this.actBalance]);
+          } finally {
+            client.release();
+          }
+          
+          console.log(`Current ACT balance: ${this.actBalance}`);
+          return this.actBalance;
+        }
+      } catch (error) {
+        console.error('Error updating ACT balance:', error);
+      }
+      return 0;
+    }
+
+    async monitorPendingCreations() {
+      try {
+        const client = await pool.connect();
+        try {
+          // Check for channels that are confirmed but not yet completed
+          const result = await client.query(`
+            SELECT pc.channel_id, pc.username, pc.public_keys, pc.status
+            FROM payment_channels pc
+            LEFT JOIN hive_account_creations hac ON pc.channel_id = hac.channel_id
+            WHERE pc.status = 'confirmed' 
+            AND hac.id IS NULL
+            ORDER BY pc.confirmed_at ASC
+            LIMIT 10
+          `);
+
+          for (const channel of result.rows) {
+            try {
+              console.log(`Processing confirmed payment for @${channel.username}...`);
+              
+              const publicKeys = typeof channel.public_keys === 'string' 
+                ? JSON.parse(channel.public_keys) 
+                : channel.public_keys;
+
+              // Create the HIVE account
+              const creationResult = await this.createHiveAccount(
+                channel.username, 
+                publicKeys, 
+                channel.channel_id
+              );
+
+              if (creationResult.success) {
+                // Update channel status to completed
+                await client.query(`
+                  UPDATE payment_channels 
+                  SET status = 'completed', account_created_at = CURRENT_TIMESTAMP
+                  WHERE channel_id = $1
+                `, [channel.channel_id]);
+
+                console.log(`✓ Account @${channel.username} created and channel marked as completed`);
+              }
+
+            } catch (error) {
+              console.error(`Failed to create account for @${channel.username}:`, error);
+              
+              // Mark channel as failed
+              await client.query(`
+                UPDATE payment_channels 
+                SET status = 'failed'
+                WHERE channel_id = $1
+              `, [channel.channel_id]);
+            }
+          }
+
+          // Also check for accounts that might have been created externally
+          await this.checkExternallyCreatedAccounts();
+
+        } finally {
+          client.release();
+        }
+      } catch (error) {
+        console.error('Error monitoring pending creations:', error);
+      }
+    }
+
+    async checkExternallyCreatedAccounts() {
+      try {
+        const client = await pool.connect();
+        try {
+          // Check pending channels to see if accounts already exist
+          const result = await client.query(`
+            SELECT channel_id, username
+            FROM payment_channels
+            WHERE status IN ('confirmed', 'pending')
+            AND username IS NOT NULL
+            ORDER BY created_at DESC
+            LIMIT 50
+          `);
+
+          for (const channel of result.rows) {
+            const account = await this.getHiveAccount(channel.username);
+            if (account) {
+              console.log(`Account @${channel.username} found on blockchain - updating status`);
+              
+              await client.query(`
+                UPDATE payment_channels 
+                SET status = 'completed', account_created_at = CURRENT_TIMESTAMP
+                WHERE channel_id = $1
+              `, [channel.channel_id]);
+            }
+          }
+        } finally {
+          client.release();
+        }
+      } catch (error) {
+        console.error('Error checking externally created accounts:', error);
+      }
+    }
+
+    startMonitoring() {
+      // Check ACT balance every 10 minutes
+      setInterval(() => {
+        this.updateACTBalance();
+        this.checkResourceCredits();
+      }, 10 * 60 * 1000);
+
+      // Process pending account creations every 30 seconds
+      setInterval(() => {
+        this.monitorPendingCreations();
+      }, 30 * 1000);
+
+      // Try to claim ACTs every hour if we have sufficient RCs and low ACT balance
+      setInterval(async () => {
+        if (this.actBalance < 3) { // Keep a minimum of 3 ACTs
+          // Check if we have enough RCs based on real-time costs
+          const rcCosts = await rcMonitoringService.getLatestRCCosts();
+          const claimCost = rcCosts['claim_account_operation'];
+          
+          if (claimCost && this.resourceCredits >= claimCost.rc_needed) {
+            console.log(`Auto-claiming ACT: Balance low (${this.actBalance}), sufficient RCs (${(this.resourceCredits / 1e9).toFixed(1)}B available, ${(claimCost.rc_needed / 1e9).toFixed(1)}B needed)`);
+            await this.claimAccountCreationTokens();
+          } else if (claimCost) {
+            console.log(`Cannot auto-claim ACT: Insufficient RCs. Have ${(this.resourceCredits / 1e9).toFixed(1)}B, need ${(claimCost.rc_needed / 1e9).toFixed(1)}B`);
+          }
+        }
+      }, 60 * 60 * 1000);
+
+      console.log('✓ HIVE Account Service monitoring started');
+    }
+  }
+
+  // Create HIVE account service instance
+  const hiveAccountService = new HiveAccountService();
+
+  // Notification helper functions
+  const createNotification = async (username, type, title, message, data = null, priority = 'normal', expiresInHours = null) => {
+    try {
+      const client = await pool.connect();
+      try {
+        const expiresAt = expiresInHours ? new Date(Date.now() + expiresInHours * 60 * 60 * 1000) : null;
+        
+        await client.query(`
+          INSERT INTO user_notifications 
+          (username, notification_type, title, message, data, priority, expires_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `, [username, type, title, message, data ? JSON.stringify(data) : null, priority, expiresAt]);
+        
+        console.log(`✓ Notification created for @${username}: ${title}`);
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      console.error('Error creating notification:', error);
+    }
+  };
   
   // Utility functions
   const generatePaymentId = () => {
@@ -708,23 +1611,417 @@ router.use(cors({
     }
   };
   
-  // Simple authentication middleware (replace with proper auth in production)
-  const authMiddleware = (req, res, next) => {
-    const authHeader = req.headers.authorization;
-    const validToken = process.env.ADMIN_TOKEN || 'admin123'; // Set in production!
-    
-    if (!authHeader || authHeader !== `Bearer ${validToken}`) {
-      return res.status(401).json({
-        success: false,
-        error: 'Unauthorized - valid Bearer token required'
-      });
+  // HIVE-based authentication middleware
+  class HiveAuth {
+    static async verifySignature(challenge, signature, publicKey) {
+      try {
+        // Use hive-tx to verify the signature
+        const isValid = hiveTx.verify(challenge, signature, publicKey);
+        return isValid;
+      } catch (error) {
+        console.error('Signature verification error:', error);
+        return false;
+      }
     }
-    
-    next();
+
+    static async getAccountKeys(username) {
+      try {
+        const response = await fetch(config.clientURL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'condenser_api.get_accounts',
+            params: [[username]],
+            id: 1
+          })
+        });
+
+        const result = await response.json();
+        if (result.result && result.result.length > 0) {
+          const account = result.result[0];
+          return {
+            owner: account.owner.key_auths.map(auth => auth[0]),
+            active: account.active.key_auths.map(auth => auth[0]),
+            posting: account.posting.key_auths.map(auth => auth[0]),
+            memo: account.memo_key
+          };
+        }
+        return null;
+      } catch (error) {
+        console.error(`Error fetching keys for @${username}:`, error);
+        return null;
+      }
+    }
+
+    static async isAdmin(username) {
+      try {
+        const client = await pool.connect();
+        try {
+          const result = await client.query(
+            'SELECT permissions FROM admin_users WHERE username = $1 AND active = true',
+            [username]
+          );
+          
+          if (result.rows.length > 0) {
+            const permissions = result.rows[0].permissions;
+            return permissions && (permissions.admin === true || permissions.super === true);
+          }
+          return false;
+        } finally {
+          client.release();
+        }
+      } catch (error) {
+        console.error('Error checking admin status:', error);
+        return false;
+      }
+    }
+
+    static async updateLastLogin(username) {
+      try {
+        const client = await pool.connect();
+        try {
+          await client.query(
+            'UPDATE admin_users SET last_login = CURRENT_TIMESTAMP WHERE username = $1',
+            [username]
+          );
+        } finally {
+          client.release();
+        }
+      } catch (error) {
+        console.error('Error updating last login:', error);
+      }
+    }
+  }
+
+  // Authentication middleware factory
+  const createAuthMiddleware = (requireAdmin = false, requireActiveKey = false) => {
+    return async (req, res, next) => {
+      try {
+        const account = req.headers['x-account'];
+        const challenge = req.headers['x-challenge'];
+        const pubKey = req.headers['x-pubkey'];
+        const signature = req.headers['x-signature'];
+
+        // Check required headers
+        if (!account || !challenge || !pubKey || !signature) {
+          return res.status(401).json({
+            success: false,
+            error: 'Missing authentication headers. Required: x-account, x-challenge, x-pubkey, x-signature',
+            headers: {
+              'x-account': 'HIVE username',
+              'x-challenge': 'Timestamp (Unix seconds)',
+              'x-pubkey': 'Public key used for signing', 
+              'x-signature': 'Signature of the challenge'
+            }
+          });
+        }
+
+        // Validate challenge timestamp (must be within 24 hours)
+        const challengeTime = parseInt(challenge);
+        const now = Math.floor(Date.now() / 1000);
+        const maxAge = 24 * 60 * 60; // 24 hours in seconds
+
+        if (isNaN(challengeTime) || (now - challengeTime) > maxAge || challengeTime > (now + 300)) {
+          return res.status(401).json({
+            success: false,
+            error: 'Invalid challenge timestamp. Must be within 24 hours and not from future.',
+            currentTime: now,
+            challengeTime: challengeTime,
+            ageSeconds: now - challengeTime
+          });
+        }
+
+        // Get account keys from HIVE blockchain
+        const accountKeys = await HiveAuth.getAccountKeys(account);
+        if (!accountKeys) {
+          return res.status(401).json({
+            success: false,
+            error: `Account @${account} not found on HIVE blockchain`
+          });
+        }
+
+        // Check if the provided public key belongs to the account
+        const allKeys = [
+          ...accountKeys.owner,
+          ...accountKeys.active, 
+          ...accountKeys.posting,
+          accountKeys.memo
+        ].filter(Boolean);
+
+        if (!allKeys.includes(pubKey)) {
+          return res.status(401).json({
+            success: false,
+            error: 'Public key does not belong to the specified account'
+          });
+        }
+
+        // For admin endpoints, check if user is admin
+        if (requireAdmin) {
+          const isAdmin = await HiveAuth.isAdmin(account);
+          if (!isAdmin) {
+            return res.status(403).json({
+              success: false,
+              error: 'Admin privileges required'
+            });
+          }
+        }
+
+        // For admin endpoints, require active key
+        if (requireActiveKey) {
+          if (!accountKeys.active.includes(pubKey)) {
+            return res.status(403).json({
+              success: false,
+              error: 'Active key required for this operation'
+            });
+          }
+        }
+
+        // Verify the signature
+        const challengeString = challenge.toString();
+        const isValidSignature = await HiveAuth.verifySignature(challengeString, signature, pubKey);
+
+        if (!isValidSignature) {
+          return res.status(401).json({
+            success: false,
+            error: 'Invalid signature'
+          });
+        }
+
+        // If admin, update last login
+        if (requireAdmin) {
+          await HiveAuth.updateLastLogin(account);
+        }
+
+        // Add authentication info to request
+        req.auth = {
+          account,
+          pubKey,
+          isAdmin: requireAdmin,
+          keyType: accountKeys.owner.includes(pubKey) ? 'owner' :
+                   accountKeys.active.includes(pubKey) ? 'active' :
+                   accountKeys.posting.includes(pubKey) ? 'posting' : 'memo'
+        };
+
+        next();
+      } catch (error) {
+        console.error('Authentication error:', error);
+        res.status(500).json({
+          success: false,
+          error: 'Authentication service error'
+        });
+      }
+    };
   };
+
+  // Specific middleware instances
+  const authMiddleware = createAuthMiddleware(false, false); // Any valid HIVE user
+  const adminAuthMiddleware = createAuthMiddleware(true, false); // Admin with any key
+  const adminActiveKeyMiddleware = createAuthMiddleware(true, true); // Admin with active key
   
   // API Routes
-  
+
+  // Auth utility endpoints
+  router.get('/api/onboarding/auth/challenge', (req, res) => {
+    const timestamp = Math.floor(Date.now() / 1000);
+    res.json({
+      success: true,
+      challenge: timestamp,
+      expires: timestamp + (24 * 60 * 60),
+      message: 'Sign this timestamp with your HIVE key',
+      instructions: 'Use this timestamp as the challenge in your authentication headers'
+    });
+  });
+
+  router.get('/api/onboarding/auth/whoami', authMiddleware, (req, res) => {
+    res.json({
+      success: true,
+      account: req.auth.account,
+      keyType: req.auth.keyType,
+      isAdmin: req.auth.isAdmin
+    });
+  });
+
+  router.get('/api/onboarding/auth/help', (req, res) => {
+    res.json({
+      success: true,
+      authentication: {
+        description: 'HIVE blockchain-based authentication using digital signatures',
+        required_headers: {
+          'x-account': 'Your HIVE username',
+          'x-challenge': 'Unix timestamp (get from /auth/challenge)',
+          'x-pubkey': 'Public key used for signing',
+          'x-signature': 'Signature of the challenge timestamp'
+        },
+        steps: [
+          '1. GET /api/onboarding/auth/challenge to get a timestamp',
+          '2. Sign the timestamp with your HIVE private key',
+          '3. Include all headers in your request',
+          '4. Admin operations require active key, others can use any key'
+        ],
+        example_js: `
+// Get challenge
+const challengeResponse = await fetch('/api/onboarding/auth/challenge');
+const { challenge } = await challengeResponse.json();
+
+// Sign with hive-tx library (client-side)
+const signature = hiveTx.sign(challenge.toString(), privateKey);
+const publicKey = hiveTx.PrivateKey.fromString(privateKey).createPublic().toString();
+
+// Make authenticated request
+const response = await fetch('/api/onboarding/notifications/123/read', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'x-account': 'your-username',
+    'x-challenge': challenge.toString(),
+    'x-pubkey': publicKey,
+    'x-signature': signature
+  }
+});`,
+        admin_requirements: {
+          view_operations: 'Admin status + any key',
+          write_operations: 'Admin status + active key',
+          user_management: 'Admin status + active key'
+        }
+      }
+    });
+  });
+
+  // Admin management endpoints
+  router.get('/api/onboarding/admin/users', adminAuthMiddleware, async (req, res) => {
+    try {
+      const client = await pool.connect();
+      try {
+        const result = await client.query(`
+          SELECT 
+            username,
+            permissions,
+            added_by,
+            added_at,
+            last_login,
+            active
+          FROM admin_users 
+          ORDER BY added_at DESC
+        `);
+
+        res.json({
+          success: true,
+          admins: result.rows,
+          requestedBy: req.auth.account
+        });
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      console.error('Error fetching admin users:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to fetch admin users'
+      });
+    }
+  });
+
+  router.post('/api/onboarding/admin/users/add', adminActiveKeyMiddleware, async (req, res) => {
+    try {
+      const { username, permissions = { admin: true } } = req.body;
+      
+      if (!username || !/^[a-z0-9\-\.]{3,16}$/.test(username)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Valid HIVE username required'
+        });
+      }
+
+      // Check if user exists on HIVE
+      const accountExists = await hiveAccountService.getHiveAccount(username);
+      if (!accountExists) {
+        return res.status(400).json({
+          success: false,
+          error: `Account @${username} does not exist on HIVE blockchain`
+        });
+      }
+
+      const client = await pool.connect();
+      try {
+        // Check if already admin
+        const existingResult = await client.query(
+          'SELECT username FROM admin_users WHERE username = $1',
+          [username]
+        );
+
+        if (existingResult.rows.length > 0) {
+          return res.status(409).json({
+            success: false,
+            error: `@${username} is already an admin`
+          });
+        }
+
+        // Add new admin
+        await client.query(`
+          INSERT INTO admin_users (username, permissions, added_by)
+          VALUES ($1, $2, $3)
+        `, [username, JSON.stringify(permissions), req.auth.account]);
+
+        res.json({
+          success: true,
+          message: `@${username} added as admin`,
+          addedBy: req.auth.account
+        });
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      console.error('Error adding admin:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to add admin'
+      });
+    }
+  });
+
+  router.post('/api/onboarding/admin/users/:username/remove', adminActiveKeyMiddleware, async (req, res) => {
+    try {
+      const { username } = req.params;
+      
+      if (username === req.auth.account) {
+        return res.status(400).json({
+          success: false,
+          error: 'Cannot remove yourself as admin'
+        });
+      }
+
+      const client = await pool.connect();
+      try {
+        const result = await client.query(
+          'UPDATE admin_users SET active = false WHERE username = $1 AND active = true RETURNING username',
+          [username]
+        );
+
+        if (result.rows.length === 0) {
+          return res.status(404).json({
+            success: false,
+            error: `@${username} is not an active admin`
+          });
+        }
+
+        res.json({
+          success: true,
+          message: `@${username} removed from admin list`,
+          removedBy: req.auth.account
+        });
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      console.error('Error removing admin:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to remove admin'
+      });
+    }
+  });
+
   // 1. Get real-time crypto pricing (updated endpoint)
   router.get('/api/onboarding/pricing', async (req, res) => {
     try {
@@ -1029,8 +2326,218 @@ router.use(cors({
     }
   });
   
-  // 3. Admin endpoint - Get payment channels (last 7 days)
-  router.get('/api/onboarding/admin/channels', authMiddleware, async (req, res) => {
+  // 3. Admin endpoint - ACT status and management
+  router.get('/api/onboarding/admin/act-status', adminAuthMiddleware, async (req, res) => {
+    try {
+      // Update current status
+      await hiveAccountService.updateACTBalance();
+      await hiveAccountService.checkResourceCredits();
+
+      const client = await pool.connect();
+      try {
+        // Get ACT balance history
+        const actResult = await client.query(`
+          SELECT * FROM act_balance 
+          WHERE creator_account = $1
+          ORDER BY updated_at DESC
+          LIMIT 1
+        `, [config.username]);
+
+        // Get recent account creations
+        const creationsResult = await client.query(`
+          SELECT * FROM hive_account_creations
+          ORDER BY created_at DESC
+          LIMIT 20
+        `);
+
+        // Get creation stats
+        const statsResult = await client.query(`
+          SELECT 
+            creation_method,
+            status,
+            COUNT(*) as count,
+            SUM(act_used) as total_acts_used,
+            AVG(creation_fee) as avg_fee
+          FROM hive_account_creations
+          WHERE created_at >= CURRENT_TIMESTAMP - INTERVAL '7 days'
+          GROUP BY creation_method, status
+          ORDER BY creation_method, status
+        `);
+
+        const actData = actResult.rows[0] || {
+          creator_account: config.username,
+          act_balance: hiveAccountService.actBalance,
+          resource_credits: hiveAccountService.resourceCredits
+        };
+
+        res.json({
+          success: true,
+          actStatus: {
+            creatorAccount: config.username,
+            currentACTBalance: hiveAccountService.actBalance,
+            currentResourceCredits: hiveAccountService.resourceCredits,
+            lastACTCheck: actData.updated_at,
+            lastRCCheck: actData.last_rc_check,
+            lastClaimTime: actData.last_claim_time,
+            canClaimACT: hiveAccountService.resourceCredits >= 20000000,
+            recommendClaimACT: hiveAccountService.actBalance < 3 && hiveAccountService.resourceCredits >= 20000000
+          },
+          recentCreations: creationsResult.rows,
+          creationStats: statsResult.rows.reduce((acc, row) => {
+            const key = `${row.creation_method}_${row.status}`;
+            acc[key] = {
+              method: row.creation_method,
+              status: row.status,
+              count: parseInt(row.count),
+              totalACTsUsed: parseInt(row.total_acts_used || 0),
+              averageFee: parseFloat(row.avg_fee || 0)
+            };
+            return acc;
+          }, {})
+        });
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      console.error('Error fetching ACT status:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to fetch ACT status'
+      });
+    }
+  });
+
+  // 3b. Admin endpoint - Manually claim ACT
+  router.post('/api/onboarding/admin/claim-act', adminActiveKeyMiddleware, async (req, res) => {
+    try {
+      const result = await hiveAccountService.claimAccountCreationTokens();
+      
+      if (result) {
+        res.json({
+          success: true,
+          message: 'Account Creation Token claimed successfully',
+          newBalance: hiveAccountService.actBalance
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: 'Failed to claim ACT - check RC balance and configuration'
+        });
+      }
+    } catch (error) {
+      console.error('Error manually claiming ACT:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to claim Account Creation Token',
+        details: error.message
+      });
+    }
+  });
+
+  // 3c. Admin endpoint - Manually trigger account creation processing
+  router.post('/api/onboarding/admin/process-pending', adminAuthMiddleware, async (req, res) => {
+    try {
+      await hiveAccountService.monitorPendingCreations();
+      
+      res.json({
+        success: true,
+        message: 'Pending account creation processing triggered'
+      });
+    } catch (error) {
+      console.error('Error processing pending creations:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to process pending creations',
+        details: error.message
+      });
+    }
+  });
+
+  // 3d. Admin endpoint - View current RC costs
+  router.get('/api/onboarding/admin/rc-costs', adminAuthMiddleware, async (req, res) => {
+    try {
+      const costs = await rcMonitoringService.getLatestRCCosts();
+      
+      // Get historical data for trending
+      const client = await pool.connect();
+      try {
+        const historicalResult = await client.query(`
+          SELECT 
+            operation_type,
+            rc_needed,
+            hp_needed,
+            api_timestamp
+          FROM rc_costs 
+          WHERE operation_type IN ('claim_account_operation', 'create_claimed_account_operation', 'account_create_operation')
+          AND api_timestamp >= CURRENT_TIMESTAMP - INTERVAL '7 days'
+          ORDER BY operation_type, api_timestamp DESC
+        `);
+
+        // Group by operation for trending analysis
+        const historical = {};
+        historicalResult.rows.forEach(row => {
+          if (!historical[row.operation_type]) {
+            historical[row.operation_type] = [];
+          }
+          historical[row.operation_type].push({
+            rc_needed: parseInt(row.rc_needed),
+            hp_needed: parseFloat(row.hp_needed),
+            timestamp: row.api_timestamp
+          });
+        });
+
+        // Calculate trends
+        const trends = {};
+        Object.keys(historical).forEach(op => {
+          const data = historical[op];
+          if (data.length >= 2) {
+            const current = data[0];
+            const previous = data[data.length - 1];
+            const change = ((current.rc_needed - previous.rc_needed) / previous.rc_needed) * 100;
+            trends[op] = {
+              change_percent: change,
+              change_direction: change > 0 ? 'up' : change < 0 ? 'down' : 'stable'
+            };
+          }
+        });
+
+        res.json({
+          success: true,
+          rcCosts: {
+            lastUpdate: rcMonitoringService.lastUpdate,
+            currentCosts: costs,
+            keyOperations: {
+              claim_account: costs['claim_account_operation'],
+              create_claimed_account: costs['create_claimed_account_operation'],
+              create_account: costs['account_create_operation']
+            },
+            historical,
+            trends,
+            summary: {
+              totalOperations: Object.keys(costs).length,
+              claimAccountCostInBillionRC: costs['claim_account_operation'] ? 
+                (costs['claim_account_operation'].rc_needed / 1e9).toFixed(2) : 'N/A',
+              createAccountCostInMillionRC: costs['create_claimed_account_operation'] ? 
+                (costs['create_claimed_account_operation'].rc_needed / 1e6).toFixed(2) : 'N/A',
+              efficiencyRatio: costs['claim_account_operation'] && costs['create_claimed_account_operation'] ?
+                (costs['claim_account_operation'].rc_needed / costs['create_claimed_account_operation'].rc_needed).toFixed(1) : 'N/A'
+            }
+          }
+        });
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      console.error('Error fetching RC costs:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to fetch RC costs'
+      });
+    }
+  });
+
+  // 4. Admin endpoint - Get payment channels (last 7 days)
+  router.get('/api/onboarding/admin/channels', adminAuthMiddleware, async (req, res) => {
     try {
       const { 
         limit = 50, 
@@ -1365,16 +2872,126 @@ router.use(cors({
     }
   });
   
-  // 4. Send friend account request
-  router.post('/api/onboarding/request/send', async (req, res) => {
+  // 4. Validate account request before sending (pre-flight check)
+  router.post('/api/onboarding/request/validate', async (req, res) => {
     try {
-      const { requesterUsername, requestedFrom, message, publicKeys } = req.body;
+      const { requesterUsername, requestedFrom, publicKeys } = req.body;
+      
+      const errors = [];
+      const warnings = [];
+
+      // Validate required fields
+      if (!requesterUsername) errors.push('Requester username is required');
+      if (!requestedFrom) errors.push('Target username is required');
+      if (!publicKeys) errors.push('Public keys are required');
+
+      // Validate username formats
+      if (requesterUsername && !/^[a-z0-9\-\.]{3,16}$/.test(requesterUsername)) {
+        errors.push('Requester username must be 3-16 characters, lowercase letters, numbers, hyphens, and dots only');
+      }
+
+      if (requestedFrom && !/^[a-z0-9\-\.]{3,16}$/.test(requestedFrom)) {
+        errors.push('Target username must be 3-16 characters, lowercase letters, numbers, hyphens, and dots only');
+      }
+
+      // Validate public keys if provided
+      if (publicKeys) {
+        const requiredKeys = ['owner', 'active', 'posting', 'memo'];
+        const missingKeys = requiredKeys.filter(key => !publicKeys[key] || !publicKeys[key].trim());
+        
+        if (missingKeys.length > 0) {
+          errors.push(`Missing public keys: ${missingKeys.join(', ')}`);
+        }
+
+        // Basic key format validation
+        requiredKeys.forEach(keyType => {
+          if (publicKeys[keyType]) {
+            const key = publicKeys[keyType].trim();
+            if (!key.startsWith('STM') && !key.startsWith('TST')) {
+              errors.push(`${keyType} key must start with STM or TST`);
+            }
+            if (key.length < 50 || key.length > 60) {
+              errors.push(`${keyType} key has invalid length (should be 50-60 characters)`);
+            }
+          }
+        });
+      }
+
+      // Check for existing requests if no critical errors
+      if (errors.length === 0 && requesterUsername) {
+        const client = await pool.connect();
+        try {
+          // Check if account already exists on HIVE
+          const existingAccount = await hiveAccountService.getHiveAccount(requesterUsername);
+          if (existingAccount) {
+            errors.push(`Account @${requesterUsername} already exists on HIVE blockchain`);
+          }
+
+          // Check for pending requests
+          const existingResult = await client.query(
+            'SELECT request_id, status FROM onboarding_requests WHERE username = $1 AND status = $2',
+            [requesterUsername, 'pending']
+          );
+          
+          if (existingResult.rows.length > 0) {
+            errors.push('You already have a pending account creation request');
+          }
+
+          // Check if target user exists (this is just a warning)
+          if (requestedFrom) {
+            const targetAccount = await hiveAccountService.getHiveAccount(requestedFrom);
+            if (!targetAccount) {
+              warnings.push(`Target user @${requestedFrom} not found on HIVE blockchain. They may not be able to create accounts.`);
+            }
+          }
+
+        } finally {
+          client.release();
+        }
+      }
+
+      res.json({
+        success: errors.length === 0,
+        valid: errors.length === 0,
+        errors,
+        warnings,
+        suggestions: errors.length > 0 ? [
+          'Make sure all usernames are valid HIVE format (3-16 chars, lowercase only)',
+          'Ensure all 4 public keys are provided and in correct format',
+          'Check that the username is not already taken on HIVE'
+        ] : []
+      });
+
+    } catch (error) {
+      console.error('Error validating account request:', error);
+      res.status(500).json({
+        success: false,
+        valid: false,
+        errors: ['Validation service temporarily unavailable'],
+        warnings: [],
+        suggestions: ['Please try again in a moment']
+      });
+    }
+  });
+
+  // 5. Send friend account request
+  router.post('/api/onboarding/request/send', authMiddleware, async (req, res) => {
+    try {
+      const { requestedFrom, message, publicKeys } = req.body;
+      const requesterUsername = req.auth.account; // Use authenticated account
       
       // Validate input
-      if (!requesterUsername || !requestedFrom || !publicKeys) {
+      if (!requestedFrom || !publicKeys) {
         return res.status(400).json({
           success: false,
-          error: 'Missing required fields: requesterUsername, requestedFrom, publicKeys'
+          error: 'Missing required fields: requestedFrom, publicKeys'
+        });
+      }
+
+      if (!/^[a-z0-9\-\.]{3,16}$/.test(requestedFrom)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid target username format.'
         });
       }
       
@@ -1382,7 +2999,7 @@ router.use(cors({
       const client = await pool.connect();
       try {
         const existingResult = await client.query(
-          'SELECT id FROM onboarding_requests WHERE requester_username = $1 AND status = $2',
+          'SELECT id FROM onboarding_requests WHERE username = $1 AND status = $2',
           [requesterUsername, 'pending']
         );
         
@@ -1394,16 +3011,30 @@ router.use(cors({
         }
         
         // Create new request
+        const requestId = 'req_' + crypto.randomBytes(16).toString('hex');
         const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
         
         const result = await client.query(
           `INSERT INTO onboarding_requests 
-           (requester_username, requested_from, message, public_keys, expires_at)
-           VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-          [requesterUsername, requestedFrom, message || '', JSON.stringify(publicKeys), expiresAt]
+           (request_id, username, requested_by, message, public_keys, expires_at)
+           VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+          [requestId, requesterUsername, requestedFrom, message || '', JSON.stringify(publicKeys), expiresAt]
         );
         
-        const requestId = result.rows[0].id;
+        // Create notification for the person being asked to create the account
+        await createNotification(
+          requestedFrom,
+          'account_request',
+          'New Account Creation Request',
+          `@${requesterUsername} has asked you to help create their HIVE account.${message ? ` Message: "${message}"` : ''}`,
+          {
+            request_id: requestId,
+            requester_username: requesterUsername,
+            message: message
+          },
+          'normal',
+          7 * 24 // Expires in 7 days
+        );
         
         res.json({
           success: true,
@@ -1423,7 +3054,159 @@ router.use(cors({
     }
   });
   
-  // 5. Get pending requests for a user
+  // 5. Get user notifications and pending items
+  router.get('/api/onboarding/notifications/:username', async (req, res) => {
+    try {
+      const { username } = req.params;
+      const { status = 'all', limit = 50, offset = 0 } = req.query;
+
+      if (!/^[a-z0-9\-\.]{3,16}$/.test(username)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid username format'
+        });
+      }
+      
+      const client = await pool.connect();
+      try {
+        // Build status filter
+        let statusFilter = '';
+        let statusParam = [];
+        if (status !== 'all') {
+          statusFilter = 'AND status = ANY($2)';
+          statusParam = [status.split(',')];
+        }
+
+        // Get notifications
+        const notificationQuery = `
+          SELECT 
+            id,
+            notification_type,
+            title,
+            message,
+            data,
+            status,
+            priority,
+            created_at,
+            read_at,
+            dismissed_at,
+            expires_at
+          FROM user_notifications 
+          WHERE username = $1 
+            AND (expires_at IS NULL OR expires_at > NOW())
+            ${statusFilter}
+          ORDER BY 
+            CASE priority 
+              WHEN 'urgent' THEN 1 
+              WHEN 'high' THEN 2 
+              WHEN 'normal' THEN 3 
+              WHEN 'low' THEN 4 
+            END,
+            created_at DESC
+          LIMIT $${statusParam.length + 2} OFFSET $${statusParam.length + 3}
+        `;
+
+        const notificationParams = [username, ...statusParam, parseInt(limit), parseInt(offset)];
+        const notificationResult = await client.query(notificationQuery, notificationParams);
+
+        // Get pending account requests (both sent by user and sent to user)
+        const requestsQuery = `
+          SELECT 
+            request_id,
+            username as requester_username,
+            requested_by,
+            message,
+            status,
+            created_at,
+            expires_at,
+            CASE 
+              WHEN requested_by = $1 THEN 'received'
+              WHEN username = $1 THEN 'sent'
+            END as direction
+          FROM onboarding_requests 
+          WHERE (requested_by = $1 OR username = $1)
+            AND status = 'pending' 
+            AND expires_at > NOW()
+          ORDER BY created_at DESC
+        `;
+
+        const requestsResult = await client.query(requestsQuery, [username]);
+
+        // Get payment channels for this user
+        const paymentsQuery = `
+          SELECT 
+            channel_id,
+            username,
+            crypto_type,
+            amount_crypto,
+            amount_usd,
+            status,
+            created_at,
+            confirmed_at,
+            account_created_at,
+            expires_at
+          FROM payment_channels
+          WHERE username = $1
+            AND status IN ('pending', 'confirmed', 'completed')
+          ORDER BY created_at DESC
+          LIMIT 10
+        `;
+
+        const paymentsResult = await client.query(paymentsQuery, [username]);
+
+        // Count unread notifications
+        const unreadCountResult = await client.query(
+          `SELECT COUNT(*) as count FROM user_notifications 
+           WHERE username = $1 AND status = 'unread' 
+           AND (expires_at IS NULL OR expires_at > NOW())`,
+          [username]
+        );
+
+        const notifications = notificationResult.rows.map(row => ({
+          id: row.id,
+          type: row.notification_type,
+          title: row.title,
+          message: row.message,
+          data: row.data ? JSON.parse(row.data) : null,
+          status: row.status,
+          priority: row.priority,
+          createdAt: row.created_at,
+          readAt: row.read_at,
+          dismissedAt: row.dismissed_at,
+          expiresAt: row.expires_at
+        }));
+
+        res.json({
+          success: true,
+          username,
+          summary: {
+            unreadNotifications: parseInt(unreadCountResult.rows[0].count),
+            pendingAccountRequests: requestsResult.rows.filter(r => r.direction === 'received').length,
+            sentAccountRequests: requestsResult.rows.filter(r => r.direction === 'sent').length,
+            activePayments: paymentsResult.rows.filter(p => p.status !== 'completed').length
+          },
+          notifications,
+          accountRequests: requestsResult.rows,
+          payments: paymentsResult.rows,
+          pagination: {
+            limit: parseInt(limit),
+            offset: parseInt(offset),
+            hasMore: notificationResult.rows.length === parseInt(limit)
+          }
+        });
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      console.error('Error fetching notifications:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to fetch notifications'
+      });
+    }
+  });
+
+  // 6. Get pending requests for a user (legacy endpoint)
   router.get('/api/onboarding/requests/:username', async (req, res) => {
     try {
       const { username } = req.params;
@@ -1465,8 +3248,116 @@ router.use(cors({
     }
   });
   
-  // 6. Accept friend request (mark as completed)
-  router.post('/api/onboarding/request/:requestId/accept', async (req, res) => {
+  // 6. Mark notification as read
+  router.post('/api/onboarding/notifications/:notificationId/read', authMiddleware, async (req, res) => {
+    try {
+      const { notificationId } = req.params;
+      const username = req.auth.account; // Use authenticated account
+
+      const client = await pool.connect();
+      try {
+        const result = await client.query(
+          `UPDATE user_notifications 
+           SET status = 'read', read_at = CURRENT_TIMESTAMP
+           WHERE id = $1 AND username = $2 AND status = 'unread'
+           RETURNING id`,
+          [notificationId, username]
+        );
+
+        if (result.rows.length === 0) {
+          return res.status(404).json({
+            success: false,
+            error: 'Notification not found or already read'
+          });
+        }
+
+        res.json({
+          success: true,
+          message: 'Notification marked as read'
+        });
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      console.error('Error marking notification as read:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to mark notification as read'
+      });
+    }
+  });
+
+  // 7. Dismiss notification
+  router.post('/api/onboarding/notifications/:notificationId/dismiss', authMiddleware, async (req, res) => {
+    try {
+      const { notificationId } = req.params;
+      const username = req.auth.account; // Use authenticated account
+
+      const client = await pool.connect();
+      try {
+        const result = await client.query(
+          `UPDATE user_notifications 
+           SET status = 'dismissed', dismissed_at = CURRENT_TIMESTAMP
+           WHERE id = $1 AND username = $2
+           RETURNING id, notification_type, data`,
+          [notificationId, username]
+        );
+
+        if (result.rows.length === 0) {
+          return res.status(404).json({
+            success: false,
+            error: 'Notification not found'
+          });
+        }
+
+        const notification = result.rows[0];
+
+        // If this was an account request notification, mark the request as ignored
+        if (notification.notification_type === 'account_request' && notification.data) {
+          try {
+            const data = JSON.parse(notification.data);
+            if (data.request_id) {
+              await client.query(
+                `UPDATE onboarding_requests 
+                 SET status = 'ignored', updated_at = CURRENT_TIMESTAMP
+                 WHERE request_id = $1`,
+                [data.request_id]
+              );
+
+              // Notify the requester that their request was ignored
+              await createNotification(
+                data.requester_username,
+                'request_status',
+                'Account Request Update',
+                `@${username} has declined your account creation request.`,
+                { request_id: data.request_id, status: 'ignored' },
+                'normal',
+                24
+              );
+            }
+          } catch (parseError) {
+            console.error('Error parsing notification data:', parseError);
+          }
+        }
+
+        res.json({
+          success: true,
+          message: 'Notification dismissed'
+        });
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      console.error('Error dismissing notification:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to dismiss notification'
+      });
+    }
+  });
+
+  // 8. Accept friend request (mark as completed)
+  router.post('/api/onboarding/request/:requestId/accept', authMiddleware, async (req, res) => {
     try {
       const { requestId } = req.params;
       const { txHash } = req.body;
@@ -1516,33 +3407,98 @@ router.use(cors({
   router.post('/api/onboarding/webhook/payment', async (req, res) => {
     try {
       // This endpoint would be called by payment processors like Coinbase Commerce
-      const { paymentId, txHash, status, amount } = req.body;
+      const { paymentId, txHash, status, amount, channelId } = req.body;
       
       // Verify webhook signature here in production
       
       const client = await pool.connect();
       try {
         if (status === 'confirmed' || status === 'completed') {
-          // Update payment status
-          const result = await client.query(
-            `UPDATE onboarding_payments 
-             SET status = $1, tx_hash = $2, updated_at = CURRENT_TIMESTAMP
-             WHERE payment_id = $3 AND status = $4
-             RETURNING username, public_keys`,
-            ['completed', txHash, paymentId, 'pending']
-          );
           
-          if (result.rows.length > 0) {
-            const payment = result.rows[0];
+          // First try to update payment_channels (new system)
+          if (channelId) {
+            const channelResult = await client.query(
+              `UPDATE payment_channels 
+               SET status = 'confirmed', tx_hash = $1, confirmed_at = CURRENT_TIMESTAMP
+               WHERE channel_id = $2 AND status = 'pending'
+               RETURNING username, public_keys, channel_id`,
+              [txHash, channelId]
+            );
             
-            // Here you would integrate with HIVE account creation
-            // For now, we'll just log it
-            console.log(`Payment confirmed for ${payment.username}, creating HIVE account...`);
+            if (channelResult.rows.length > 0) {
+              const channel = channelResult.rows[0];
+              console.log(`Payment confirmed for channel ${channelId}, @${channel.username}`);
+              
+              // The monitorPendingCreations() will pick this up automatically
+              // But we can also try to process it immediately
+              try {
+                if (hiveAccountService && channel.public_keys) {
+                  const publicKeys = typeof channel.public_keys === 'string' 
+                    ? JSON.parse(channel.public_keys) 
+                    : channel.public_keys;
+                  
+                  // Trigger account creation in background
+                  setImmediate(async () => {
+                    try {
+                      await hiveAccountService.createHiveAccount(
+                        channel.username, 
+                        publicKeys, 
+                        channel.channel_id
+                      );
+                      
+                      // Update channel to completed
+                      const updateClient = await pool.connect();
+                      try {
+                        await updateClient.query(`
+                          UPDATE payment_channels 
+                          SET status = 'completed', account_created_at = CURRENT_TIMESTAMP
+                          WHERE channel_id = $1
+                        `, [channel.channel_id]);
+                      } finally {
+                        updateClient.release();
+                      }
+                      
+                      console.log(`✓ Account @${channel.username} created via webhook`);
+                    } catch (error) {
+                      console.error(`Failed to create account for @${channel.username} via webhook:`, error);
+                      
+                      // Mark as failed
+                      const errorClient = await pool.connect();
+                      try {
+                        await errorClient.query(`
+                          UPDATE payment_channels 
+                          SET status = 'failed'
+                          WHERE channel_id = $1
+                        `, [channel.channel_id]);
+                      } finally {
+                        errorClient.release();
+                      }
+                    }
+                  });
+                }
+              } catch (bgError) {
+                console.error('Error triggering background account creation:', bgError);
+              }
+            }
+          }
+          
+          // Also handle legacy payment system
+          if (paymentId) {
+            const legacyResult = await client.query(
+              `UPDATE onboarding_payments 
+               SET status = $1, tx_hash = $2, updated_at = CURRENT_TIMESTAMP
+               WHERE payment_id = $3 AND status = $4
+               RETURNING username, public_keys`,
+              ['completed', txHash, paymentId, 'pending']
+            );
             
-            // TODO: Implement HIVE account creation logic
-            // - Use the stored public_keys
-            // - Call HIVE account creation API
-            // - Handle any errors
+            if (legacyResult.rows.length > 0) {
+              const payment = legacyResult.rows[0];
+              console.log(`Legacy payment confirmed for ${payment.username}`);
+              
+              // Handle legacy payment creation if needed
+              // This would require adapting the old system to the new account creation logic
+            }
           }
         }
         
@@ -1612,8 +3568,21 @@ router.use(cors({
       pricingService.startScheduledUpdates();
       console.log('✓ Pricing service started with hourly updates');
       
+      // Start RC monitoring service
+      rcMonitoringService.startScheduledUpdates();
+      console.log('✓ RC monitoring service started with 3-hour updates');
+      
+      // Initialize and start HIVE account service
+      await hiveAccountService.updateACTBalance();
+      await hiveAccountService.checkResourceCredits();
+      hiveAccountService.startMonitoring();
+      console.log('✓ HIVE Account Service initialized and monitoring started');
+      
       console.log('DLUX Onboarding Service initialized successfully!');
       console.log(`Supported cryptocurrencies: ${Object.keys(CRYPTO_CONFIG).join(', ')}`);
+      console.log(`HIVE creator account: @${config.username}`);
+      console.log(`Current ACT balance: ${hiveAccountService.actBalance}`);
+      console.log(`Current RC balance: ${hiveAccountService.resourceCredits.toLocaleString()}`);
       
     } catch (error) {
       console.error('Failed to initialize Onboarding Service:', error);
@@ -1631,13 +3600,146 @@ router.use(cors({
     return global.paymentMonitor;
   };
   
+  // 9. Check if HIVE account exists (public endpoint)
+  router.get('/api/onboarding/check-account/:username', async (req, res) => {
+    try {
+      const { username } = req.params;
+      
+      if (!username || !/^[a-z0-9\-\.]{3,16}$/.test(username)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid username format'
+        });
+      }
+
+      const account = await hiveAccountService.getHiveAccount(username);
+      
+      res.json({
+        success: true,
+        username,
+        exists: !!account,
+        account: account ? {
+          name: account.name,
+          created: account.created,
+          reputation: account.reputation,
+          post_count: account.post_count
+        } : null
+      });
+    } catch (error) {
+      console.error('Error checking HIVE account:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to check HIVE account'
+      });
+    }
+  });
+
+  // 10. Mirror RC costs API (exact format from beacon.peakd.com)
+  router.get('/api/rc/costs', async (req, res) => {
+    try {
+      // Get fresh data from the beacon API
+      const response = await fetch('https://beacon.peakd.com/api/rc/costs');
+      
+      if (!response.ok) {
+        throw new Error(`Beacon API error: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      
+      // Return the exact same format
+      res.json(data);
+    } catch (error) {
+      console.error('Error mirroring RC costs:', error);
+      
+      // Fallback to our stored data if beacon API is down
+      try {
+        const costs = await rcMonitoringService.getLatestRCCosts();
+        const costsArray = Object.entries(costs).map(([operation, cost]) => ({
+          operation,
+          rc_needed: cost.rc_needed.toString(),
+          hp_needed: cost.hp_needed
+        }));
+        
+        res.json({
+          timestamp: new Date().toISOString(),
+          costs: costsArray
+        });
+      } catch (fallbackError) {
+        res.status(500).json({
+          error: 'RC costs service unavailable'
+        });
+      }
+    }
+  });
+
+  // 11. Public endpoint - View current RC costs (for transparency)
+  router.get('/api/onboarding/rc-costs', async (req, res) => {
+    try {
+      const costs = await rcMonitoringService.getLatestRCCosts();
+      
+      // Only return key operations for public API
+      const keyOperations = {
+        claim_account_operation: costs['claim_account_operation'],
+        create_claimed_account_operation: costs['create_claimed_account_operation'],
+        account_create_operation: costs['account_create_operation'],
+        transfer_operation: costs['transfer_operation'],
+        custom_json_operation: costs['custom_json_operation'],
+        vote_operation: costs['vote_operation'],
+        comment_operation: costs['comment_operation']
+      };
+
+      res.json({
+        success: true,
+        timestamp: rcMonitoringService.lastUpdate,
+        source: 'https://beacon.peakd.com/api/rc/costs',
+        updateInterval: '3 hours',
+        keyOperations,
+        accountCreationCosts: {
+          claimACT: {
+            operation: 'claim_account_operation',
+            rc_cost: keyOperations.claim_account_operation?.rc_needed || 'N/A',
+            hp_equivalent: keyOperations.claim_account_operation?.hp_needed || 'N/A',
+            description: 'Cost to claim a free Account Creation Token using RCs'
+          },
+          useACT: {
+            operation: 'create_claimed_account_operation', 
+            rc_cost: keyOperations.create_claimed_account_operation?.rc_needed || 'N/A',
+            hp_equivalent: keyOperations.create_claimed_account_operation?.hp_needed || 'N/A',
+            description: 'Cost to create an account using a claimed ACT'
+          },
+          delegation: {
+            operation: 'account_create_operation',
+            rc_cost: keyOperations.account_create_operation?.rc_needed || 'N/A', 
+            hp_equivalent: keyOperations.account_create_operation?.hp_needed || 'N/A',
+            hive_fee: '3.000 HIVE',
+            description: 'Cost to create an account with HIVE delegation'
+          }
+        },
+        efficiency: {
+          claimVsUse: keyOperations.claim_account_operation && keyOperations.create_claimed_account_operation ?
+            `Claiming 1 ACT costs ${(keyOperations.claim_account_operation.rc_needed / 1e12).toFixed(1)}T RC, using it costs ${(keyOperations.create_claimed_account_operation.rc_needed / 1e9).toFixed(1)}B RC` : 'N/A',
+          actVsDelegation: keyOperations.create_claimed_account_operation && keyOperations.account_create_operation ?
+            `ACT creation: ${(keyOperations.create_claimed_account_operation.rc_needed / 1e9).toFixed(1)}B RC vs HIVE delegation: ${(keyOperations.account_create_operation.rc_needed / 1e9).toFixed(1)}B RC + 3 HIVE` : 'N/A'
+        }
+      });
+    } catch (error) {
+      console.error('Error fetching public RC costs:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to fetch RC costs'
+      });
+    }
+  });
+
   // Export the router and initialization function
   module.exports = { 
     router, 
     initializeOnboardingService,
     initializeWebSocketMonitor,
     setupDatabase,
-    PaymentChannelMonitor
+    PaymentChannelMonitor,
+    hiveAccountService,
+    rcMonitoringService
   };
   
   // Auto-initialize if this file is run directly
