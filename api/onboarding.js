@@ -3735,7 +3735,7 @@ const response = await fetch('/api/onboarding/notifications/123/read', {
   router.get('/api/onboarding/notifications/:username/merged', async (req, res) => {
     try {
       const { username } = req.params;
-      const { limit = 100, offset = 0 } = req.query;
+      const { limit = 100, offset = 0, last_id = null } = req.query;
 
       const client = await pool.connect();
       
@@ -3785,6 +3785,30 @@ const response = await fetch('/api/onboarding/notifications/123/read', {
         `;
 
         const requestsResult = await client.query(requestsQuery, [username]);
+        //{"id":221,"jsonrpc":"2.0","method":"bridge.unread_notifications","params":{"account":"disregardfiat"}}
+
+        // 2.1 Get unread notifications
+        let lastread = 0
+        let unRead = 0
+        try {
+            const unreadHiveNotificationsResponse = await fetch(config.clientURL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    jsonrpc: '2.0',
+                    method: 'bridge.unread_notifications',
+                    params: {
+                        account: username
+                    },
+                    id: 1
+                })
+            });
+            const unreadHiveNotificationsResult = await unreadHiveNotificationsResponse.json();
+            lastread = unreadHiveNotificationsResult.result.lastread
+            unRead = unreadHiveNotificationsResult.result.unread
+        } catch (error) {
+            console.error('Error fetching unread HIVE notifications:', error);
+        }
 
         // 3. Fetch HIVE Bridge notifications
         let hiveNotifications = [];
@@ -3797,7 +3821,8 @@ const response = await fetch('/api/onboarding/notifications/123/read', {
               method: 'bridge.account_notifications',
               params: {
                 account: username,
-                limit
+                limit,
+                last_id
               },
               id: 1
             })
@@ -3806,7 +3831,7 @@ const response = await fetch('/api/onboarding/notifications/123/read', {
           const hiveResult = await hiveResponse.json();
           
           if (hiveResult.result && Array.isArray(hiveResult.result)) {
-            hiveNotifications = hiveResult.result.map(notification => ({
+            hiveNotifications = hiveResult.result.map((notification, index) => ({
               id: `hive_${notification.id}`,
               type: 'hive_notification',
               subtype: notification.type,
@@ -3819,10 +3844,10 @@ const response = await fetch('/api/onboarding/notifications/123/read', {
                 community: notification.community,
                 community_title: notification.community_title
               },
-              status: 'read', // HIVE notifications don't have unread status via API
+              status: index < unRead ? 'unread' : 'read', // HIVE notifications don't have unread status via API
               priority: getHiveNotificationPriority(notification),
               createdAt: new Date(notification.date),
-              readAt: null,
+              readAt: index >= unRead ? lastread : null,
               dismissedAt: null,
               expiresAt: null,
               source: 'hive_bridge'
@@ -3884,7 +3909,7 @@ const response = await fetch('/api/onboarding/notifications/123/read', {
         let allNotifications = [
           ...accountRequests,  // Account requests always at top
           ...localNotifications,
-          ...hiveNotifications
+            ...hiveNotifications
         ];
 
         // Sort by priority first, then by timestamp
@@ -3907,7 +3932,7 @@ const response = await fetch('/api/onboarding/notifications/123/read', {
 
         // Get counts
         const unreadCount = localNotifications.filter(n => n.status === 'unread').length + 
-                           accountRequests.length + hiveNotifications.filter(n => n.status === 'unread').length;
+                           accountRequests.length + unRead
         const accountRequestsCount = accountRequests.filter(r => r.data.direction === 'received').length;
 
         res.json({
