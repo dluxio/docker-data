@@ -3440,7 +3440,7 @@ router.post('/api/onboarding/notifications/ignore/:notificationId', authMiddlewa
 // 8. Accept friend request (mark as completed)
 router.post('/api/onboarding/request/accept/:requestId', async (req, res) => {
     try {
-        const { notificationId } = req.params;
+        const { requestId } = req.params;
 
         const transaction = await fetch(config.clientURL, {
             method: 'POST',
@@ -3449,7 +3449,7 @@ router.post('/api/onboarding/request/accept/:requestId', async (req, res) => {
                 id: 1,
                 jsonrpc: '2.0',
                 method: 'condenser_api.get_transaction',
-                params: [notificationId]
+                params: [requestId]
             })
         });
 
@@ -3473,7 +3473,7 @@ router.post('/api/onboarding/request/accept/:requestId', async (req, res) => {
            SET status = $1, account_created_tx = $2, updated_at = CURRENT_TIMESTAMP
            WHERE requester_username = $3
            RETURNING requester_username`,
-                ['completed', notificationId, username]
+                ['completed', requestId, username]
             );
 
             if (result.rows.length === 0) {
@@ -3486,7 +3486,7 @@ router.post('/api/onboarding/request/accept/:requestId', async (req, res) => {
             res.json({
                 success: true,
                 message: `Account creation completed for @${result.rows[0].requester_username}`,
-                txHash: notificationId,
+                txHash: requestId,
                 id: result.rows[0].id
             });
         } finally {
