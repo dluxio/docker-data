@@ -3797,8 +3797,7 @@ const response = await fetch('/api/onboarding/notifications/123/read', {
               method: 'bridge.account_notifications',
               params: {
                 account: username,
-                limit: 50,
-                include_read: true
+                limit: 100
               },
               id: 1
             })
