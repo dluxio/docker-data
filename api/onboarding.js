@@ -3828,6 +3828,8 @@ const response = await fetch('/api/onboarding/notifications/123/read', {
               expiresAt: null,
               source: 'hive_bridge'
             }));
+          } else {
+            console.error('Error fetching HIVE notifications:', hiveResult);
           }
         } catch (hiveError) {
           console.error('Error fetching HIVE notifications:', hiveError);

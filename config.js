@@ -5,7 +5,7 @@ const dbcs = ENV.DATABASE_URL || '';
 const honeycombapi = ENV.HCAPI || "https://token.dlux.io/"
 const username = ENV.USERNAME || 'dlux-io'
 const key = ENV.KEY || ''
-var clientURL = ENV.APIURL || "https://api.hive.blog/"
+var clientURL = ENV.APIURL || "https://hive-api.dlux.io/"
 let config = {
     honeycombapi,
     dbcs,

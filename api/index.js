@@ -986,7 +986,6 @@ exports.https_redirect = (req, res, next) => {
       return next();
     }
   } else {
-    console.log("Skipping HTTPS redirect in development mode");
     return next();
   }
 };
