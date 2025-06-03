@@ -3248,7 +3248,7 @@ router.get('/api/onboarding/notifications/:username', async (req, res) => {
 // });
 
 // 6. Mark notification as read
-router.post('/api/onboarding/notifications/:notificationId/read', authMiddleware, async (req, res) => {
+router.post('/api/onboarding/notifications/read/:notificationId', authMiddleware, async (req, res) => {
     try {
         const { notificationId } = req.params;
         const username = req.auth.account; // Use authenticated account
@@ -3287,7 +3287,7 @@ router.post('/api/onboarding/notifications/:notificationId/read', authMiddleware
 });
 
 // 7.1 PiggyBack on HIVE notifications to dismiss notifications
-router.post('/api/onboarding/notifications/:notificationId/dismiss', async (req, res) => {
+router.post('/api/onboarding/notifications/dismiss/:notificationId', async (req, res) => {
     try {
         const { notificationId } = req.params;
 
@@ -3374,7 +3374,7 @@ router.post('/api/onboarding/notifications/:notificationId/dismiss', async (req,
 });
 
 // 7.2 Ignore Account Request
-router.post('/api/onboarding/notifications/:notificationId/ignore', authMiddleware, async (req, res) => {
+router.post('/api/onboarding/notifications/ignore/:notificationId', authMiddleware, async (req, res) => {
     try {
         const { notificationId } = req.params;
 
@@ -3438,7 +3438,7 @@ router.post('/api/onboarding/notifications/:notificationId/ignore', authMiddlewa
 });
 
 // 8. Accept friend request (mark as completed)
-router.post('/api/onboarding/request/:requestId/accept', async (req, res) => {
+router.post('/api/onboarding/request/accept/:requestId', async (req, res) => {
     try {
         const { notificationId } = req.params;
 
