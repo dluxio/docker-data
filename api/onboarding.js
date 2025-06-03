@@ -3207,46 +3207,46 @@ const response = await fetch('/api/onboarding/notifications/123/read', {
   });
 
   // 6. Get pending requests for a user (legacy endpoint)
-  router.get('/api/onboarding/requests/:username', async (req, res) => {
-    try {
-      const { username } = req.params;
+  // router.get('/api/onboarding/requests/:username', async (req, res) => {
+  //   try {
+  //     const { username } = req.params;
       
-      const client = await pool.connect();
-      try {
-        const result = await client.query(
-          `SELECT id, requester_username, message, public_keys, created_at, expires_at
-           FROM onboarding_requests 
-           WHERE requested_from = $1 AND status = $2 AND expires_at > NOW()
-           ORDER BY created_at DESC`,
-          [username, 'pending']
-        );
+  //     const client = await pool.connect();
+  //     try {
+  //       const result = await client.query(
+  //         `SELECT id, requester_username, message, public_keys, created_at, expires_at
+  //          FROM onboarding_requests 
+  //          WHERE requested_from = $1 AND status = $2 AND expires_at > NOW()
+  //          ORDER BY created_at DESC`,
+  //         [username, 'pending']
+  //       );
         
-        const requests = result.rows.map(row => ({
-          id: row.id,
-          requesterUsername: row.requester_username,
-          message: row.message,
-          publicKeys: row.public_keys,
-          createdAt: row.created_at,
-          expiresAt: row.expires_at,
-          timeLeft: Math.max(0, Math.floor((new Date(row.expires_at) - new Date()) / (1000 * 60 * 60 * 24))) // days left
-        }));
+  //       const requests = result.rows.map(row => ({
+  //         id: row.id,
+  //         requesterUsername: row.requester_username,
+  //         message: row.message,
+  //         publicKeys: row.public_keys,
+  //         createdAt: row.created_at,
+  //         expiresAt: row.expires_at,
+  //         timeLeft: Math.max(0, Math.floor((new Date(row.expires_at) - new Date()) / (1000 * 60 * 60 * 24))) // days left
+  //       }));
         
-        res.json({
-          success: true,
-          requests,
-          count: requests.length
-        });
-      } finally {
-        client.release();
-      }
-    } catch (error) {
-      console.error('Error fetching requests:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to fetch account creation requests'
-      });
-    }
-  });
+  //       res.json({
+  //         success: true,
+  //         requests,
+  //         count: requests.length
+  //       });
+  //     } finally {
+  //       client.release();
+  //     }
+  //   } catch (error) {
+  //     console.error('Error fetching requests:', error);
+  //     res.status(500).json({
+  //       success: false,
+  //       error: 'Failed to fetch account creation requests'
+  //     });
+  //   }
+  // });
   
   // 6. Mark notification as read
   router.post('/api/onboarding/notifications/:notificationId/read', authMiddleware, async (req, res) => {
@@ -3727,6 +3727,445 @@ const response = await fetch('/api/onboarding/notifications/123/read', {
       res.status(500).json({
         success: false,
         error: 'Failed to fetch RC costs'
+      });
+    }
+  });
+
+  // 11. Fetch and merge HIVE Bridge notifications with local notifications
+  router.get('/api/onboarding/notifications/:username/merged', authMiddleware, async (req, res) => {
+    try {
+      const { username } = req.params;
+      const { limit = 50, offset = 0 } = req.query;
+
+      // Verify the authenticated user matches the requested username
+      if (req.auth.account !== username) {
+        return res.status(403).json({
+          success: false,
+          error: 'Access denied. You can only view your own notifications.'
+        });
+      }
+
+      const client = await pool.connect();
+      
+      try {
+        // 1. Get local notifications (account requests, payment confirmations, etc.)
+        const localNotificationsQuery = `
+          SELECT 
+            id,
+            notification_type,
+            title,
+            message,
+            data,
+            status,
+            priority,
+            created_at,
+            read_at,
+            dismissed_at,
+            expires_at
+          FROM user_notifications 
+          WHERE username = $1 
+            AND (expires_at IS NULL OR expires_at > NOW())
+          ORDER BY created_at DESC
+        `;
+
+        const localNotificationsResult = await client.query(localNotificationsQuery, [username]);
+
+        // 2. Get pending account requests (high priority - always at top)
+        const requestsQuery = `
+          SELECT 
+            request_id,
+            username as requester_username,
+            requested_by,
+            message,
+            status,
+            created_at,
+            expires_at,
+            public_keys,
+            CASE 
+              WHEN requested_by = $1 THEN 'received'
+              WHEN username = $1 THEN 'sent'
+            END as direction
+          FROM onboarding_requests 
+          WHERE (requested_by = $1 OR username = $1)
+            AND status = 'pending' 
+            AND expires_at > NOW()
+          ORDER BY created_at DESC
+        `;
+
+        const requestsResult = await client.query(requestsQuery, [username]);
+
+        // 3. Fetch HIVE Bridge notifications
+        let hiveNotifications = [];
+        try {
+          const hiveResponse = await fetch(config.clientURL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              method: 'bridge.account_notifications',
+              params: {
+                account: username,
+                limit: 50,
+                include_read: true
+              },
+              id: 1
+            })
+          });
+
+          const hiveResult = await hiveResponse.json();
+          
+          if (hiveResult.result && Array.isArray(hiveResult.result)) {
+            hiveNotifications = hiveResult.result.map(notification => ({
+              id: `hive_${notification.id}`,
+              type: 'hive_notification',
+              subtype: notification.type,
+              title: getHiveNotificationTitle(notification),
+              message: getHiveNotificationMessage(notification),
+              data: {
+                hive_notification: notification,
+                url: notification.url,
+                score: notification.score,
+                community: notification.community,
+                community_title: notification.community_title
+              },
+              status: 'read', // HIVE notifications don't have unread status via API
+              priority: getHiveNotificationPriority(notification),
+              createdAt: new Date(notification.date),
+              readAt: null,
+              dismissedAt: null,
+              expiresAt: null,
+              source: 'hive_bridge'
+            }));
+          }
+        } catch (hiveError) {
+          console.error('Error fetching HIVE notifications:', hiveError);
+          // Continue without HIVE notifications if the API fails
+        }
+
+        // 4. Process local notifications
+        const localNotifications = localNotificationsResult.rows.map(row => ({
+          id: `local_${row.id}`,
+          type: row.notification_type,
+          title: row.title,
+          message: row.message,
+          data: row.data ? JSON.parse(row.data) : null,
+          status: row.status,
+          priority: row.priority,
+          createdAt: new Date(row.created_at),
+          readAt: row.read_at ? new Date(row.read_at) : null,
+          dismissedAt: row.dismissed_at ? new Date(row.dismissed_at) : null,
+          expiresAt: row.expires_at ? new Date(row.expires_at) : null,
+          source: 'local'
+        }));
+
+        // 5. Process account creation requests (always at top)
+        const accountRequests = requestsResult.rows.map(row => ({
+          id: `request_${row.request_id}`,
+          type: 'account_request',
+          subtype: row.direction,
+          title: row.direction === 'received' 
+            ? `Account Creation Request from @${row.requester_username}`
+            : `Account Creation Request sent to @${row.requested_by}`,
+          message: row.direction === 'received'
+            ? `@${row.requester_username} is asking you to create their HIVE account.${row.message ? ` Message: "${row.message}"` : ''}`
+            : `Waiting for @${row.requested_by} to create your account.${row.message ? ` Message: "${row.message}"` : ''}`,
+          data: {
+            request_id: row.request_id,
+            requester_username: row.requester_username,
+            requested_by: row.requested_by,
+            message: row.message,
+            direction: row.direction,
+            public_keys: row.public_keys,
+            expires_at: row.expires_at
+          },
+          status: 'unread',
+          priority: 'urgent',
+          createdAt: new Date(row.created_at),
+          readAt: null,
+          dismissedAt: null,
+          expiresAt: new Date(row.expires_at),
+          source: 'account_request'
+        }));
+
+        // 6. Merge and sort all notifications
+        let allNotifications = [
+          ...accountRequests,  // Account requests always at top
+          ...localNotifications,
+          ...hiveNotifications
+        ];
+
+        // Sort by priority first, then by timestamp
+        allNotifications.sort((a, b) => {
+          const priorityOrder = { urgent: 1, high: 2, normal: 3, low: 4 };
+          const aPriority = priorityOrder[a.priority] || 3;
+          const bPriority = priorityOrder[b.priority] || 3;
+          
+          if (aPriority !== bPriority) {
+            return aPriority - bPriority;
+          }
+          
+          return new Date(b.createdAt) - new Date(a.createdAt);
+        });
+
+        // Apply pagination
+        const startIndex = parseInt(offset);
+        const endIndex = startIndex + parseInt(limit);
+        const paginatedNotifications = allNotifications.slice(startIndex, endIndex);
+
+        // Get counts
+        const unreadCount = localNotifications.filter(n => n.status === 'unread').length + 
+                           accountRequests.length;
+        const accountRequestsCount = accountRequests.filter(r => r.data.direction === 'received').length;
+
+        res.json({
+          success: true,
+          username,
+          summary: {
+            total: allNotifications.length,
+            unreadNotifications: unreadCount,
+            pendingAccountRequests: accountRequestsCount,
+            hiveNotifications: hiveNotifications.length,
+            localNotifications: localNotifications.length
+          },
+          notifications: paginatedNotifications,
+          pagination: {
+            limit: parseInt(limit),
+            offset: parseInt(offset),
+            hasMore: endIndex < allNotifications.length,
+            total: allNotifications.length
+          }
+        });
+
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      console.error('Error fetching merged notifications:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to fetch notifications'
+      });
+    }
+  });
+
+  // Helper functions for HIVE notifications
+  const getHiveNotificationTitle = (notification) => {
+    const titles = {
+      vote: '👍 Vote Received',
+      mention: '@️ Mentioned',
+      follow: '👥 New Follower',
+      reblog: '🔄 Content Reblogged',
+      reply: '💬 Reply to Your Post',
+      transfer: '💰 Transfer Received',
+      delegate: '⚡ Delegation Received',
+      undelegate: '⚡ Delegation Removed',
+      power_up: '🔋 Power Up',
+      power_down: '🔋 Power Down',
+      witness_vote: '🗳️ Witness Vote',
+      proposal_vote: '📋 Proposal Vote',
+      receive_reward: '🎁 Rewards Received',
+      comment_benefactor_reward: '🎁 Benefactor Reward',
+      comment_author_reward: '✍️ Author Reward',
+      comment_curator_reward: '🔍 Curator Reward',
+      inactive: '😴 Account Inactive Warning'
+    };
+    return titles[notification.type] || '📢 HIVE Notification';
+  };
+
+  const getHiveNotificationMessage = (notification) => {
+    const { type, msg, score } = notification;
+    
+    switch (type) {
+      case 'vote':
+        return `@${notification.msg.split(' voted on')[0]} voted on your ${notification.url.includes('/comments/') ? 'comment' : 'post'}${score ? ` (+${score})` : ''}`;
+      case 'mention':
+        return `@${notification.msg.split(' mentioned you')[0]} mentioned you in a ${notification.url.includes('/comments/') ? 'comment' : 'post'}`;
+      case 'follow':
+        return `@${notification.msg.split(' ')[0]} started following you`;
+      case 'reblog':
+        return `@${notification.msg.split(' reblogged')[0]} reblogged your post`;
+      case 'reply':
+        return `@${notification.msg.split(' replied')[0]} replied to your ${notification.url.includes('/comments/') ? 'comment' : 'post'}`;
+      case 'transfer':
+        return notification.msg;
+      case 'delegate':
+        return notification.msg;
+      case 'undelegate':
+        return notification.msg;
+      case 'receive_reward':
+        return notification.msg;
+      default:
+        return notification.msg || 'HIVE blockchain activity';
+    }
+  };
+
+  const getHiveNotificationPriority = (notification) => {
+    const highPriorityTypes = ['transfer', 'delegate', 'mention'];
+    const normalPriorityTypes = ['vote', 'follow', 'reblog', 'reply'];
+    
+    if (highPriorityTypes.includes(notification.type)) {
+      return 'high';
+    } else if (normalPriorityTypes.includes(notification.type)) {
+      return 'normal';
+    } else {
+      return 'low';
+    }
+  };
+
+  // 12. Create HIVE account for a friend (accept account request)
+  router.post('/api/onboarding/request/:requestId/create-account', authMiddleware, async (req, res) => {
+    try {
+      const { requestId } = req.params;
+      const { useACT = true } = req.body; // Default to using ACT if available
+      const creatorUsername = req.auth.account;
+
+      const client = await pool.connect();
+      try {
+        // Get the request details
+        const requestResult = await client.query(
+          `SELECT * FROM onboarding_requests 
+           WHERE request_id = $1 AND requested_by = $2 AND status = 'pending'`,
+          [requestId, creatorUsername]
+        );
+
+        if (requestResult.rows.length === 0) {
+          return res.status(404).json({
+            success: false,
+            error: 'Request not found or you are not authorized to fulfill this request'
+          });
+        }
+
+        const request = requestResult.rows[0];
+        const publicKeys = typeof request.public_keys === 'string' 
+          ? JSON.parse(request.public_keys) 
+          : request.public_keys;
+
+        // Check if account already exists
+        const existingAccount = await hiveAccountService.getHiveAccount(request.username);
+        if (existingAccount) {
+          // Mark request as completed
+          await client.query(
+            `UPDATE onboarding_requests 
+             SET status = 'completed', updated_at = CURRENT_TIMESTAMP
+             WHERE request_id = $1`,
+            [requestId]
+          );
+
+          return res.status(409).json({
+            success: false,
+            error: `Account @${request.username} already exists on HIVE blockchain`,
+            accountExists: true
+          });
+        }
+
+        // Update ACT balance and check resources
+        await hiveAccountService.updateACTBalance();
+        await hiveAccountService.checkResourceCredits();
+
+        let creationMethod = 'DELEGATION';
+        let canUseACT = useACT && hiveAccountService.actBalance > 0;
+        
+        // If user wants to use ACT but doesn't have any, try to claim one
+        if (useACT && hiveAccountService.actBalance === 0) {
+          const rcCosts = await rcMonitoringService.getLatestRCCosts();
+          const claimCost = rcCosts['claim_account_operation'];
+          
+          if (claimCost && hiveAccountService.resourceCredits >= claimCost.rc_needed) {
+            console.log(`Attempting to claim ACT for friend request...`);
+            const claimed = await hiveAccountService.claimAccountCreationTokens();
+            if (claimed) {
+              canUseACT = true;
+              console.log(`✓ ACT claimed successfully for friend request`);
+            }
+          }
+        }
+
+        if (canUseACT) {
+          creationMethod = 'ACT';
+        }
+
+        // Create a temporary payment channel for tracking
+        const channelId = generateChannelId();
+        await client.query(`
+          INSERT INTO payment_channels 
+          (channel_id, username, crypto_type, payment_address, amount_crypto, amount_usd, memo, status, public_keys)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        `, [
+          channelId, 
+          request.username, 
+          'HIVE', 
+          'friend_request', 
+          creationMethod === 'ACT' ? 0 : 3, 
+          0, 
+          `Friend request from @${creatorUsername}`, 
+          'confirmed',
+          JSON.stringify(publicKeys)
+        ]);
+
+        // Attempt to create the account
+        const creationResult = await hiveAccountService.createHiveAccount(
+          request.username,
+          publicKeys,
+          channelId
+        );
+
+        if (creationResult.success) {
+          // Mark request as completed
+          await client.query(
+            `UPDATE onboarding_requests 
+             SET status = 'completed', updated_at = CURRENT_TIMESTAMP
+             WHERE request_id = $1`,
+            [requestId]
+          );
+
+          // Update payment channel to completed
+          await client.query(`
+            UPDATE payment_channels 
+            SET status = 'completed', account_created_at = CURRENT_TIMESTAMP
+            WHERE channel_id = $1
+          `, [channelId]);
+
+          // Notify the requester
+          await createNotification(
+            request.username,
+            'account_created',
+            'HIVE Account Created!',
+            `Your HIVE account @${request.username} has been created by @${creatorUsername}!`,
+            {
+              request_id: requestId,
+              creator: creatorUsername,
+              tx_id: creationResult.txId,
+              creation_method: creationMethod
+            },
+            'high',
+            168 // 7 days
+          );
+
+          res.json({
+            success: true,
+            message: `Account @${request.username} created successfully!`,
+            account: {
+              username: request.username,
+              creator: creatorUsername,
+              txId: creationResult.txId,
+              blockNum: creationResult.blockNum,
+              creationMethod,
+              actUsed: creationResult.actUsed
+            }
+          });
+        } else {
+          throw new Error('Account creation failed');
+        }
+
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      console.error('Error creating account for friend:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to create account',
+        details: error.message
       });
     }
   });
