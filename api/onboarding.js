@@ -3486,7 +3486,8 @@ router.post('/api/onboarding/request/:requestId/accept', async (req, res) => {
             res.json({
                 success: true,
                 message: `Account creation completed for @${result.rows[0].requester_username}`,
-                txHash: notificationId
+                txHash: notificationId,
+                id: result.rows[0].id
             });
         } finally {
             client.release();
