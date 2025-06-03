@@ -3471,8 +3471,8 @@ router.post('/api/onboarding/request/accept/:requestId', async (req, res) => {
             const result = await client.query(
                 `UPDATE onboarding_requests 
            SET status = $1, account_created_tx = $2, updated_at = CURRENT_TIMESTAMP
-           WHERE requester_username = $3
-           RETURNING requester_username`,
+           WHERE username = $3
+           RETURNING username`,
                 ['completed', requestId, username]
             );
 
@@ -3485,7 +3485,7 @@ router.post('/api/onboarding/request/accept/:requestId', async (req, res) => {
 
             res.json({
                 success: true,
-                message: `Account creation completed for @${result.rows[0].requester_username}`,
+                message: `Account creation completed for @${result.rows[0].username}`,
                 txHash: requestId,
                 id: result.rows[0].id
             });
