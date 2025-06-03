@@ -3737,14 +3737,6 @@ const response = await fetch('/api/onboarding/notifications/123/read', {
       const { username } = req.params;
       const { limit = 50, offset = 0 } = req.query;
 
-      // Verify the authenticated user matches the requested username
-      if (req.auth.account !== username) {
-        return res.status(403).json({
-          success: false,
-          error: 'Access denied. You can only view your own notifications.'
-        });
-      }
-
       const client = await pool.connect();
       
       try {
