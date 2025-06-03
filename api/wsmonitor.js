@@ -40,7 +40,8 @@ class PaymentChannelMonitor {
                 'http://localhost:5507',
                 'https://dlux.io',
                 'https://www.dlux.io', 
-                'https://vue.dlux.io'
+                'https://vue.dlux.io',
+                'https://data.dlux.io'  // Add the data subdomain
             ];
 
         this.wss = new WebSocket.Server({
@@ -48,9 +49,10 @@ class PaymentChannelMonitor {
             path: '/ws/payment-monitor',
             verifyClient: (info) => {
                 const origin = info.origin;
-                console.log(`WebSocket connection attempt from origin: ${origin}`);
+                const userAgent = info.req.headers['user-agent'] || '';
+                console.log(`WebSocket connection attempt from origin: ${origin}, User-Agent: ${userAgent}`);
                 
-                // Allow connections without origin (for testing tools)
+                // Allow connections without origin (for testing tools, native apps, etc.)
                 if (!origin) {
                     console.log('WebSocket connection allowed (no origin header)');
                     return true;
@@ -60,7 +62,9 @@ class PaymentChannelMonitor {
                 const isAllowed = allowedOrigins.some(allowedOrigin => {
                     // Handle both exact match and wildcard subdomains
                     if (allowedOrigin === origin) return true;
-                    if (allowedOrigin.startsWith('https://*.') && origin.endsWith(allowedOrigin.substring(9))) return true;
+                    if (allowedOrigin.startsWith('https://*.') && origin.endsWith(allowedOrigin.substring(7))) return true;
+                    // Allow localhost with any port for development
+                    if (allowedOrigin.includes('localhost') && origin.includes('localhost')) return true;
                     return false;
                 });
                 
@@ -69,6 +73,13 @@ class PaymentChannelMonitor {
                 } else {
                     console.log(`WebSocket connection REJECTED from: ${origin}`);
                     console.log(`Allowed origins: ${allowedOrigins.join(', ')}`);
+                    // Log additional debugging info for troubleshooting
+                    console.log(`Request headers:`, {
+                        host: info.req.headers.host,
+                        'user-agent': userAgent,
+                        'sec-websocket-version': info.req.headers['sec-websocket-version'],
+                        'sec-websocket-key': info.req.headers['sec-websocket-key'] ? '[PRESENT]' : '[MISSING]'
+                    });
                 }
                 
                 return isAllowed;
@@ -84,11 +95,14 @@ class PaymentChannelMonitor {
             console.log(`WebSocket connection established from ${clientIP} (Origin: ${origin}) [ID: ${connectionId}]`);
             console.log(`User Agent: ${userAgent}`);
             console.log(`Connection state: ${ws.readyState} (1=OPEN)`);
+            console.log(`Request URL: ${req.url}`);
+            console.log(`Protocol: ${req.headers['sec-websocket-protocol'] || 'none'}`);
             
             // Store connection ID and start time for debugging
             ws.connectionId = connectionId;
             ws.connectionStartTime = Date.now();
             ws.messageCount = 0;
+            ws.lastPingTime = Date.now();
 
             ws.on('message', async (message) => {
                 try {
@@ -99,6 +113,7 @@ class PaymentChannelMonitor {
                     const data = JSON.parse(message);
                     console.log(`[ID: ${ws.connectionId}] Parsed data:`, data);
                     ws.messageCount++;
+                    ws.lastMessageTime = Date.now();
                     await this.handleMessage(ws, data);
                 } catch (error) {
                     console.error(`[ID: ${ws.connectionId}] WebSocket message error:`, error);
@@ -108,7 +123,8 @@ class PaymentChannelMonitor {
                         ws.send(JSON.stringify({
                             type: 'error',
                             message: 'Invalid message format',
-                            details: error.message
+                            details: error.message,
+                            timestamp: new Date().toISOString()
                         }));
                     } catch (sendError) {
                         console.error(`[ID: ${ws.connectionId}] Failed to send error message:`, sendError);
@@ -123,11 +139,15 @@ class PaymentChannelMonitor {
                 console.log(`Connection duration: ${connectionTime}ms`);
                 console.log(`Close code meaning: ${getCloseCodeMeaning(code)}`);
                 console.log(`Messages received during connection: ${ws.messageCount || 0}`);
+                console.log(`Last message: ${ws.lastMessageTime ? new Date(ws.lastMessageTime).toISOString() : 'never'}`);
                 this.removeClient(ws);
             });
 
             ws.on('error', (error) => {
-                console.error(`WebSocket error from ${clientIP}:`, error);
+                console.error(`WebSocket error from ${clientIP} [ID: ${ws.connectionId}]:`, error);
+                console.error(`Error type: ${error.constructor.name}`);
+                console.error(`Error message: ${error.message}`);
+                console.error(`Error code: ${error.code || 'unknown'}`);
                 this.removeClient(ws);
             });
 
@@ -140,25 +160,26 @@ class PaymentChannelMonitor {
                             type: 'connected',
                             message: 'WebSocket connection established',
                             timestamp: new Date().toISOString(),
-                            server: 'DLUX Payment Monitor'
+                            server: 'DLUX Payment Monitor',
+                            connectionId: connectionId
                         };
                         
-                        console.log('Sending welcome message:', JSON.stringify(welcomeMessage));
+                        console.log(`[ID: ${connectionId}] Sending welcome message:`, JSON.stringify(welcomeMessage));
                         
                         try {
                             ws.send(JSON.stringify(welcomeMessage));
-                            console.log('Welcome message sent successfully');
+                            console.log(`[ID: ${connectionId}] Welcome message sent successfully`);
                         } catch (sendError) {
-                            console.error('Error sending welcome message:', sendError);
-                            console.log('WebSocket state at error:', ws.readyState);
+                            console.error(`[ID: ${connectionId}] Error sending welcome message:`, sendError);
+                            console.log(`[ID: ${connectionId}] WebSocket state at error:`, ws.readyState);
                         }
                     } else {
-                        console.log('WebSocket not in OPEN state, not sending welcome message. State:', ws.readyState);
+                        console.log(`[ID: ${connectionId}] WebSocket not in OPEN state, not sending welcome message. State:`, ws.readyState);
                     }
-                }, 100); // Wait 100ms for connection to stabilize
+                }, 150); // Increased delay for better stability
                 
             } catch (error) {
-                console.error('Failed to setup welcome message:', error);
+                console.error(`[ID: ${connectionId}] Failed to setup welcome message:`, error);
             }
         });
 

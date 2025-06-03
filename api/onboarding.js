@@ -3490,17 +3490,40 @@ router.post('/api/onboarding/request/accept/:requestId', async (req, res) => {
         let username;
         try {
             username = tx.operations[0][1].new_account_name;
+            console.log('Transaction operations:', JSON.stringify(tx.operations, null, 2));
+            console.log('Extracted username:', username, 'Type:', typeof username);
         } catch (error) {
+            console.log('Error extracting username from transaction:', error);
+            console.log('Transaction structure:', JSON.stringify(tx, null, 2));
             return res.status(404).json({
                 success: false,
                 error: 'Invalid transaction format - not an account creation transaction'
             });
         }
         
-        console.log('Extracted username:', username);
+        console.log('Account Created:', username);
 
         const client = await pool.connect();
         try {
+            // Debug: Let's see what requests exist for this username
+            const debugQuery = await client.query(
+                `SELECT request_id, username, status, created_at FROM onboarding_requests 
+                 WHERE username = $1
+                 ORDER BY created_at DESC`,
+                [username]
+            );
+            
+            console.log(`Found ${debugQuery.rows.length} requests for username "${username}":`, debugQuery.rows);
+
+            // Also check for any pending requests regardless of username
+            const allPendingQuery = await client.query(
+                `SELECT request_id, username, status, created_at FROM onboarding_requests 
+                 WHERE status = 'pending'
+                 ORDER BY created_at DESC LIMIT 5`
+            );
+            
+            console.log(`All pending requests:`, allPendingQuery.rows);
+
             // First, find the request by username and verify it exists and is pending
             const requestQuery = await client.query(
                 `SELECT request_id, username, status FROM onboarding_requests 
@@ -3512,7 +3535,11 @@ router.post('/api/onboarding/request/accept/:requestId', async (req, res) => {
             if (requestQuery.rows.length === 0) {
                 return res.status(404).json({
                     success: false,
-                    error: `No pending account request found for @${username}`
+                    error: `No pending account request found for @${username}`,
+                    debug: {
+                        allRequestsForUsername: debugQuery.rows,
+                        allPendingRequests: allPendingQuery.rows
+                    }
                 });
             }
 
@@ -4239,7 +4266,7 @@ router.post('/api/onboarding/request/:requestId/create-account', authMiddleware,
                 return res.status(409).json({
                     success: false,
                     error: `Account @${request.username} already exists on HIVE blockchain`,
-                    accountExists: true
+                    accountExists: true,
                 });
             }
 
