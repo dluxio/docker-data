@@ -4030,7 +4030,7 @@ router.get('/api/onboarding/notifications/:username/merged', async (req, res) =>
 
             // Get counts
             const unreadCount = localNotifications.filter(n => n.status === 'unread').length +
-                accountRequests.length + unRead
+                unRead
             const accountRequestsCount = accountRequests.filter(r => r.data.direction === 'received').length;
 
             res.json({
