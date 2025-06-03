@@ -3735,7 +3735,7 @@ const response = await fetch('/api/onboarding/notifications/123/read', {
   router.get('/api/onboarding/notifications/:username/merged', async (req, res) => {
     try {
       const { username } = req.params;
-      const { limit = 50, offset = 0 } = req.query;
+      const { limit = 100 } = req.query;
 
       const client = await pool.connect();
       
@@ -3797,8 +3797,7 @@ const response = await fetch('/api/onboarding/notifications/123/read', {
               method: 'bridge.account_notifications',
               params: {
                 account: username,
-                limit,
-                offset
+                limit
               },
               id: 1
             })
@@ -3908,7 +3907,7 @@ const response = await fetch('/api/onboarding/notifications/123/read', {
 
         // Get counts
         const unreadCount = localNotifications.filter(n => n.status === 'unread').length + 
-                           accountRequests.length;
+                           accountRequests.length + hiveNotifications.filter(n => n.status === 'unread').length;
         const accountRequestsCount = accountRequests.filter(r => r.data.direction === 'received').length;
 
         res.json({
