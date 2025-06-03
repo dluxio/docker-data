@@ -3735,7 +3735,7 @@ const response = await fetch('/api/onboarding/notifications/123/read', {
   router.get('/api/onboarding/notifications/:username/merged', async (req, res) => {
     try {
       const { username } = req.params;
-      const { limit = 100 } = req.query;
+      const { limit = 100, offset = 0 } = req.query;
 
       const client = await pool.connect();
       
