@@ -3970,15 +3970,15 @@ const response = await fetch('/api/onboarding/notifications/123/read', {
     
     switch (type) {
       case 'vote':
-        return `@${notification.msg.split(' voted on')[0]} voted on your ${notification.url.includes('/comments/') ? 'comment' : 'post'}${score ? ` (+${score})` : ''}`;
+        return `${notification.msg.split(' voted on')[0]} voted on your ${notification.url.includes('/comments/') ? 'comment' : 'post'}${score ? ` (+${score})` : ''}`;
       case 'mention':
-        return `@${notification.msg.split(' mentioned you')[0]} mentioned you in a ${notification.url.includes('/comments/') ? 'comment' : 'post'}`;
+        return `${notification.msg.split(' mentioned you')[0]} mentioned you in a ${notification.url.includes('/comments/') ? 'comment' : 'post'}`;
       case 'follow':
-        return `@${notification.msg.split(' ')[0]} started following you`;
+        return `${notification.msg.split(' ')[0]} started following you`;
       case 'reblog':
-        return `@${notification.msg.split(' reblogged')[0]} reblogged your post`;
+        return `${notification.msg.split(' reblogged')[0]} reblogged your post`;
       case 'reply':
-        return `@${notification.msg.split(' replied')[0]} replied to your ${notification.url.includes('/comments/') ? 'comment' : 'post'}`;
+        return `${notification.msg.split(' replied')[0]} replied to your ${notification.url.includes('/comments/') ? 'comment' : 'post'}`;
       case 'transfer':
         return notification.msg;
       case 'delegate':
