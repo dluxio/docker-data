@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DLUX Admin Dashboard</title>
+    
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+    
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.min.js"></script>
+    
+    <!-- Vue.js 3 -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    
+    <!-- Hive Keychain -->
+    <script src="https://cdn.jsdelivr.net/npm/hive-keychain@1.10.0/dist/hive-keychain.min.js"></script>
+    
+    <!-- Custom CSS -->
+    <style>
+        :root {
+            --primary-color: #e31337;
+            --secondary-color: #343a40;
+            --success-color: #28a745;
+            --warning-color: #ffc107;
+            --danger-color: #dc3545;
+        }
+        
+        .navbar-brand {
+            font-weight: bold;
+            color: var(--primary-color) !important;
+        }
+        
+        .sidebar {
+            min-height: calc(100vh - 56px);
+            background: var(--secondary-color);
+        }
+        
+        .sidebar .nav-link {
+            color: rgba(255,255,255,0.75);
+            padding: 0.75rem 1rem;
+            border-radius: 0.375rem;
+            margin: 0.125rem 0;
+        }
+        
+        .sidebar .nav-link:hover,
+        .sidebar .nav-link.active {
+            color: white;
+            background-color: var(--primary-color);
+        }
+        
+        .card {
+            box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+            border: 1px solid rgba(0, 0, 0, 0.125);
+        }
+        
+        .stat-card {
+            background: linear-gradient(135deg, var(--primary-color), #ff4757);
+            color: white;
+        }
+        
+        .stat-card-secondary {
+            background: linear-gradient(135deg, var(--secondary-color), #6c757d);
+            color: white;
+        }
+        
+        .loading {
+            opacity: 0.6;
+            pointer-events: none;
+        }
+        
+        .table-responsive {
+            border-radius: 0.375rem;
+        }
+        
+        .status-badge {
+            font-size: 0.75rem;
+            padding: 0.25rem 0.5rem;
+        }
+        
+        .chart-container {
+            position: relative;
+            height: 400px;
+        }
+        
+        .login-form {
+            max-width: 400px;
+            margin: 2rem auto;
+            padding: 2rem;
+            background: white;
+            border-radius: 0.5rem;
+            box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <!-- Navigation -->
+        <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+            <div class="container-fluid">
+                <a class="navbar-brand" href="#">
+                    <i class="bi bi-shield-check"></i>
+                    DLUX Admin
+                </a>
+                
+                <div class="navbar-nav ms-auto" v-if="isAuthenticated">
+                    <span class="navbar-text me-3">
+                        <i class="bi bi-person-circle"></i>
+                        @{{ currentUser }}
+                    </span>
+                    <button class="btn btn-outline-light btn-sm" @click="logout">
+                        <i class="bi bi-box-arrow-right"></i>
+                        Logout
+                    </button>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Login Form -->
+        <div v-if="!isAuthenticated" class="container-fluid">
+            <div class="login-form">
+                <div class="text-center mb-4">
+                    <h3><i class="bi bi-shield-lock text-primary"></i> Admin Login</h3>
+                    <p class="text-muted">Sign in with your Hive Keychain</p>
+                </div>
+                
+                <form @submit.prevent="login">
+                    <div class="mb-3">
+                        <label for="username" class="form-label">Hive Username</label>
+                        <input 
+                            type="text" 
+                            class="form-control" 
+                            id="username"
+                            v-model="loginForm.username"
+                            placeholder="Enter your Hive username"
+                            required
+                        >
+                    </div>
+                    
+                    <div class="d-grid">
+                        <button type="submit" class="btn btn-primary" :disabled="isLoggingIn">
+                            <span v-if="isLoggingIn">
+                                <i class="bi bi-hourglass-split"></i>
+                                Authenticating...
+                            </span>
+                            <span v-else>
+                                <i class="bi bi-key"></i>
+                                Sign with Keychain
+                            </span>
+                        </button>
+                    </div>
+                </form>
+                
+                <div v-if="loginError" class="alert alert-danger mt-3">
+                    {{ loginError }}
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Dashboard -->
+        <div v-if="isAuthenticated" class="container-fluid">
+            <div class="row">
+                <!-- Sidebar -->
+                <nav class="col-md-3 col-lg-2 d-md-block sidebar collapse">
+                    <div class="position-sticky pt-3">
+                        <ul class="nav flex-column">
+                            <li class="nav-item">
+                                <a class="nav-link" :class="{ active: currentView === 'dashboard' }" 
+                                   @click="setView('dashboard')">
+                                    <i class="bi bi-speedometer2"></i>
+                                    Dashboard
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a class="nav-link" :class="{ active: currentView === 'act-status' }" 
+                                   @click="setView('act-status')">
+                                    <i class="bi bi-wallet2"></i>
+                                    ACT Status
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a class="nav-link" :class="{ active: currentView === 'rc-costs' }" 
+                                   @click="setView('rc-costs')">
+                                    <i class="bi bi-graph-up"></i>
+                                    RC Costs
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a class="nav-link" :class="{ active: currentView === 'blockchain' }" 
+                                   @click="setView('blockchain')">
+                                    <i class="bi bi-link-45deg"></i>
+                                    Blockchain
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a class="nav-link" :class="{ active: currentView === 'channels' }" 
+                                   @click="setView('channels')">
+                                    <i class="bi bi-credit-card"></i>
+                                    Payment Channels
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a class="nav-link" :class="{ active: currentView === 'users' }" 
+                                   @click="setView('users')">
+                                    <i class="bi bi-people"></i>
+                                    Admin Users
+                                </a>
+                            </li>
+                        </ul>
+                    </div>
+                </nav>
+
+                <!-- Main Content -->
+                <main class="col-md-9 ms-sm-auto col-lg-10 px-md-4">
+                    <!-- Dashboard View -->
+                    <div v-if="currentView === 'dashboard'" class="dashboard-view">
+                        <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
+                            <h1 class="h2">Dashboard Overview</h1>
+                            <button class="btn btn-outline-primary" @click="refreshDashboard" :disabled="loading">
+                                <i class="bi bi-arrow-clockwise"></i>
+                                Refresh
+                            </button>
+                        </div>
+
+                        <!-- Stats Cards -->
+                        <div class="row mb-4">
+                            <div class="col-md-3 mb-3">
+                                <div class="card stat-card">
+                                    <div class="card-body">
+                                        <div class="d-flex justify-content-between">
+                                            <div>
+                                                <h6 class="card-title">ACT Balance</h6>
+                                                <h3>{{ dashboardData.actBalance || 0 }}</h3>
+                                            </div>
+                                            <i class="bi bi-wallet2 fs-1 opacity-50"></i>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <div class="card stat-card-secondary">
+                                    <div class="card-body">
+                                        <div class="d-flex justify-content-between">
+                                            <div>
+                                                <h6 class="card-title">RC Available</h6>
+                                                <h3>{{ formatNumber(dashboardData.rcAvailable) }}</h3>
+                                            </div>
+                                            <i class="bi bi-lightning fs-1 opacity-50"></i>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <div class="card stat-card">
+                                    <div class="card-body">
+                                        <div class="d-flex justify-content-between">
+                                            <div>
+                                                <h6 class="card-title">Pending Accounts</h6>
+                                                <h3>{{ dashboardData.pendingAccounts || 0 }}</h3>
+                                            </div>
+                                            <i class="bi bi-hourglass-split fs-1 opacity-50"></i>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <div class="card stat-card-secondary">
+                                    <div class="card-body">
+                                        <div class="d-flex justify-content-between">
+                                            <div>
+                                                <h6 class="card-title">Active Channels</h6>
+                                                <h3>{{ dashboardData.activeChannels || 0 }}</h3>
+                                            </div>
+                                            <i class="bi bi-credit-card fs-1 opacity-50"></i>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Charts Row -->
+                        <div class="row mb-4">
+                            <div class="col-md-6">
+                                <div class="card">
+                                    <div class="card-header">
+                                        <h5>Account Creations (7 days)</h5>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="chart-container">
+                                            <canvas id="accountCreationsChart"></canvas>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="card">
+                                    <div class="card-header">
+                                        <h5>Payment Methods Distribution</h5>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="chart-container">
+                                            <canvas id="paymentMethodsChart"></canvas>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Recent Activity -->
+                        <div class="card">
+                            <div class="card-header">
+                                <h5>Recent Account Creations</h5>
+                            </div>
+                            <div class="card-body">
+                                <div class="table-responsive">
+                                    <table class="table table-hover">
+                                        <thead>
+                                            <tr>
+                                                <th>Username</th>
+                                                <th>Method</th>
+                                                <th>Status</th>
+                                                <th>Fee</th>
+                                                <th>Date</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr v-for="account in dashboardData.recentAccounts" :key="account.id">
+                                                <td><strong>@{{ account.requested_username }}</strong></td>
+                                                <td>
+                                                    <span class="badge bg-info">{{ account.creation_method }}</span>
+                                                </td>
+                                                <td>
+                                                    <span class="badge status-badge" :class="getStatusClass(account.status)">
+                                                        {{ account.status }}
+                                                    </span>
+                                                </td>
+                                                <td>${{ account.creation_fee || 'Free' }}</td>
+                                                <td>{{ formatDate(account.created_at) }}</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Component Views -->
+                    <act-status-view v-if="currentView === 'act-status'" 
+                                     :api-client="apiClient" 
+                                     @loading="setLoading">
+                    </act-status-view>
+
+                    <rc-costs-view v-if="currentView === 'rc-costs'" 
+                                   :api-client="apiClient" 
+                                   @loading="setLoading">
+                    </rc-costs-view>
+
+                    <blockchain-status-view v-if="currentView === 'blockchain'" 
+                                            :api-client="apiClient" 
+                                            @loading="setLoading">
+                    </blockchain-status-view>
+
+                    <payment-channels-view v-if="currentView === 'channels'" 
+                                           :api-client="apiClient" 
+                                           @loading="setLoading">
+                    </payment-channels-view>
+
+                    <admin-users-view v-if="currentView === 'users'" 
+                                      :api-client="apiClient" 
+                                      @loading="setLoading">
+                    </admin-users-view>
+                </main>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap 5 JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <!-- Custom JavaScript -->
+    <script src="js/app.js"></script>
+    <script src="js/components/act-status.js"></script>
+    <script src="js/components/rc-costs.js"></script>
+    <script src="js/components/blockchain-status.js"></script>
+    <script src="js/components/payment-channels.js"></script>
+    <script src="js/components/admin-users.js"></script>
+</body>
+</html> 
