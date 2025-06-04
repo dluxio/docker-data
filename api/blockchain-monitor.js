@@ -81,9 +81,7 @@ class BlockchainMonitoringService {
     // Validate required API keys and configuration
     validateConfiguration() {
         const requiredEnvVars = {
-            'ETHERSCAN_API_KEY': 'Ethereum blockchain API',
-            'BSCSCAN_API_KEY': 'BNB Smart Chain API',
-            'POLYGONSCAN_API_KEY': 'Polygon blockchain API'
+            'ETHERSCAN_API_KEY': 'Etherscan V2 API (supports multiple chains)'
         };
 
         const missingKeys = [];
@@ -100,7 +98,7 @@ class BlockchainMonitoringService {
             );
         }
 
-        Logger.info('Configuration validation passed');
+        Logger.info('Configuration validation passed - using Etherscan V2 API');
     }
 
     initializeNetworks() {
@@ -123,8 +121,9 @@ class BlockchainMonitoringService {
         this.networks.set('ETH', {
             name: 'Ethereum',
             type: 'account',
+            chainId: 1,
             apis: [
-                'https://api.etherscan.io/api',
+                'https://api.etherscan.io/v2/api',
                 'https://eth-mainnet.alchemyapi.io/v2/' + (process.env.ALCHEMY_API_KEY || '')
             ],
             confirmations_required: 2,
@@ -138,8 +137,9 @@ class BlockchainMonitoringService {
         this.networks.set('BNB', {
             name: 'BNB Smart Chain',
             type: 'account',
+            chainId: 56,
             apis: [
-                'https://api.bscscan.com/api',
+                'https://api.etherscan.io/v2/api',
                 'https://bsc-dataseed.binance.org'
             ],
             confirmations_required: 3,
@@ -153,8 +153,9 @@ class BlockchainMonitoringService {
         this.networks.set('MATIC', {
             name: 'Polygon',
             type: 'account',
+            chainId: 137,
             apis: [
-                'https://api.polygonscan.com/api',
+                'https://api.etherscan.io/v2/api',
                 'https://polygon-rpc.com'
             ],
             confirmations_required: 10,
@@ -441,31 +442,18 @@ class BlockchainMonitoringService {
                     return parseInt(await btcResponse.text());
                     
                 case 'ETH':
-                    const ethResponse = await fetch(`https://api.etherscan.io/api?module=proxy&action=eth_blockNumber&apikey=${process.env.ETHERSCAN_API_KEY}`);
-                    if (!ethResponse.ok) {
-                        throw new APIError(`Ethereum API error: ${ethResponse.statusText}`, 'ETH', ethResponse.status);
-                    }
-                    const ethData = await ethResponse.json();
-                    if (ethData.error) {
-                        throw new APIError(`Ethereum API error: ${ethData.error.message}`, 'ETH');
-                    }
-                    return parseInt(ethData.result, 16);
-                    
                 case 'BNB':
-                    const bnbResponse = await fetch(`https://api.bscscan.com/api?module=proxy&action=eth_blockNumber&apikey=${process.env.BSCSCAN_API_KEY}`);
-                    if (!bnbResponse.ok) {
-                        throw new APIError(`BNB API error: ${bnbResponse.statusText}`, 'BNB', bnbResponse.status);
-                    }
-                    const bnbData = await bnbResponse.json();
-                    return parseInt(bnbData.result, 16);
-                    
                 case 'MATIC':
-                    const maticResponse = await fetch(`https://api.polygonscan.com/api?module=proxy&action=eth_blockNumber&apikey=${process.env.POLYGONSCAN_API_KEY}`);
-                    if (!maticResponse.ok) {
-                        throw new APIError(`Polygon API error: ${maticResponse.statusText}`, 'MATIC', maticResponse.status);
+                    const network = this.networks.get(symbol);
+                    const response = await fetch(`https://api.etherscan.io/v2/api?chainid=${network.chainId}&module=proxy&action=eth_blockNumber&apikey=${process.env.ETHERSCAN_API_KEY}`);
+                    if (!response.ok) {
+                        throw new APIError(`${network.name} API error: ${response.statusText}`, symbol, response.status);
                     }
-                    const maticData = await maticResponse.json();
-                    return parseInt(maticData.result, 16);
+                    const data = await response.json();
+                    if (data.error) {
+                        throw new APIError(`${network.name} API error: ${data.error.message}`, symbol);
+                    }
+                    return parseInt(data.result, 16);
                     
                 case 'SOL':
                     const solResponse = await fetch('https://api.mainnet-beta.solana.com', {
@@ -994,8 +982,9 @@ class BlockchainMonitoringService {
     async getEthereumTransaction(txHash) {
         try {
             const apiKey = process.env.ETHERSCAN_API_KEY || 'YourApiKeyToken';
+            const network = this.networks.get('ETH');
             const response = await fetch(
-                `https://api.etherscan.io/api?module=proxy&action=eth_getTransactionByHash&txhash=${txHash}&apikey=${apiKey}`
+                `https://api.etherscan.io/v2/api?chainid=${network.chainId}&module=proxy&action=eth_getTransactionByHash&txhash=${txHash}&apikey=${apiKey}`
             );
 
             if (!response.ok) return null;
@@ -1006,14 +995,14 @@ class BlockchainMonitoringService {
 
             // Get receipt for confirmation status
             const receiptResponse = await fetch(
-                `https://api.etherscan.io/api?module=proxy&action=eth_getTransactionReceipt&txhash=${txHash}&apikey=${apiKey}`
+                `https://api.etherscan.io/v2/api?chainid=${network.chainId}&module=proxy&action=eth_getTransactionReceipt&txhash=${txHash}&apikey=${apiKey}`
             );
             const receiptData = await receiptResponse.json();
             const receipt = receiptData.result;
 
             // Get current block number
             const blockResponse = await fetch(
-                `https://api.etherscan.io/api?module=proxy&action=eth_blockNumber&apikey=${apiKey}`
+                `https://api.etherscan.io/v2/api?chainid=${network.chainId}&module=proxy&action=eth_blockNumber&apikey=${apiKey}`
             );
             const blockData = await blockResponse.json();
             const currentBlock = parseInt(blockData.result, 16);
@@ -1038,10 +1027,11 @@ class BlockchainMonitoringService {
     async getEthereumAddressTransactions(address, sinceTimestamp) {
         try {
             const apiKey = process.env.ETHERSCAN_API_KEY || 'YourApiKeyToken';
+            const network = this.networks.get('ETH');
             const startBlock = Math.floor(Date.now() / 1000 - 24 * 60 * 60) / 12; // Rough estimate
             
             const response = await fetch(
-                `https://api.etherscan.io/api?module=account&action=txlist&address=${address}&startblock=${Math.floor(startBlock)}&endblock=latest&sort=desc&apikey=${apiKey}`
+                `https://api.etherscan.io/v2/api?chainid=${network.chainId}&module=account&action=txlist&address=${address}&startblock=${Math.floor(startBlock)}&endblock=latest&sort=desc&apikey=${apiKey}`
             );
 
             if (!response.ok) return [];
@@ -1065,12 +1055,13 @@ class BlockchainMonitoringService {
         }
     }
 
-    // BNB Smart Chain methods (similar to Ethereum)
+    // BNB Smart Chain methods (using V2 API)
     async getBNBTransaction(txHash) {
         try {
-            const apiKey = process.env.BSCSCAN_API_KEY || 'YourApiKeyToken';
+            const apiKey = process.env.ETHERSCAN_API_KEY || 'YourApiKeyToken';
+            const network = this.networks.get('BNB');
             const response = await fetch(
-                `https://api.bscscan.com/api?module=proxy&action=eth_getTransactionByHash&txhash=${txHash}&apikey=${apiKey}`
+                `https://api.etherscan.io/v2/api?chainid=${network.chainId}&module=proxy&action=eth_getTransactionByHash&txhash=${txHash}&apikey=${apiKey}`
             );
 
             // Similar to Ethereum implementation
@@ -1083,9 +1074,10 @@ class BlockchainMonitoringService {
 
     async getBNBAddressTransactions(address, sinceTimestamp) {
         try {
-            const apiKey = process.env.BSCSCAN_API_KEY || 'YourApiKeyToken';
+            const apiKey = process.env.ETHERSCAN_API_KEY || 'YourApiKeyToken';
+            const network = this.networks.get('BNB');
             const response = await fetch(
-                `https://api.bscscan.com/api?module=account&action=txlist&address=${address}&sort=desc&apikey=${apiKey}`
+                `https://api.etherscan.io/v2/api?chainid=${network.chainId}&module=account&action=txlist&address=${address}&sort=desc&apikey=${apiKey}`
             );
 
             return await this.parseEVMAddressTransactions(response, address, sinceTimestamp, 18);
@@ -1095,12 +1087,13 @@ class BlockchainMonitoringService {
         }
     }
 
-    // Polygon methods (similar to Ethereum)
+    // Polygon methods (using V2 API)
     async getPolygonTransaction(txHash) {
         try {
-            const apiKey = process.env.POLYGONSCAN_API_KEY || 'YourApiKeyToken';
+            const apiKey = process.env.ETHERSCAN_API_KEY || 'YourApiKeyToken';
+            const network = this.networks.get('MATIC');
             const response = await fetch(
-                `https://api.polygonscan.com/api?module=proxy&action=eth_getTransactionByHash&txhash=${txHash}&apikey=${apiKey}`
+                `https://api.etherscan.io/v2/api?chainid=${network.chainId}&module=proxy&action=eth_getTransactionByHash&txhash=${txHash}&apikey=${apiKey}`
             );
 
             return await this.parseEVMTransaction(response, txHash, 18);
@@ -1112,9 +1105,10 @@ class BlockchainMonitoringService {
 
     async getPolygonAddressTransactions(address, sinceTimestamp) {
         try {
-            const apiKey = process.env.POLYGONSCAN_API_KEY || 'YourApiKeyToken';
+            const apiKey = process.env.ETHERSCAN_API_KEY || 'YourApiKeyToken';
+            const network = this.networks.get('MATIC');
             const response = await fetch(
-                `https://api.polygonscan.com/api?module=account&action=txlist&address=${address}&sort=desc&apikey=${apiKey}`
+                `https://api.etherscan.io/v2/api?chainid=${network.chainId}&module=account&action=txlist&address=${address}&sort=desc&apikey=${apiKey}`
             );
 
             return await this.parseEVMAddressTransactions(response, address, sinceTimestamp, 18);
