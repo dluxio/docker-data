@@ -92,13 +92,10 @@ class BlockchainMonitoringService {
         }
 
         if (missingKeys.length > 0) {
-            Logger.warn('Missing or invalid API keys detected', { missingKeys });
             throw new InvalidConfigurationError(
                 `Missing required API keys: ${missingKeys.join(', ')}. Please set these environment variables.`
             );
         }
-
-        Logger.info('Configuration validation passed - using Etherscan V2 API');
     }
 
     initializeNetworks() {
@@ -181,20 +178,16 @@ class BlockchainMonitoringService {
             finality_type: 'finalized' // Solana uses finalized vs confirmed
         });
 
-        Logger.info('Network configurations initialized', { 
-            networks: Array.from(this.networks.keys()) 
-        });
+        // Network configurations initialized
     }
 
     // Start monitoring all active payment channels
     async startMonitoring() {
         if (this.isRunning) {
-            Logger.warn('Blockchain monitoring already running');
             return;
         }
 
         this.isRunning = true;
-        Logger.info('🔍 Starting blockchain monitoring service...');
 
         try {
             // Monitor each network
@@ -211,7 +204,7 @@ class BlockchainMonitoringService {
                 }
             }, 30000); // Check every 30 seconds
 
-            Logger.info('✅ Blockchain monitoring service started successfully');
+            // Blockchain monitoring service started
         } catch (error) {
             this.isRunning = false;
             Logger.error('Failed to start blockchain monitoring service', { error: error.message });
@@ -226,15 +219,12 @@ class BlockchainMonitoringService {
         // Clear all network monitoring intervals
         for (const [network, interval] of this.monitoringIntervals) {
             clearInterval(interval);
-            Logger.debug('Stopped monitoring interval', { network });
         }
         this.monitoringIntervals.clear();
 
         if (this.globalMonitoringInterval) {
             clearInterval(this.globalMonitoringInterval);
         }
-
-        Logger.info('🛑 Blockchain monitoring service stopped');
     }
 
     // Start monitoring for a specific network
@@ -244,7 +234,6 @@ class BlockchainMonitoringService {
             const currentBlock = await this.getCurrentBlockHeight(symbol);
             if (currentBlock) {
                 this.lastBlockChecked.set(symbol, currentBlock);
-                Logger.info('Initialized block height', { network: symbol, blockHeight: currentBlock });
             }
 
             const interval = setInterval(async () => {
@@ -259,11 +248,6 @@ class BlockchainMonitoringService {
             }, network.block_time * 1000); // Check based on block time
 
             this.monitoringIntervals.set(symbol, interval);
-            Logger.info('Started network monitoring', { 
-                network: network.name, 
-                symbol, 
-                checkInterval: network.block_time 
-            });
         } catch (error) {
             Logger.error('Failed to start network monitoring', { 
                 network: symbol, 
@@ -282,7 +266,6 @@ class BlockchainMonitoringService {
         try {
             const currentBlock = await this.getCurrentBlockHeight(symbol);
             if (!currentBlock) {
-                Logger.warn('Unable to get current block height', { network: symbol });
                 return;
             }
 
@@ -290,12 +273,6 @@ class BlockchainMonitoringService {
             
             // Only scan if there are new blocks
             if (currentBlock > lastChecked) {
-                Logger.debug('New blocks detected', { 
-                    network: symbol, 
-                    lastChecked, 
-                    currentBlock,
-                    newBlocks: currentBlock - lastChecked
-                });
 
                 // Get monitored addresses for this network
                 const monitoredAddresses = await this.getMonitoredAddresses(symbol);
@@ -354,12 +331,6 @@ class BlockchainMonitoringService {
 
     // Scan blocks for transactions to monitored addresses
     async scanBlocksForTransactions(symbol, network, fromBlock, toBlock, addresses) {
-        Logger.debug('Scanning blocks for transactions', { 
-            network: symbol, 
-            fromBlock, 
-            toBlock, 
-            addressCount: addresses.length 
-        });
 
         // For now, fall back to address-based scanning
         // This could be enhanced with actual block scanning for supported networks
@@ -406,12 +377,7 @@ class BlockchainMonitoringService {
                     const isMatch = await this.verifyTransactionMatch(channel, transaction, network);
                     
                     if (isMatch) {
-                        Logger.info('Discovered matching transaction', { 
-                            channelId: channel.channel_id,
-                            txHash: transaction.hash,
-                            amount: transaction.amount,
-                            cryptoType
-                        });
+                        console.log(`💰 Payment found for ${channel.crypto_type} channel ${channel.channel_id}: ${transaction.amount} ${channel.crypto_type} (${transaction.hash})`);
                         
                         await this.processPaymentFound(channel, transaction);
                         break; // Only process once per transaction
@@ -503,8 +469,6 @@ class BlockchainMonitoringService {
                     ORDER BY created_at ASC
                 `);
 
-                Logger.debug('Monitoring active channels', { channelCount: result.rows.length });
-
                 for (const channel of result.rows) {
                     await this.checkChannelPayment(channel);
                 }
@@ -524,10 +488,6 @@ class BlockchainMonitoringService {
     async checkChannelPayment(channel) {
         const network = this.networks.get(channel.crypto_type);
         if (!network) {
-            Logger.warn('Network not supported for monitoring', { 
-                cryptoType: channel.crypto_type,
-                channelId: channel.channel_id 
-            });
             return;
         }
 
@@ -536,10 +496,6 @@ class BlockchainMonitoringService {
 
             // Prevent duplicate processing
             if (channel.tx_hash && this.processedTransactions.has(channel.tx_hash)) {
-                Logger.debug('Transaction already processed', { 
-                    channelId: channel.channel_id,
-                    txHash: channel.tx_hash 
-                });
                 return;
             }
 
@@ -585,23 +541,10 @@ class BlockchainMonitoringService {
     // Verify if a transaction matches the payment channel requirements
     async verifyTransactionMatch(channel, transaction, network) {
         try {
-            Logger.debug('Verifying transaction match', {
-                channelId: channel.channel_id,
-                txHash: transaction.hash,
-                expectedAmount: channel.amount_crypto,
-                actualAmount: transaction.amount,
-                expectedAddress: channel.payment_address,
-                actualAddress: transaction.to
-            });
 
             // Check minimum amount (prevent dust attacks)
             const actualAmount = parseFloat(transaction.amount);
             if (actualAmount < network.min_amount) {
-                Logger.debug('Transaction amount below network minimum', {
-                    channelId: channel.channel_id,
-                    actualAmount,
-                    minAmount: network.min_amount
-                });
                 return false;
             }
 
@@ -610,13 +553,6 @@ class BlockchainMonitoringService {
             const tolerance = expectedAmount * 0.05; // 5% tolerance
             
             if (actualAmount < (expectedAmount - tolerance)) {
-                Logger.debug('Amount mismatch', {
-                    channelId: channel.channel_id,
-                    expectedAmount,
-                    actualAmount,
-                    tolerance,
-                    shortfall: expectedAmount - actualAmount
-                });
                 return false;
             }
 
@@ -633,31 +569,16 @@ class BlockchainMonitoringService {
             }
 
             if (!addressMatch) {
-                Logger.debug('Address mismatch', {
-                    channelId: channel.channel_id,
-                    expectedAddress: channel.payment_address,
-                    actualAddress: transaction.to,
-                    allOutputs: transaction.allOutputs
-                });
                 return false;
             }
 
             // Enhanced memo checking
             if (channel.memo) {
                 if (!transaction.memo) {
-                    Logger.debug('Expected memo but transaction has none', {
-                        channelId: channel.channel_id,
-                        expectedMemo: channel.memo
-                    });
                     return false;
                 }
                 
                 if (transaction.memo.trim() !== channel.memo.trim()) {
-                    Logger.debug('Memo mismatch', {
-                        channelId: channel.channel_id,
-                        expectedMemo: channel.memo,
-                        actualMemo: transaction.memo
-                    });
                     return false;
                 }
             }
@@ -668,40 +589,23 @@ class BlockchainMonitoringService {
             const timeBuffer = 60 * 1000; // 1 minute buffer for clock skew
             
             if (txTime < (channelTime.getTime() - timeBuffer)) {
-                Logger.debug('Transaction predates channel creation', {
-                    channelId: channel.channel_id,
-                    txTime: txTime.toISOString(),
-                    channelTime: channelTime.toISOString()
-                });
                 return false;
             }
 
             // Check confirmations meet requirements
             const requiredConfirmations = network.confirmations_required;
             if (transaction.confirmations < requiredConfirmations) {
-                Logger.debug('Insufficient confirmations', {
-                    channelId: channel.channel_id,
-                    actualConfirmations: transaction.confirmations,
-                    requiredConfirmations
-                });
                 // Still return true for processing, but mark as 'confirming'
             }
 
             // Additional security checks for double-spending prevention
             if (await this.checkForDoubleSpend(channel, transaction)) {
-                Logger.warn('Potential double-spend detected', {
+                Logger.error('Potential double-spend detected', {
                     channelId: channel.channel_id,
                     txHash: transaction.hash
                 });
                 return false;
             }
-
-            Logger.info('Transaction verification passed', {
-                channelId: channel.channel_id,
-                txHash: transaction.hash,
-                amount: actualAmount,
-                confirmations: transaction.confirmations
-            });
 
             return true;
         } catch (error) {
@@ -896,7 +800,7 @@ class BlockchainMonitoringService {
                         }
                     }
                 } catch (memoError) {
-                    Logger.debug('Could not decode OP_RETURN memo', { txHash, error: memoError.message });
+                    // Could not decode OP_RETURN memo
                 }
             }
 
