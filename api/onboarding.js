@@ -1076,8 +1076,12 @@ class RCMonitoringService {
 
     async fetchRCCosts() {
         try {
-    
-            const response = await fetch(this.rcApiUrl);
+            console.log(`🔍 Fetching RC costs from ${this.rcApiUrl}...`);
+            
+            const response = await fetch(this.rcApiUrl, {
+                timeout: 10000,
+                headers: { 'User-Agent': 'DLUX-Onboarding/1.0' }
+            });
 
             if (!response.ok) {
                 throw new Error(`RC API error: ${response.status} ${response.statusText}`);
@@ -1100,7 +1104,15 @@ class RCMonitoringService {
                 };
             });
 
-
+            console.log(`✅ Successfully fetched RC costs: ${data.costs.length} operations`);
+            
+            // Log key operations for monitoring
+            const keyOps = ['claim_account_operation', 'create_claimed_account_operation', 'account_create_operation'];
+            keyOps.forEach(op => {
+                if (costs[op]) {
+                    console.log(`  ${op}: ${(costs[op].rc_needed / 1e12).toFixed(2)}T RC`);
+                }
+            });
 
             return {
                 timestamp: apiTimestamp,
@@ -1108,7 +1120,7 @@ class RCMonitoringService {
             };
 
         } catch (error) {
-            console.error('Error fetching RC costs:', error);
+            console.error('❌ Error fetching RC costs:', error);
             throw error;
         }
     }
@@ -1325,29 +1337,32 @@ class HiveAccountService {
     async claimAccountCreationTokens() {
         try {
             if (!this.creatorKey) {
-                console.log('No creator key available for claiming ACTs');
+                console.warn('⚠️  No creator key available for claiming ACTs');
                 return false;
             }
+
+            console.log(`🚀 Attempting to claim Account Creation Token...`);
 
             // Get real-time RC costs for claim_account operation
             const rcCosts = await rcMonitoringService.getLatestRCCosts();
             const claimAccountCost = rcCosts['claim_account_operation'];
 
+            let rcNeeded;
             if (!claimAccountCost) {
+                console.warn('⚠️  No claim_account_operation RC cost available, using fallback');
                 // Fallback to a conservative estimate based on current data
-                const rcNeeded = 13686780357957; // From the API data
-                await this.checkResourceCredits();
-
-                if (this.resourceCredits < rcNeeded) {
-                    return false;
-                }
+                rcNeeded = 13686780357957; // From the API data
             } else {
-                const rcNeeded = claimAccountCost.rc_needed;
-                await this.checkResourceCredits();
+                rcNeeded = claimAccountCost.rc_needed;
+                console.log(`💰 RC cost to claim ACT: ${(rcNeeded / 1e12).toFixed(2)}T RC`);
+            }
 
-                if (this.resourceCredits < rcNeeded) {
-                    return false;
-                }
+            await this.checkResourceCredits();
+            console.log(`⚡ Current RCs: ${(this.resourceCredits / 1e12).toFixed(2)}T RC`);
+
+            if (this.resourceCredits < rcNeeded) {
+                console.log(`❌ Insufficient RCs to claim ACT. Need: ${(rcNeeded / 1e12).toFixed(2)}T RC, Have: ${(this.resourceCredits / 1e12).toFixed(2)}T RC`);
+                return false;
             }
 
             // Create claim_account operation
@@ -1404,7 +1419,12 @@ class HiveAccountService {
                 throw new Error(`Broadcast error: ${broadcastResult.error.message}`);
             }
 
-
+            const txId = broadcastResult.result.id;
+            const blockNum = broadcastResult.result.block_num;
+            
+            console.log(`✅ Account Creation Token claimed successfully!`);
+            console.log(`  Transaction: ${txId}`);
+            console.log(`  Block: ${blockNum}`);
 
             // Update ACT balance in database
             this.actBalance += 1;
@@ -1423,6 +1443,7 @@ class HiveAccountService {
                 client.release();
             }
 
+            console.log(`🎉 New ACT balance: ${this.actBalance}`);
             return true;
 
         } catch (error) {
@@ -1795,69 +1816,160 @@ class HiveAccountService {
 
     async performProactiveACTClaiming() {
         try {
+            console.log(`🔍 Proactive ACT claiming check at ${new Date().toISOString()}`);
+            
             // Get real-time RC costs
             const rcCosts = await rcMonitoringService.getLatestRCCosts();
             const claimCost = rcCosts['claim_account_operation'];
             
             if (!claimCost) {
-                return;
+                console.warn('⚠️  No claim_account_operation RC cost available, using fallback');
+                // Use fallback RC cost from recent data
+                const fallbackRcCost = 13686780357957; // Conservative estimate from API data
+                claimCost = { rc_needed: fallbackRcCost, hp_needed: 6.84 };
             }
 
             // Update current balances
             await this.updateACTBalance();
             await this.checkResourceCredits();
 
-            // Calculate thresholds
-            const minimumACTBalance = 5; // Keep minimum 5 ACTs
-            const optimalACTBalance = 10; // Target 10 ACTs
-            const rcThresholdMultiplier = 2.5; // Claim when we have 2.5x the RC cost
-            const rcThreshold = claimCost.rc_needed * rcThresholdMultiplier;
+            console.log(`📊 Current status: ACTs: ${this.actBalance}, RCs: ${(this.resourceCredits / 1e12).toFixed(2)}T RC`);
+            console.log(`💰 Claim cost: ${(claimCost.rc_needed / 1e12).toFixed(2)}T RC (${claimCost.hp_needed} HP equiv)`);
+
+            // Calculate thresholds - more aggressive to maintain buffer
+            const minimumACTBalance = 3; // Keep minimum 3 ACTs (reduced from 5)
+            const optimalACTBalance = 8; // Target 8 ACTs (reduced from 10)
+            const rcBufferMultiplier = 3.0; // Keep 3x claim cost as buffer (was 2.5x)
+            const rcThreshold = claimCost.rc_needed * rcBufferMultiplier;
+
+            console.log(`🎯 Thresholds: Min ACTs: ${minimumACTBalance}, Optimal: ${optimalACTBalance}`);
+            console.log(`⚡ RC Threshold: ${(rcThreshold / 1e12).toFixed(2)}T RC (${rcBufferMultiplier}x claim cost)`);
 
             // Check if we should claim ACTs
-            const shouldClaim = (
+            const shouldClaimMinimum = (
                 this.actBalance < minimumACTBalance && 
                 this.resourceCredits >= rcThreshold
-            ) || (
+            );
+            
+            const shouldClaimOptimal = (
                 this.actBalance < optimalACTBalance && 
-                this.resourceCredits >= (claimCost.rc_needed * 5) // Much higher threshold for optimal balance
+                this.resourceCredits >= (claimCost.rc_needed * 6) // Higher threshold for optimal balance
             );
 
-            if (shouldClaim) {
-                
+            const shouldClaim = shouldClaimMinimum || shouldClaimOptimal;
 
-                // Attempt to claim multiple ACTs if we have abundant RCs
-                const maxClaims = Math.min(
-                    optimalACTBalance - this.actBalance,
-                    Math.floor(this.resourceCredits / claimCost.rc_needed)
-                );
+            if (shouldClaim) {
+                console.log(`✅ Should claim ACTs: Min check: ${shouldClaimMinimum}, Optimal check: ${shouldClaimOptimal}`);
+
+                // Calculate how many we can safely claim
+                const rcAfterBuffer = this.resourceCredits - (claimCost.rc_needed * 2); // Keep 2x claim cost as safety buffer
+                const maxClaimsByRc = Math.floor(rcAfterBuffer / claimCost.rc_needed);
+                const maxClaimsByTarget = optimalACTBalance - this.actBalance;
+                const maxClaims = Math.min(maxClaimsByRc, maxClaimsByTarget, 5); // Max 5 at once
+
+                console.log(`📈 Can claim: ${maxClaims} ACTs (RC limit: ${maxClaimsByRc}, Target limit: ${maxClaimsByTarget})`);
 
                 let claimed = 0;
                 for (let i = 0; i < maxClaims; i++) {
+                    console.log(`🚀 Attempting to claim ACT ${i + 1}/${maxClaims}`);
                     const success = await this.claimAccountCreationTokens();
                     if (success) {
                         claimed++;
-
+                        console.log(`✅ Successfully claimed ACT ${claimed}/${maxClaims}`);
                         
                         // Small delay between claims
                         await new Promise(resolve => setTimeout(resolve, 5000));
                         
                         // Check if we still have enough RCs for another claim
                         await this.checkResourceCredits();
-                        if (this.resourceCredits < claimCost.rc_needed) {
+                        const rcRemaining = this.resourceCredits - (claimCost.rc_needed * 2); // Keep buffer
+                        if (rcRemaining < claimCost.rc_needed) {
+                            console.log(`⚠️  Stopping claims - insufficient RCs for another claim (${(rcRemaining / 1e12).toFixed(2)}T RC remaining)`);
                             break;
                         }
                     } else {
+                        console.error(`❌ Failed to claim ACT ${i + 1}/${maxClaims}`);
                         break;
                     }
                 }
 
+                if (claimed > 0) {
+                    console.log(`🎉 Successfully claimed ${claimed} ACTs. New balance: ${this.actBalance}`);
+                } else {
+                    console.warn(`⚠️  Failed to claim any ACTs despite meeting conditions`);
+                }
+            } else {
+                console.log(`ℹ️  No ACT claiming needed. ACTs: ${this.actBalance}/${optimalACTBalance}, RCs: ${(this.resourceCredits / 1e12).toFixed(2)}T/${(rcThreshold / 1e12).toFixed(2)}T`);
             }
         } catch (error) {
-            console.error('Error in proactive ACT claiming:', error);
+            console.error('❌ Error in proactive ACT claiming:', error);
+        }
+    }
+
+    async performDailyHealthCheck() {
+        try {
+            console.log('🔍 Performing daily health check...');
+            
+            // Update current status
+            await this.updateACTBalance();
+            await this.checkResourceCredits();
+            
+            // Get RC costs
+            const rcCosts = await rcMonitoringService.getLatestRCCosts();
+            const claimCost = rcCosts['claim_account_operation'] || { rc_needed: 13686780357957, hp_needed: 6.84 };
+            
+            // Calculate health metrics
+            const claimsRemaining = Math.floor(this.resourceCredits / claimCost.rc_needed);
+            const daysSustainable = claimsRemaining / 5; // Assuming 5 ACTs needed per day max
+            const isHealthy = claimsRemaining >= 10; // Need at least 10 claims worth of RCs
+            
+            console.log('📈 Daily Health Report:');
+            console.log(`  ACT Balance: ${this.actBalance}`);
+            console.log(`  Resource Credits: ${(this.resourceCredits / 1e12).toFixed(2)}T RC`);
+            console.log(`  Claims Remaining: ${claimsRemaining}`);
+            console.log(`  Days Sustainable: ${daysSustainable.toFixed(1)}`);
+            console.log(`  Status: ${isHealthy ? '✅ HEALTHY' : '⚠️  NEEDS ATTENTION'}`);
+            
+            // Log to database for admin monitoring
+            const client = await pool.connect();
+            try {
+                await client.query(`
+                    INSERT INTO act_balance (creator_account, act_balance, resource_credits, last_rc_check)
+                    VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+                    ON CONFLICT (creator_account)
+                    DO UPDATE SET 
+                        act_balance = EXCLUDED.act_balance,
+                        resource_credits = EXCLUDED.resource_credits,
+                        last_rc_check = EXCLUDED.last_rc_check,
+                        updated_at = CURRENT_TIMESTAMP
+                `, [this.creatorUsername, this.actBalance, this.resourceCredits]);
+            } finally {
+                client.release();
+            }
+            
+            // If not healthy, try aggressive claiming
+            if (!isHealthy && claimsRemaining >= 3) {
+                console.log('⚠️  Health check failed - attempting emergency ACT claiming');
+                await this.performProactiveACTClaiming();
+            }
+            
+            // If critically low, warn
+            if (claimsRemaining < 3) {
+                console.error(`🚨 CRITICAL: Only ${claimsRemaining} claims worth of RCs remaining!`);
+                console.error(`🚨 Account @${this.creatorUsername} needs immediate RC replenishment`);
+            }
+            
+        } catch (error) {
+            console.error('❌ Error in daily health check:', error);
         }
     }
 
     startMonitoring() {
+        console.log(`🚀 Starting HIVE Account Service monitoring for @${this.creatorUsername}`);
+        
+        // Initial health check
+        this.performDailyHealthCheck();
+        
         // Check ACT balance every 10 minutes
         setInterval(() => {
             this.updateACTBalance();
@@ -1873,21 +1985,28 @@ class HiveAccountService {
         setInterval(async () => {
             await this.performProactiveACTClaiming();
         }, 15 * 60 * 1000);
+        
+        // Daily health check (every 24 hours)
+        setInterval(async () => {
+            await this.performDailyHealthCheck();
+        }, 24 * 60 * 60 * 1000);
 
         // Legacy hourly check (kept for backward compatibility and as fallback)
         setInterval(async () => {
-            if (this.actBalance < 3) { // Keep a minimum of 3 ACTs
+            if (this.actBalance < 2) { // Emergency threshold - try to claim if very low
+                console.log('⚠️  Emergency ACT check - balance below 2');
                 // Check if we have enough RCs based on real-time costs
                 const rcCosts = await rcMonitoringService.getLatestRCCosts();
                 const claimCost = rcCosts['claim_account_operation'];
 
-                if (claimCost && this.resourceCredits >= claimCost.rc_needed) {
+                if (claimCost && this.resourceCredits >= (claimCost.rc_needed * 2)) {
+                    console.log('🚀 Emergency ACT claim attempt');
                     await this.claimAccountCreationTokens();
                 }
             }
         }, 60 * 60 * 1000);
 
-
+        console.log(`✅ HIVE Account Service monitoring started for @${this.creatorUsername}`);
     }
 }
 
@@ -2827,6 +2946,58 @@ router.post('/api/onboarding/admin/process-pending', adminAuthMiddleware, async 
         res.status(500).json({
             success: false,
             error: 'Failed to process pending creations',
+            details: error.message
+        });
+    }
+});
+
+// 3d. Admin endpoint - Trigger health check and detailed status
+router.post('/api/onboarding/admin/health-check', adminAuthMiddleware, async (req, res) => {
+    try {
+        // Run health check
+        await hiveAccountService.performDailyHealthCheck();
+        
+        // Get current status details
+        await hiveAccountService.updateACTBalance();
+        await hiveAccountService.checkResourceCredits();
+        
+        const rcCosts = await rcMonitoringService.getLatestRCCosts();
+        const claimCost = rcCosts['claim_account_operation'] || { rc_needed: 13686780357957, hp_needed: 6.84 };
+        
+        const claimsRemaining = Math.floor(hiveAccountService.resourceCredits / claimCost.rc_needed);
+        const daysSustainable = claimsRemaining / 5;
+        const isHealthy = claimsRemaining >= 10;
+        
+        res.json({
+            success: true,
+            healthCheck: {
+                timestamp: new Date().toISOString(),
+                account: hiveAccountService.creatorUsername,
+                status: isHealthy ? 'HEALTHY' : claimsRemaining >= 3 ? 'NEEDS_ATTENTION' : 'CRITICAL',
+                metrics: {
+                    actBalance: hiveAccountService.actBalance,
+                    resourceCredits: hiveAccountService.resourceCredits,
+                    resourceCreditsFormatted: `${(hiveAccountService.resourceCredits / 1e12).toFixed(2)}T RC`,
+                    claimsRemaining,
+                    daysSustainable: Math.round(daysSustainable * 10) / 10,
+                    claimCost: {
+                        rcNeeded: claimCost.rc_needed,
+                        rcNeededFormatted: `${(claimCost.rc_needed / 1e12).toFixed(2)}T RC`,
+                        hpEquivalent: claimCost.hp_needed
+                    }
+                },
+                recommendations: isHealthy ? 
+                    ['System is healthy', 'Continue normal operations'] :
+                    claimsRemaining >= 3 ?
+                        ['ACT claiming should be more aggressive', 'Consider powering up more HIVE'] :
+                        ['URGENT: Power up HIVE immediately', 'Risk of service interruption']
+            }
+        });
+    } catch (error) {
+        console.error('Error running health check:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to run health check',
             details: error.message
         });
     }
@@ -4442,8 +4613,18 @@ const initializeOnboardingService = async () => {
         rcMonitoringService.startScheduledUpdates();
 
         // Initialize and start HIVE account service
+        console.log('🔍 Initializing HIVE account service...');
         await hiveAccountService.updateACTBalance();
         await hiveAccountService.checkResourceCredits();
+        
+        // Log initial status
+        const rcCosts = await rcMonitoringService.getLatestRCCosts();
+        const claimCost = rcCosts['claim_account_operation'];
+        if (claimCost) {
+            const claimsRemaining = Math.floor(hiveAccountService.resourceCredits / claimCost.rc_needed);
+            console.log(`📊 Initial status: ACTs: ${hiveAccountService.actBalance}, RCs: ${(hiveAccountService.resourceCredits / 1e12).toFixed(2)}T (${claimsRemaining} claims remaining)`);
+        }
+        
         hiveAccountService.startMonitoring();
 
         // Start blockchain monitoring service
