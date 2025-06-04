@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const axios = require('axios');
 const cors = require('cors');
 const { PaymentChannelMonitor } = require('./wsmonitor');
+const blockchainMonitor = require('./blockchain-monitor');
 const hiveTx = require('hive-tx');
 const config = require('../config');
 
@@ -298,14 +299,29 @@ const setupDatabase = async () => {
 
 // Shared payment addresses (reused across all payments)
 const PAYMENT_ADDRESSES = {
-    SOL: process.env.SOL_PAYMENT_ADDRESS || 'HLPSpmHEh9dvHhqhCtvutuffjfhxaFzFAvYNxRdTasqx', // Example SOL address for development
-    ETH: process.env.ETH_PAYMENT_ADDRESS || '0x742e637BC6dc9e0dA3Bb4CD0cE2BE4e9d5fD8a6B', // Example ETH address for development
-    MATIC: process.env.MATIC_PAYMENT_ADDRESS || '0x742e637BC6dc9e0dA3Bb4CD0cE2BE4e9d5fD8a6B', // Example MATIC address for development
-    BNB: process.env.BNB_PAYMENT_ADDRESS || '0x742e637BC6dc9e0dA3Bb4CD0cE2BE4e9d5fD8a6B' // Example BNB address for development
+    BTC: process.env.BTC_PAYMENT_ADDRESS || '', // Example BTC address for development
+    SOL: process.env.SOL_PAYMENT_ADDRESS || '', // Example SOL address for development
+    ETH: process.env.ETH_PAYMENT_ADDRESS || '', // Example ETH address for development
+    MATIC: process.env.MATIC_PAYMENT_ADDRESS || '', // Example MATIC address for development
+    BNB: process.env.BNB_PAYMENT_ADDRESS || '' // Example BNB address for development
 };
 
 // Crypto configuration with network details and payment channel support
 const CRYPTO_CONFIG = {
+    BTC: {
+        name: 'Bitcoin',
+        coingecko_id: 'bitcoin',
+        decimals: 8,
+        avg_transfer_fee: 0.0001, // Variable based on network congestion
+        fallback_price_usd: 50000,
+        payment_type: 'address', // Uses address-based payments
+        confirmations_required: 2,
+        block_time_seconds: 10 * 60, // 10 minutes
+        rpc_endpoints: [
+            'https://blockstream.info/api',
+            'https://api.blockcypher.com/v1/btc/main'
+        ]
+    },
     SOL: {
         name: 'Solana',
         coingecko_id: 'solana',
@@ -440,6 +456,7 @@ class PricingService {
 
             // Fallback pricing
             return {
+                BTC: { price: 50000, market_cap: null, volume_24h: null, change_24h: null },
                 SOL: { price: 100, market_cap: null, volume_24h: null, change_24h: null },
                 ETH: { price: 2500, market_cap: null, volume_24h: null, change_24h: null },
                 MATIC: { price: 0.8, market_cap: null, volume_24h: null, change_24h: null },
@@ -1209,10 +1226,7 @@ class HiveAccountService {
                             key_auths: [[publicKeys.posting, 1]]
                         },
                         memo_key: publicKeys.memo,
-                        json_metadata: JSON.stringify({
-                            created_by: 'dlux.io',
-                            creation_method: 'crypto_payment'
-                        })
+                        json_metadata: ""
                     }
                 ];
             }
@@ -2152,16 +2166,18 @@ router.get('/api/onboarding/pricing', async (req, res) => {
         res.status(500).json({
             success: false,
             error: 'Unable to fetch current pricing',
-            fallback: {
+                            fallback: {
                 hive_price_usd: 0.30,
                 account_creation_cost_usd: 3.00,
                 crypto_rates: {
+                    BTC: { price_usd: 50000, amount_needed: 0.00006, total_amount: 0.00016, transfer_fee: 0.0001 },
                     SOL: { price_usd: 100, amount_needed: 0.03, total_amount: 0.030005, transfer_fee: 0.000005 },
                     ETH: { price_usd: 2500, amount_needed: 0.0012, total_amount: 0.0032, transfer_fee: 0.002 },
                     MATIC: { price_usd: 0.8, amount_needed: 3.75, total_amount: 3.76, transfer_fee: 0.01 },
                     BNB: { price_usd: 300, amount_needed: 0.01, total_amount: 0.0105, transfer_fee: 0.0005 }
                 },
                 transfer_costs: {
+                    BTC: { avg_fee_crypto: 0.0001, avg_fee_usd: 5.0, network_congestion: 'normal' },
                     SOL: { avg_fee_crypto: 0.000005, avg_fee_usd: 0.0005, network_congestion: 'normal' },
                     ETH: { avg_fee_crypto: 0.002, avg_fee_usd: 5.0, network_congestion: 'normal' },
                     MATIC: { avg_fee_crypto: 0.01, avg_fee_usd: 0.008, network_congestion: 'normal' },
@@ -2555,6 +2571,74 @@ router.get('/api/onboarding/admin/rc-costs', adminAuthMiddleware, async (req, re
         res.status(500).json({
             success: false,
             error: 'Failed to fetch RC costs'
+        });
+    }
+});
+
+// 3e. Admin endpoint - Blockchain monitoring status
+router.get('/api/onboarding/admin/blockchain-status', adminAuthMiddleware, async (req, res) => {
+    try {
+        const status = blockchainMonitor.getStatus();
+        
+        // Get recent payment confirmations
+        const client = await pool.connect();
+        try {
+            const recentConfirmations = await client.query(`
+                SELECT 
+                    pc.channel_id,
+                    pc.crypto_type,
+                    pc.amount_crypto,
+                    pc.status,
+                    pf.tx_hash,
+                    pf.confirmations,
+                    pf.amount_received,
+                    pf.detected_at
+                FROM payment_channels pc
+                LEFT JOIN payment_confirmations pf ON pc.channel_id = pf.channel_id
+                WHERE pc.created_at >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
+                AND pf.detected_at IS NOT NULL
+                ORDER BY pf.detected_at DESC
+                LIMIT 20
+            `);
+
+            // Get monitoring statistics
+            const stats = await client.query(`
+                SELECT 
+                    crypto_type,
+                    status,
+                    COUNT(*) as count,
+                    AVG(amount_crypto) as avg_amount,
+                    SUM(amount_usd) as total_usd
+                FROM payment_channels 
+                WHERE created_at >= CURRENT_TIMESTAMP - INTERVAL '7 days'
+                GROUP BY crypto_type, status
+                ORDER BY crypto_type, status
+            `);
+
+            res.json({
+                success: true,
+                blockchainMonitoring: {
+                    status: status,
+                    supportedNetworks: Object.keys(CRYPTO_CONFIG),
+                    paymentAddresses: PAYMENT_ADDRESSES,
+                    recentDetections: recentConfirmations.rows,
+                    weeklyStats: stats.rows.map(row => ({
+                        cryptoType: row.crypto_type,
+                        status: row.status,
+                        count: parseInt(row.count),
+                        avgAmount: parseFloat(row.avg_amount || 0),
+                        totalUsd: parseFloat(row.total_usd || 0)
+                    }))
+                }
+            });
+        } finally {
+            client.release();
+        }
+    } catch (error) {
+        console.error('Error fetching blockchain monitoring status:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch blockchain monitoring status'
         });
     }
 });
@@ -3597,6 +3681,44 @@ router.post('/api/onboarding/request/accept/:requestId', async (req, res) => {
     }
 });
 
+// 6b. Manual transaction verification endpoint
+router.post('/api/onboarding/payment/verify-transaction', async (req, res) => {
+    try {
+        const { channelId, txHash } = req.body;
+
+        if (!channelId || !txHash) {
+            return res.status(400).json({
+                success: false,
+                error: 'Channel ID and transaction hash are required'
+            });
+        }
+
+        // Verify the transaction using blockchain monitoring service
+        const verificationResult = await blockchainMonitor.manualVerifyTransaction(channelId, txHash);
+
+        if (verificationResult.success) {
+            res.json({
+                success: true,
+                message: 'Transaction verified and payment processed',
+                transaction: verificationResult.transaction,
+                channelId: verificationResult.channel
+            });
+        } else {
+            res.status(400).json({
+                success: false,
+                error: verificationResult.error,
+                details: 'Transaction could not be verified against payment requirements'
+            });
+        }
+    } catch (error) {
+        console.error('Error verifying transaction:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to verify transaction'
+        });
+    }
+});
+
 // 7. Payment monitoring webhook (for external payment processors)
 router.post('/api/onboarding/webhook/payment', async (req, res) => {
     try {
@@ -3771,6 +3893,10 @@ const initializeOnboardingService = async () => {
         await hiveAccountService.checkResourceCredits();
         hiveAccountService.startMonitoring();
         console.log('✓ HIVE Account Service initialized and monitoring started');
+
+        // Start blockchain monitoring service
+        await blockchainMonitor.startMonitoring();
+        console.log('✓ Blockchain monitoring service started');
 
         console.log('DLUX Onboarding Service initialized successfully!');
         console.log(`Supported cryptocurrencies: ${Object.keys(CRYPTO_CONFIG).join(', ')}`);

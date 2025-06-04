@@ -448,7 +448,8 @@ class PaymentChannelMonitor {
             SOL: 1,
             ETH: 2,
             MATIC: 10,
-            BNB: 3
+            BNB: 3,
+            BTC: 1,
         };
         return confirmations[cryptoType] || 1;
     }
@@ -457,19 +458,36 @@ class PaymentChannelMonitor {
         try {
             const client = await pool.connect();
             try {
-                // Update channel with user-provided transaction hash
-                await client.query(
-                    'UPDATE payment_channels SET tx_hash = $1, status = $2 WHERE channel_id = $3',
-                    [txHash, 'confirming', channelId]
-                );
+                // Get the blockchain monitoring service
+                const blockchainMonitor = require('./blockchain-monitor');
+                
+                // First, verify the transaction using blockchain monitoring
+                const verificationResult = await blockchainMonitor.manualVerifyTransaction(channelId, txHash);
+                
+                if (verificationResult.success) {
+                    // Transaction is valid and has been processed
+                    this.broadcastToChannel(channelId, {
+                        type: 'payment_verified',
+                        channelId,
+                        txHash,
+                        message: '✅ Payment verified on blockchain',
+                        transaction: verificationResult.transaction
+                    });
+                } else {
+                    // Transaction couldn't be verified yet, but record it for monitoring
+                    await client.query(
+                        'UPDATE payment_channels SET tx_hash = $1, status = $2 WHERE channel_id = $3',
+                        [txHash, 'confirming', channelId]
+                    );
 
-                // Broadcast update
-                this.broadcastToChannel(channelId, {
-                    type: 'payment_sent_confirmed',
-                    channelId,
-                    txHash,
-                    message: '✅ Payment transaction recorded'
-                });
+                    this.broadcastToChannel(channelId, {
+                        type: 'payment_sent_confirmed',
+                        channelId,
+                        txHash,
+                        message: '⏳ Payment recorded, verifying on blockchain...',
+                        note: 'Transaction will be automatically verified when confirmed'
+                    });
+                }
 
                 // Send updated status
                 await this.sendChannelStatus(channelId);
@@ -482,7 +500,8 @@ class PaymentChannelMonitor {
             console.error('Error handling payment sent:', error);
             this.broadcastToChannel(channelId, {
                 type: 'error',
-                message: 'Failed to record payment transaction'
+                message: 'Failed to process payment transaction',
+                details: error.message
             });
         }
     }
@@ -515,14 +534,21 @@ class PaymentChannelMonitor {
     }
 
     async checkChannelProgress(channelId) {
-        // This would integrate with blockchain monitoring
-        // For now, we'll just send status updates
+        // Integrate with blockchain monitoring
         await this.sendChannelStatus(channelId);
 
-        // TODO: Add actual blockchain monitoring logic here
-        // - Check transaction status on blockchain
-        // - Update confirmations count
-        // - Trigger HIVE account creation when confirmed
+        // The blockchain monitoring service handles:
+        // - Checking transaction status on blockchain
+        // - Updating confirmations count
+        // - Triggering HIVE account creation when confirmed
+        // This method now just sends status updates via WebSocket
+    }
+
+    async checkNetworkForPayments(symbol, network) {
+        // This method is called by the blockchain monitoring service
+        // and should be implemented there, not here
+        // Keeping this stub for compatibility
+        console.log(`Network check for ${symbol} delegated to blockchain monitoring service`);
     }
 
     broadcastToChannel(channelId, message) {
