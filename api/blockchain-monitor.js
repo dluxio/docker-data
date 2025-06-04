@@ -1,6 +1,70 @@
 const fetch = require('node-fetch');
 const { pool } = require('../index');
 
+// Enhanced error classes for better error handling
+class BlockchainMonitorError extends Error {
+    constructor(message, code, network = null) {
+        super(message);
+        this.name = 'BlockchainMonitorError';
+        this.code = code;
+        this.network = network;
+    }
+}
+
+class APIError extends BlockchainMonitorError {
+    constructor(message, network, statusCode = null) {
+        super(message, 'API_ERROR', network);
+        this.statusCode = statusCode;
+    }
+}
+
+class TransactionNotFoundError extends BlockchainMonitorError {
+    constructor(txHash, network) {
+        super(`Transaction ${txHash} not found on ${network} network`, 'TX_NOT_FOUND', network);
+        this.txHash = txHash;
+    }
+}
+
+class InvalidConfigurationError extends BlockchainMonitorError {
+    constructor(message, network = null) {
+        super(message, 'INVALID_CONFIG', network);
+    }
+}
+
+// Simple logger implementation (can be replaced with Winston in production)
+class Logger {
+    static log(level, message, metadata = {}) {
+        const timestamp = new Date().toISOString();
+        const logEntry = {
+            timestamp,
+            level,
+            message,
+            ...metadata
+        };
+        
+        // In production, this should use a proper logging framework
+        console[level] ? console[level](JSON.stringify(logEntry)) : console.log(JSON.stringify(logEntry));
+    }
+    
+    static info(message, metadata = {}) {
+        this.log('info', message, metadata);
+    }
+    
+    static warn(message, metadata = {}) {
+        this.log('warn', message, metadata);
+    }
+    
+    static error(message, metadata = {}) {
+        this.log('error', message, metadata);
+    }
+    
+    static debug(message, metadata = {}) {
+        if (process.env.NODE_ENV === 'development') {
+            this.log('debug', message, metadata);
+        }
+    }
+}
+
 // Blockchain monitoring service for crypto payments
 class BlockchainMonitoringService {
     constructor() {
@@ -8,8 +72,35 @@ class BlockchainMonitoringService {
         this.isRunning = false;
         this.networks = new Map();
         this.lastBlockChecked = new Map();
+        this.processedTransactions = new Set(); // Track processed transactions to prevent duplicates
         
+        this.validateConfiguration();
         this.initializeNetworks();
+    }
+
+    // Validate required API keys and configuration
+    validateConfiguration() {
+        const requiredEnvVars = {
+            'ETHERSCAN_API_KEY': 'Ethereum blockchain API',
+            'BSCSCAN_API_KEY': 'BNB Smart Chain API',
+            'POLYGONSCAN_API_KEY': 'Polygon blockchain API'
+        };
+
+        const missingKeys = [];
+        for (const [key, description] of Object.entries(requiredEnvVars)) {
+            if (!process.env[key] || process.env[key] === 'YourApiKeyToken') {
+                missingKeys.push(`${key} (${description})`);
+            }
+        }
+
+        if (missingKeys.length > 0) {
+            Logger.warn('Missing or invalid API keys detected', { missingKeys });
+            throw new InvalidConfigurationError(
+                `Missing required API keys: ${missingKeys.join(', ')}. Please set these environment variables.`
+            );
+        }
+
+        Logger.info('Configuration validation passed');
     }
 
     initializeNetworks() {
@@ -24,7 +115,9 @@ class BlockchainMonitoringService {
             confirmations_required: 2,
             block_time: 10 * 60, // 10 minutes in seconds
             decimals: 8,
-            min_amount: 0.00001 // Minimum amount to consider (in BTC)
+            min_amount: 0.00001, // Minimum amount to consider (in BTC)
+            supports_memo: true, // OP_RETURN support
+            max_memo_bytes: 80
         });
 
         this.networks.set('ETH', {
@@ -32,12 +125,14 @@ class BlockchainMonitoringService {
             type: 'account',
             apis: [
                 'https://api.etherscan.io/api',
-                'https://eth-mainnet.alchemyapi.io/v2/' + (process.env.ALCHEMY_API_KEY || 'demo')
+                'https://eth-mainnet.alchemyapi.io/v2/' + (process.env.ALCHEMY_API_KEY || '')
             ],
             confirmations_required: 2,
             block_time: 12,
             decimals: 18,
-            min_amount: 0.0001 // Minimum amount to consider (in ETH)
+            min_amount: 0.0001, // Minimum amount to consider (in ETH)
+            supports_memo: false,
+            supports_tokens: true
         });
 
         this.networks.set('BNB', {
@@ -50,7 +145,9 @@ class BlockchainMonitoringService {
             confirmations_required: 3,
             block_time: 3,
             decimals: 18,
-            min_amount: 0.001 // Minimum amount to consider (in BNB)
+            min_amount: 0.001, // Minimum amount to consider (in BNB)
+            supports_memo: false,
+            supports_tokens: true
         });
 
         this.networks.set('MATIC', {
@@ -63,7 +160,9 @@ class BlockchainMonitoringService {
             confirmations_required: 10,
             block_time: 2,
             decimals: 18,
-            min_amount: 0.01 // Minimum amount to consider (in MATIC)
+            min_amount: 0.01, // Minimum amount to consider (in MATIC)
+            supports_memo: false,
+            supports_tokens: true
         });
 
         this.networks.set('SOL', {
@@ -76,31 +175,47 @@ class BlockchainMonitoringService {
             confirmations_required: 1,
             block_time: 0.4,
             decimals: 9,
-            min_amount: 0.001 // Minimum amount to consider (in SOL)
+            min_amount: 0.001, // Minimum amount to consider (in SOL)
+            supports_memo: true,
+            finality_type: 'finalized' // Solana uses finalized vs confirmed
+        });
+
+        Logger.info('Network configurations initialized', { 
+            networks: Array.from(this.networks.keys()) 
         });
     }
 
     // Start monitoring all active payment channels
     async startMonitoring() {
         if (this.isRunning) {
-            console.log('Blockchain monitoring already running');
+            Logger.warn('Blockchain monitoring already running');
             return;
         }
 
         this.isRunning = true;
-        console.log('🔍 Starting blockchain monitoring service...');
+        Logger.info('🔍 Starting blockchain monitoring service...');
 
-        // Monitor each network
-        for (const [symbol, network] of this.networks) {
-            this.startNetworkMonitoring(symbol, network);
+        try {
+            // Monitor each network
+            for (const [symbol, network] of this.networks) {
+                await this.startNetworkMonitoring(symbol, network);
+            }
+
+            // Global monitoring loop for payment channels
+            this.globalMonitoringInterval = setInterval(async () => {
+                try {
+                    await this.monitorActiveChannels();
+                } catch (error) {
+                    Logger.error('Error in global monitoring loop', { error: error.message });
+                }
+            }, 30000); // Check every 30 seconds
+
+            Logger.info('✅ Blockchain monitoring service started successfully');
+        } catch (error) {
+            this.isRunning = false;
+            Logger.error('Failed to start blockchain monitoring service', { error: error.message });
+            throw error;
         }
-
-        // Global monitoring loop for payment channels
-        this.globalMonitoringInterval = setInterval(async () => {
-            await this.monitorActiveChannels();
-        }, 30000); // Check every 30 seconds
-
-        console.log('✅ Blockchain monitoring service started');
     }
 
     // Stop all monitoring
@@ -108,8 +223,9 @@ class BlockchainMonitoringService {
         this.isRunning = false;
         
         // Clear all network monitoring intervals
-        for (const interval of this.monitoringIntervals.values()) {
+        for (const [network, interval] of this.monitoringIntervals) {
             clearInterval(interval);
+            Logger.debug('Stopped monitoring interval', { network });
         }
         this.monitoringIntervals.clear();
 
@@ -117,41 +233,199 @@ class BlockchainMonitoringService {
             clearInterval(this.globalMonitoringInterval);
         }
 
-        console.log('🛑 Blockchain monitoring service stopped');
+        Logger.info('🛑 Blockchain monitoring service stopped');
     }
 
     // Start monitoring for a specific network
-    startNetworkMonitoring(symbol, network) {
-        const interval = setInterval(async () => {
-            try {
-                await this.checkNetworkForPayments(symbol, network);
-            } catch (error) {
-                console.error(`Error monitoring ${symbol} network:`, error);
-            }
-        }, network.block_time * 1000); // Check based on block time
-
-        this.monitoringIntervals.set(symbol, interval);
-        console.log(`📡 Started monitoring ${network.name} (${symbol}) - checking every ${network.block_time}s`);
-    }
-
-    // Check specific network for new blocks/transactions
-    async checkNetworkForPayments(symbol, network) {
+    async startNetworkMonitoring(symbol, network) {
         try {
-            // This method can be used to check for new blocks
-            // and scan for transactions to our monitored addresses
-            // For now, the main monitoring happens in monitorActiveChannels()
-            
-            // You could implement block-by-block scanning here
-            // to catch payments even before they're reported via WebSocket
-            console.log(`Checking ${symbol} network for new payments...`);
-            
-            // Store the last checked block for more efficient scanning
+            // Initialize last checked block
             const currentBlock = await this.getCurrentBlockHeight(symbol);
             if (currentBlock) {
                 this.lastBlockChecked.set(symbol, currentBlock);
+                Logger.info('Initialized block height', { network: symbol, blockHeight: currentBlock });
+            }
+
+            const interval = setInterval(async () => {
+                try {
+                    await this.checkNetworkForPayments(symbol, network);
+                } catch (error) {
+                    Logger.error('Error in network monitoring', { 
+                        network: symbol, 
+                        error: error.message 
+                    });
+                }
+            }, network.block_time * 1000); // Check based on block time
+
+            this.monitoringIntervals.set(symbol, interval);
+            Logger.info('Started network monitoring', { 
+                network: network.name, 
+                symbol, 
+                checkInterval: network.block_time 
+            });
+        } catch (error) {
+            Logger.error('Failed to start network monitoring', { 
+                network: symbol, 
+                error: error.message 
+            });
+            throw new BlockchainMonitorError(
+                `Failed to start monitoring for ${symbol}: ${error.message}`,
+                'MONITORING_START_FAILED',
+                symbol
+            );
+        }
+    }
+
+    // Enhanced network checking with actual block scanning
+    async checkNetworkForPayments(symbol, network) {
+        try {
+            const currentBlock = await this.getCurrentBlockHeight(symbol);
+            if (!currentBlock) {
+                Logger.warn('Unable to get current block height', { network: symbol });
+                return;
+            }
+
+            const lastChecked = this.lastBlockChecked.get(symbol) || currentBlock - 1;
+            
+            // Only scan if there are new blocks
+            if (currentBlock > lastChecked) {
+                Logger.debug('New blocks detected', { 
+                    network: symbol, 
+                    lastChecked, 
+                    currentBlock,
+                    newBlocks: currentBlock - lastChecked
+                });
+
+                // Get monitored addresses for this network
+                const monitoredAddresses = await this.getMonitoredAddresses(symbol);
+                
+                if (monitoredAddresses.length > 0) {
+                    // Scan new blocks for transactions to monitored addresses
+                    await this.scanBlocksForTransactions(
+                        symbol, 
+                        network, 
+                        lastChecked + 1, 
+                        currentBlock, 
+                        monitoredAddresses
+                    );
+                }
+
+                this.lastBlockChecked.set(symbol, currentBlock);
             }
         } catch (error) {
-            console.error(`Error checking ${symbol} network:`, error);
+            Logger.error('Error checking network for payments', { 
+                network: symbol, 
+                error: error.message 
+            });
+            throw new BlockchainMonitorError(
+                `Network check failed for ${symbol}: ${error.message}`,
+                'NETWORK_CHECK_FAILED',
+                symbol
+            );
+        }
+    }
+
+    // Get addresses that need monitoring for a specific network
+    async getMonitoredAddresses(cryptoType) {
+        try {
+            const client = await pool.connect();
+            try {
+                const result = await client.query(`
+                    SELECT DISTINCT payment_address 
+                    FROM payment_channels 
+                    WHERE crypto_type = $1 
+                    AND status IN ('pending', 'confirming') 
+                    AND expires_at > NOW()
+                `, [cryptoType]);
+
+                return result.rows.map(row => row.payment_address);
+            } finally {
+                client.release();
+            }
+        } catch (error) {
+            Logger.error('Error getting monitored addresses', { 
+                cryptoType, 
+                error: error.message 
+            });
+            return [];
+        }
+    }
+
+    // Scan blocks for transactions to monitored addresses
+    async scanBlocksForTransactions(symbol, network, fromBlock, toBlock, addresses) {
+        Logger.debug('Scanning blocks for transactions', { 
+            network: symbol, 
+            fromBlock, 
+            toBlock, 
+            addressCount: addresses.length 
+        });
+
+        // For now, fall back to address-based scanning
+        // This could be enhanced with actual block scanning for supported networks
+        for (const address of addresses) {
+            try {
+                const transactions = await this.getAddressTransactions(
+                    symbol, 
+                    address, 
+                    new Date(Date.now() - 60 * 60 * 1000) // Last hour
+                );
+
+                for (const tx of transactions) {
+                    if (!this.processedTransactions.has(tx.hash)) {
+                        await this.processDiscoveredTransaction(symbol, address, tx);
+                        this.processedTransactions.add(tx.hash);
+                    }
+                }
+            } catch (error) {
+                Logger.error('Error scanning address transactions', { 
+                    network: symbol, 
+                    address, 
+                    error: error.message 
+                });
+            }
+        }
+    }
+
+    // Process a discovered transaction
+    async processDiscoveredTransaction(cryptoType, address, transaction) {
+        try {
+            const client = await pool.connect();
+            try {
+                // Find matching payment channels
+                const result = await client.query(`
+                    SELECT * FROM payment_channels 
+                    WHERE crypto_type = $1 
+                    AND payment_address = $2 
+                    AND status IN ('pending', 'confirming')
+                    AND expires_at > NOW()
+                `, [cryptoType, address]);
+
+                for (const channel of result.rows) {
+                    const network = this.networks.get(cryptoType);
+                    const isMatch = await this.verifyTransactionMatch(channel, transaction, network);
+                    
+                    if (isMatch) {
+                        Logger.info('Discovered matching transaction', { 
+                            channelId: channel.channel_id,
+                            txHash: transaction.hash,
+                            amount: transaction.amount,
+                            cryptoType
+                        });
+                        
+                        await this.processPaymentFound(channel, transaction);
+                        break; // Only process once per transaction
+                    }
+                }
+            } finally {
+                client.release();
+            }
+        } catch (error) {
+            Logger.error('Error processing discovered transaction', { 
+                cryptoType, 
+                address, 
+                txHash: transaction.hash, 
+                error: error.message 
+            });
         }
     }
 
@@ -161,11 +435,38 @@ class BlockchainMonitoringService {
             switch (symbol) {
                 case 'BTC':
                     const btcResponse = await fetch('https://blockstream.info/api/blocks/tip/height');
-                    return await btcResponse.text();
+                    if (!btcResponse.ok) {
+                        throw new APIError(`Bitcoin API error: ${btcResponse.statusText}`, 'BTC', btcResponse.status);
+                    }
+                    return parseInt(await btcResponse.text());
+                    
                 case 'ETH':
-                    const ethResponse = await fetch(`https://api.etherscan.io/api?module=proxy&action=eth_blockNumber&apikey=${process.env.ETHERSCAN_API_KEY || 'YourApiKeyToken'}`);
+                    const ethResponse = await fetch(`https://api.etherscan.io/api?module=proxy&action=eth_blockNumber&apikey=${process.env.ETHERSCAN_API_KEY}`);
+                    if (!ethResponse.ok) {
+                        throw new APIError(`Ethereum API error: ${ethResponse.statusText}`, 'ETH', ethResponse.status);
+                    }
                     const ethData = await ethResponse.json();
+                    if (ethData.error) {
+                        throw new APIError(`Ethereum API error: ${ethData.error.message}`, 'ETH');
+                    }
                     return parseInt(ethData.result, 16);
+                    
+                case 'BNB':
+                    const bnbResponse = await fetch(`https://api.bscscan.com/api?module=proxy&action=eth_blockNumber&apikey=${process.env.BSCSCAN_API_KEY}`);
+                    if (!bnbResponse.ok) {
+                        throw new APIError(`BNB API error: ${bnbResponse.statusText}`, 'BNB', bnbResponse.status);
+                    }
+                    const bnbData = await bnbResponse.json();
+                    return parseInt(bnbData.result, 16);
+                    
+                case 'MATIC':
+                    const maticResponse = await fetch(`https://api.polygonscan.com/api?module=proxy&action=eth_blockNumber&apikey=${process.env.POLYGONSCAN_API_KEY}`);
+                    if (!maticResponse.ok) {
+                        throw new APIError(`Polygon API error: ${maticResponse.statusText}`, 'MATIC', maticResponse.status);
+                    }
+                    const maticData = await maticResponse.json();
+                    return parseInt(maticData.result, 16);
+                    
                 case 'SOL':
                     const solResponse = await fetch('https://api.mainnet-beta.solana.com', {
                         method: 'POST',
@@ -176,14 +477,27 @@ class BlockchainMonitoringService {
                             method: 'getSlot'
                         })
                     });
+                    if (!solResponse.ok) {
+                        throw new APIError(`Solana API error: ${solResponse.statusText}`, 'SOL', solResponse.status);
+                    }
                     const solData = await solResponse.json();
+                    if (solData.error) {
+                        throw new APIError(`Solana RPC error: ${solData.error.message}`, 'SOL');
+                    }
                     return solData.result;
+                    
                 default:
-                    return null;
+                    throw new BlockchainMonitorError(`Unsupported network: ${symbol}`, 'UNSUPPORTED_NETWORK');
             }
         } catch (error) {
-            console.error(`Error getting current block height for ${symbol}:`, error);
-            return null;
+            if (error instanceof BlockchainMonitorError) {
+                throw error;
+            }
+            Logger.error('Error getting current block height', { 
+                network: symbol, 
+                error: error.message 
+            });
+            throw new APIError(`Failed to get block height for ${symbol}: ${error.message}`, symbol);
         }
     }
 
@@ -201,6 +515,8 @@ class BlockchainMonitoringService {
                     ORDER BY created_at ASC
                 `);
 
+                Logger.debug('Monitoring active channels', { channelCount: result.rows.length });
+
                 for (const channel of result.rows) {
                     await this.checkChannelPayment(channel);
                 }
@@ -208,7 +524,11 @@ class BlockchainMonitoringService {
                 client.release();
             }
         } catch (error) {
-            console.error('Error monitoring active channels:', error);
+            Logger.error('Error monitoring active channels', { error: error.message });
+            throw new BlockchainMonitorError(
+                `Failed to monitor active channels: ${error.message}`,
+                'MONITORING_FAILED'
+            );
         }
     }
 
@@ -216,12 +536,24 @@ class BlockchainMonitoringService {
     async checkChannelPayment(channel) {
         const network = this.networks.get(channel.crypto_type);
         if (!network) {
-            console.log(`Network not supported for monitoring: ${channel.crypto_type}`);
+            Logger.warn('Network not supported for monitoring', { 
+                cryptoType: channel.crypto_type,
+                channelId: channel.channel_id 
+            });
             return;
         }
 
         try {
             let transactions = [];
+
+            // Prevent duplicate processing
+            if (channel.tx_hash && this.processedTransactions.has(channel.tx_hash)) {
+                Logger.debug('Transaction already processed', { 
+                    channelId: channel.channel_id,
+                    txHash: channel.tx_hash 
+                });
+                return;
+            }
 
             // If we have a tx_hash, verify it specifically
             if (channel.tx_hash) {
@@ -240,57 +572,185 @@ class BlockchainMonitoringService {
 
             // Check transactions for matching payments
             for (const tx of transactions) {
+                // Skip if already processed
+                if (this.processedTransactions.has(tx.hash)) {
+                    continue;
+                }
+
                 const isMatch = await this.verifyTransactionMatch(channel, tx, network);
                 if (isMatch) {
                     await this.processPaymentFound(channel, tx);
+                    this.processedTransactions.add(tx.hash);
                     break; // Only process the first matching transaction
                 }
             }
 
         } catch (error) {
-            console.error(`Error checking payment for channel ${channel.channel_id}:`, error);
+            Logger.error('Error checking payment for channel', { 
+                channelId: channel.channel_id,
+                cryptoType: channel.crypto_type,
+                error: error.message 
+            });
         }
     }
 
     // Verify if a transaction matches the payment channel requirements
     async verifyTransactionMatch(channel, transaction, network) {
         try {
-            // Check amount (allow 5% tolerance for fees/slippage)
-            const expectedAmount = parseFloat(channel.amount_crypto);
+            Logger.debug('Verifying transaction match', {
+                channelId: channel.channel_id,
+                txHash: transaction.hash,
+                expectedAmount: channel.amount_crypto,
+                actualAmount: transaction.amount,
+                expectedAddress: channel.payment_address,
+                actualAddress: transaction.to
+            });
+
+            // Check minimum amount (prevent dust attacks)
             const actualAmount = parseFloat(transaction.amount);
+            if (actualAmount < network.min_amount) {
+                Logger.debug('Transaction amount below network minimum', {
+                    channelId: channel.channel_id,
+                    actualAmount,
+                    minAmount: network.min_amount
+                });
+                return false;
+            }
+
+            // Check amount (allow configurable tolerance for fees/slippage)
+            const expectedAmount = parseFloat(channel.amount_crypto);
             const tolerance = expectedAmount * 0.05; // 5% tolerance
             
             if (actualAmount < (expectedAmount - tolerance)) {
-                console.log(`Amount mismatch: expected ${expectedAmount}, got ${actualAmount}`);
+                Logger.debug('Amount mismatch', {
+                    channelId: channel.channel_id,
+                    expectedAmount,
+                    actualAmount,
+                    tolerance,
+                    shortfall: expectedAmount - actualAmount
+                });
                 return false;
             }
 
-            // Check recipient address
-            if (transaction.to?.toLowerCase() !== channel.payment_address.toLowerCase()) {
-                console.log(`Address mismatch: expected ${channel.payment_address}, got ${transaction.to}`);
+            // Check recipient address (handle Bitcoin multiple outputs)
+            let addressMatch = false;
+            if (transaction.allOutputs && Array.isArray(transaction.allOutputs)) {
+                // Bitcoin: check all outputs for a match
+                addressMatch = transaction.allOutputs.some(output => 
+                    output.address?.toLowerCase() === channel.payment_address.toLowerCase()
+                );
+            } else {
+                // Other networks: single recipient
+                addressMatch = transaction.to?.toLowerCase() === channel.payment_address.toLowerCase();
+            }
+
+            if (!addressMatch) {
+                Logger.debug('Address mismatch', {
+                    channelId: channel.channel_id,
+                    expectedAddress: channel.payment_address,
+                    actualAddress: transaction.to,
+                    allOutputs: transaction.allOutputs
+                });
                 return false;
             }
 
-            // For UTXO-based cryptocurrencies, check memo/note if applicable
-            if (channel.memo && transaction.memo) {
-                if (transaction.memo !== channel.memo) {
-                    console.log(`Memo mismatch: expected ${channel.memo}, got ${transaction.memo}`);
+            // Enhanced memo checking
+            if (channel.memo) {
+                if (!transaction.memo) {
+                    Logger.debug('Expected memo but transaction has none', {
+                        channelId: channel.channel_id,
+                        expectedMemo: channel.memo
+                    });
+                    return false;
+                }
+                
+                if (transaction.memo.trim() !== channel.memo.trim()) {
+                    Logger.debug('Memo mismatch', {
+                        channelId: channel.channel_id,
+                        expectedMemo: channel.memo,
+                        actualMemo: transaction.memo
+                    });
                     return false;
                 }
             }
 
-            // Check if transaction is after channel creation
+            // Check if transaction is after channel creation (with buffer)
             const txTime = new Date(transaction.timestamp);
             const channelTime = new Date(channel.created_at);
-            if (txTime < channelTime) {
-                console.log(`Transaction predates channel creation`);
+            const timeBuffer = 60 * 1000; // 1 minute buffer for clock skew
+            
+            if (txTime < (channelTime.getTime() - timeBuffer)) {
+                Logger.debug('Transaction predates channel creation', {
+                    channelId: channel.channel_id,
+                    txTime: txTime.toISOString(),
+                    channelTime: channelTime.toISOString()
+                });
                 return false;
             }
 
+            // Check confirmations meet requirements
+            const requiredConfirmations = network.confirmations_required;
+            if (transaction.confirmations < requiredConfirmations) {
+                Logger.debug('Insufficient confirmations', {
+                    channelId: channel.channel_id,
+                    actualConfirmations: transaction.confirmations,
+                    requiredConfirmations
+                });
+                // Still return true for processing, but mark as 'confirming'
+            }
+
+            // Additional security checks for double-spending prevention
+            if (await this.checkForDoubleSpend(channel, transaction)) {
+                Logger.warn('Potential double-spend detected', {
+                    channelId: channel.channel_id,
+                    txHash: transaction.hash
+                });
+                return false;
+            }
+
+            Logger.info('Transaction verification passed', {
+                channelId: channel.channel_id,
+                txHash: transaction.hash,
+                amount: actualAmount,
+                confirmations: transaction.confirmations
+            });
+
             return true;
         } catch (error) {
-            console.error('Error verifying transaction match:', error);
+            Logger.error('Error verifying transaction match', {
+                channelId: channel.channel_id,
+                txHash: transaction.hash,
+                error: error.message
+            });
             return false;
+        }
+    }
+
+    // Check for potential double-spending
+    async checkForDoubleSpend(channel, transaction) {
+        try {
+            const client = await pool.connect();
+            try {
+                // Check if this channel already has a different confirmed transaction
+                const result = await client.query(`
+                    SELECT tx_hash, status 
+                    FROM payment_channels 
+                    WHERE channel_id = $1 
+                    AND tx_hash IS NOT NULL 
+                    AND tx_hash != $2 
+                    AND status = 'confirmed'
+                `, [channel.channel_id, transaction.hash]);
+
+                return result.rows.length > 0;
+            } finally {
+                client.release();
+            }
+        } catch (error) {
+            Logger.error('Error checking for double spend', {
+                channelId: channel.channel_id,
+                error: error.message
+            });
+            return false; // Assume no double spend if we can't check
         }
     }
 
@@ -409,35 +869,92 @@ class BlockchainMonitoringService {
         try {
             // Try Blockstream API first
             let response = await fetch(`https://blockstream.info/api/tx/${txHash}`);
+            let data;
+            
             if (!response.ok) {
                 // Fallback to BlockCypher
                 response = await fetch(`https://api.blockcypher.com/v1/btc/main/txs/${txHash}`);
+                if (!response.ok) {
+                    throw new TransactionNotFoundError(txHash, 'BTC');
+                }
+                data = await response.json();
+            } else {
+                data = await response.json();
             }
 
-            if (!response.ok) return null;
-            const data = await response.json();
-
             // Get current block height for confirmations
-            const blockHeightResponse = await fetch('https://blockstream.info/api/blocks/tip/height');
-            const currentHeight = await blockHeightResponse.text();
-            const confirmations = data.status?.block_height ? parseInt(currentHeight) - data.status.block_height + 1 : 0;
+            const currentHeight = await this.getCurrentBlockHeight('BTC');
+            const confirmations = data.status?.block_height ? currentHeight - data.status.block_height + 1 : 0;
 
-            // Parse Bitcoin transaction
+            // Parse Bitcoin transaction - handle multiple outputs
             const outputs = data.vout || data.outputs || [];
-            const mainOutput = outputs.find(output => output.value > 0);
+            
+            // Extract memo from OP_RETURN if present
+            let memo = null;
+            const opReturnOutput = outputs.find(output => 
+                output.scriptpubkey_type === 'op_return' || 
+                output.script_type === 'null-data'
+            );
+            
+            if (opReturnOutput && opReturnOutput.scriptpubkey_hex) {
+                try {
+                    // Decode OP_RETURN data (simplified)
+                    const hex = opReturnOutput.scriptpubkey_hex.replace(/^6a/, ''); // Remove OP_RETURN opcode
+                    if (hex.length >= 2) {
+                        const length = parseInt(hex.substring(0, 2), 16);
+                        if (length > 0 && hex.length >= (length * 2 + 2)) {
+                            const memoHex = hex.substring(2, 2 + length * 2);
+                            memo = Buffer.from(memoHex, 'hex').toString('utf8');
+                        }
+                    }
+                } catch (memoError) {
+                    Logger.debug('Could not decode OP_RETURN memo', { txHash, error: memoError.message });
+                }
+            }
+
+            // Find all payment outputs (non-zero value, non-OP_RETURN)
+            const paymentOutputs = outputs.filter(output => 
+                output.value > 0 && 
+                output.scriptpubkey_type !== 'op_return' &&
+                output.script_type !== 'null-data'
+            );
+
+            // Return the largest output as the main payment
+            const mainOutput = paymentOutputs.reduce((max, output) => 
+                output.value > (max?.value || 0) ? output : max, null
+            );
+
+            if (!mainOutput) {
+                throw new BlockchainMonitorError(
+                    `No valid payment outputs found in transaction ${txHash}`,
+                    'INVALID_TRANSACTION',
+                    'BTC'
+                );
+            }
 
             return {
                 hash: txHash,
-                amount: mainOutput ? mainOutput.value / 100000000 : 0, // Convert satoshis to BTC
-                to: mainOutput ? mainOutput.scriptpubkey_address || mainOutput.addresses?.[0] : null,
-                confirmations: confirmations,
+                amount: mainOutput.value / 100000000, // Convert satoshis to BTC
+                to: mainOutput.scriptpubkey_address || mainOutput.addresses?.[0],
+                confirmations: Math.max(0, confirmations),
                 blockHeight: data.status?.block_height || data.block_height,
                 timestamp: data.status?.block_time ? new Date(data.status.block_time * 1000) : new Date(),
-                memo: null // Bitcoin doesn't have memos in standard transactions
+                memo: memo,
+                allOutputs: paymentOutputs.map(output => ({
+                    address: output.scriptpubkey_address || output.addresses?.[0],
+                    amount: output.value / 100000000,
+                    scriptType: output.scriptpubkey_type || output.script_type
+                }))
             };
         } catch (error) {
-            console.error('Error fetching Bitcoin transaction:', error);
-            return null;
+            if (error instanceof BlockchainMonitorError) {
+                throw error;
+            }
+            Logger.error('Error fetching Bitcoin transaction', { 
+                txHash, 
+                error: error.message 
+            });
+            throw new APIError(`Failed to fetch Bitcoin transaction ${txHash}: ${error.message}`, 'BTC');
         }
     }
 

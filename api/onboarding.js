@@ -3,12 +3,135 @@ const { pool } = require('../index');
 const crypto = require('crypto');
 const axios = require('axios');
 const cors = require('cors');
+const Joi = require('joi');
+const rateLimit = require('express-rate-limit');
 const { PaymentChannelMonitor } = require('./wsmonitor');
 const blockchainMonitor = require('./blockchain-monitor');
 const hiveTx = require('hive-tx');
 const config = require('../config');
 
 const router = express.Router();
+
+// Input validation schemas
+const validationSchemas = {
+    username: Joi.string()
+        .pattern(/^[a-z0-9\-\.]{3,16}$/)
+        .required()
+        .messages({
+            'string.pattern.base': 'Username must be 3-16 characters, lowercase letters, numbers, hyphens, and dots only',
+            'any.required': 'Username is required'
+        }),
+    
+    publicKey: Joi.string()
+        .pattern(/^(STM|TST)[A-Za-z0-9]{50,60}$/)
+        .required()
+        .messages({
+            'string.pattern.base': 'Public key must be in HIVE format (STM/TST prefix, 50-60 characters)',
+            'any.required': 'Public key is required'
+        }),
+    
+    publicKeys: Joi.object({
+        owner: Joi.string().pattern(/^(STM|TST)[A-Za-z0-9]{50,60}$/).required(),
+        active: Joi.string().pattern(/^(STM|TST)[A-Za-z0-9]{50,60}$/).required(),
+        posting: Joi.string().pattern(/^(STM|TST)[A-Za-z0-9]{50,60}$/).required(),
+        memo: Joi.string().pattern(/^(STM|TST)[A-Za-z0-9]{50,60}$/).required()
+    }).required(),
+    
+    cryptoType: Joi.string()
+        .valid('BTC', 'SOL', 'ETH', 'MATIC', 'BNB')
+        .required(),
+    
+    message: Joi.string()
+        .max(500)
+        .allow('')
+        .optional(),
+    
+    txHash: Joi.string()
+        .pattern(/^[a-fA-F0-9]+$/)
+        .min(32)
+        .max(128)
+        .required()
+        .messages({
+            'string.pattern.base': 'Transaction hash must be hexadecimal',
+            'any.required': 'Transaction hash is required'
+        }),
+    
+    channelId: Joi.string()
+        .pattern(/^CH_[a-fA-F0-9]{32}$/)
+        .required()
+        .messages({
+            'string.pattern.base': 'Invalid channel ID format'
+        })
+};
+
+// Rate limiting configurations
+const rateLimits = {
+    general: rateLimit({
+        windowMs: 15 * 60 * 1000, // 15 minutes
+        max: 100, // limit each IP to 100 requests per windowMs
+        message: {
+            success: false,
+            error: 'Too many requests, please try again later.'
+        },
+        standardHeaders: true,
+        legacyHeaders: false
+    }),
+    
+    pricing: rateLimit({
+        windowMs: 1 * 60 * 1000, // 1 minute
+        max: 10, // limit each IP to 10 pricing requests per minute
+        message: {
+            success: false,
+            error: 'Pricing endpoint rate limit exceeded. Please wait before making another request.'
+        }
+    }),
+    
+    payment: rateLimit({
+        windowMs: 5 * 60 * 1000, // 5 minutes
+        max: 5, // limit each IP to 5 payment initiations per 5 minutes
+        message: {
+            success: false,
+            error: 'Payment initiation rate limit exceeded. Please wait before creating another payment.'
+        }
+    }),
+    
+    strict: rateLimit({
+        windowMs: 60 * 60 * 1000, // 1 hour
+        max: 10, // limit each IP to 10 requests per hour for sensitive endpoints
+        message: {
+            success: false,
+            error: 'Hourly rate limit exceeded for this endpoint.'
+        }
+    })
+};
+
+// Validation middleware factory
+const validateInput = (schema) => {
+    return (req, res, next) => {
+        const { error, value } = schema.validate(req.body, { 
+            abortEarly: false,
+            stripUnknown: true 
+        });
+        
+        if (error) {
+            const errors = error.details.map(detail => ({
+                field: detail.path.join('.'),
+                message: detail.message,
+                value: detail.context?.value
+            }));
+            
+            return res.status(400).json({
+                success: false,
+                error: 'Input validation failed',
+                details: errors
+            });
+        }
+        
+        req.body = value; // Use sanitized values
+        next();
+    };
+};
+
 // CORS middleware for onboarding endpoints
 router.use(cors({
     origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : [
@@ -21,8 +144,11 @@ router.use(cors({
     credentials: true
 }));
 
-// Middleware for JSON parsing
-router.use(express.json());
+// Apply general rate limiting to all routes
+router.use(rateLimits.general);
+
+// Middleware for JSON parsing with size limits
+router.use(express.json({ limit: '10mb' }));
 
 // Database setup with pricing tables
 const setupDatabase = async () => {
@@ -317,6 +443,9 @@ const CRYPTO_CONFIG = {
         payment_type: 'address', // Uses address-based payments
         confirmations_required: 2,
         block_time_seconds: 10 * 60, // 10 minutes
+        memo_support: true, // Supports OP_RETURN memos
+        memo_type: 'op_return',
+        memo_max_length: 80, // OP_RETURN max 80 bytes
         rpc_endpoints: [
             'https://blockstream.info/api',
             'https://api.blockcypher.com/v1/btc/main'
@@ -331,6 +460,9 @@ const CRYPTO_CONFIG = {
         payment_type: 'address', // Uses address-based payments
         confirmations_required: 1,
         block_time_seconds: 0.4,
+        memo_support: true, // Supports transaction memos
+        memo_type: 'instruction',
+        memo_max_length: 566, // SOL memo instruction max
         rpc_endpoints: [
             'https://api.mainnet-beta.solana.com',
             'https://solana-api.projectserum.com'
@@ -390,11 +522,21 @@ class PricingService {
 
     async fetchHivePrice() {
         try {
-            const response = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=hive&vs_currencies=usd&include_market_cap=true&include_24hr_vol=true&include_24hr_change=true');
+            const response = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=hive&vs_currencies=usd&include_market_cap=true&include_24hr_vol=true&include_24hr_change=true', {
+                timeout: 10000,
+                headers: { 'User-Agent': 'DLUX-Onboarding/1.0' }
+            });
+            
             if (!response.ok) {
-                throw new Error(`CoinGecko API error: ${response.status}`);
+                throw new Error(`CoinGecko API error: ${response.status} ${response.statusText}`);
             }
+            
             const data = await response.json();
+            
+            if (!data || !data.hive || typeof data.hive.usd !== 'number') {
+                throw new Error('Invalid CoinGecko API response format');
+            }
+            
             return {
                 price: data.hive.usd,
                 market_cap: data.hive.usd_market_cap,
@@ -402,24 +544,64 @@ class PricingService {
                 change_24h: data.hive.usd_24h_change
             };
         } catch (error) {
-            console.error('Error fetching HIVE price:', error);
-            // Fallback to Hive API
+            console.error('Error fetching HIVE price from CoinGecko:', error);
+            
+            // Fallback to Hive API with enhanced error handling
             try {
                 const response = await fetch('https://api.hive.blog', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'User-Agent': 'DLUX-Onboarding/1.0'
+                    },
                     body: JSON.stringify({
                         jsonrpc: '2.0',
                         method: 'condenser_api.get_current_median_history_price',
                         id: 1
-                    })
+                    }),
+                    timeout: 10000
                 });
+                
+                if (!response.ok) {
+                    throw new Error(`HIVE API error: ${response.status} ${response.statusText}`);
+                }
+                
                 const data = await response.json();
-                const hivePrice = parseFloat(data.result.base.split(' ')[0]) / parseFloat(data.result.quote.split(' ')[0]);
-                return { price: hivePrice, market_cap: null, volume_24h: null, change_24h: null };
+                
+                if (!data || !data.result || !data.result.base || !data.result.quote) {
+                    throw new Error('Invalid HIVE API response format');
+                }
+                
+                const baseAmount = parseFloat(data.result.base.split(' ')[0]);
+                const quoteAmount = parseFloat(data.result.quote.split(' ')[0]);
+                
+                if (isNaN(baseAmount) || isNaN(quoteAmount) || quoteAmount === 0) {
+                    throw new Error('Invalid price data from HIVE API');
+                }
+                
+                const hivePrice = baseAmount / quoteAmount;
+                console.log(`HIVE price from fallback API: $${hivePrice.toFixed(6)}`);
+                
+                return { 
+                    price: hivePrice, 
+                    market_cap: null, 
+                    volume_24h: null, 
+                    change_24h: null 
+                };
             } catch (fallbackError) {
                 console.error('Error with HIVE fallback API:', fallbackError);
-                throw new Error('Unable to fetch HIVE price from any source');
+                
+                // Ultimate fallback to a reasonable default
+                const fallbackPrice = 0.30; // Conservative fallback price
+                console.warn(`Using fallback HIVE price: $${fallbackPrice}`);
+                
+                return {
+                    price: fallbackPrice,
+                    market_cap: null,
+                    volume_24h: null,
+                    change_24h: null,
+                    fallback: true
+                };
             }
         }
     }
@@ -736,6 +918,141 @@ class PricingService {
 
 // Create pricing service instance
 const pricingService = new PricingService();
+
+// Memo verification utilities
+class MemoVerification {
+    static async verifyBTCMemo(txHash, expectedMemo) {
+        try {
+            // Try multiple BTC APIs to get transaction details
+            const apis = [
+                `https://blockstream.info/api/tx/${txHash}`,
+                `https://api.blockcypher.com/v1/btc/main/txs/${txHash}`
+            ];
+
+            for (const apiUrl of apis) {
+                try {
+                    const response = await fetch(apiUrl, {
+                        timeout: 10000,
+                        headers: { 'User-Agent': 'DLUX-Onboarding/1.0' }
+                    });
+
+                    if (!response.ok) continue;
+
+                    const txData = await response.json();
+                    
+                    // Look for OP_RETURN outputs containing memo
+                    const outputs = txData.vout || txData.outputs || [];
+                    
+                    for (const output of outputs) {
+                        const scriptPubKey = output.scriptpubkey || output.script;
+                        if (!scriptPubKey) continue;
+
+                        // Check for OP_RETURN (starts with 6a in hex)
+                        const script = scriptPubKey.hex || scriptPubKey;
+                        if (script && script.startsWith('6a')) {
+                            // Extract memo from OP_RETURN
+                            const memoHex = script.substring(4); // Remove 6a and length byte
+                            const memo = Buffer.from(memoHex, 'hex').toString('utf8');
+                            
+                            if (memo.trim() === expectedMemo.trim()) {
+                                return { verified: true, memo, source: apiUrl };
+                            }
+                        }
+                    }
+                } catch (apiError) {
+                    console.log(`BTC API ${apiUrl} failed:`, apiError.message);
+                    continue;
+                }
+            }
+
+            return { verified: false, error: 'Memo not found in transaction' };
+        } catch (error) {
+            console.error('Error verifying BTC memo:', error);
+            return { verified: false, error: error.message };
+        }
+    }
+
+    static async verifySOLMemo(txHash, expectedMemo) {
+        try {
+            // Get transaction from Solana RPC
+            const rpcEndpoints = CRYPTO_CONFIG.SOL.rpc_endpoints;
+            
+            for (const endpoint of rpcEndpoints) {
+                try {
+                    const response = await fetch(endpoint, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            jsonrpc: '2.0',
+                            id: 1,
+                            method: 'getTransaction',
+                            params: [
+                                txHash,
+                                {
+                                    encoding: 'json',
+                                    maxSupportedTransactionVersion: 0
+                                }
+                            ]
+                        }),
+                        timeout: 10000
+                    });
+
+                    if (!response.ok) continue;
+
+                    const result = await response.json();
+                    if (result.error || !result.result) continue;
+
+                    const transaction = result.result;
+                    const instructions = transaction.transaction?.message?.instructions || [];
+
+                    // Look for memo instruction
+                    for (const instruction of instructions) {
+                        // Memo program ID: MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr
+                        if (instruction.programId === 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr') {
+                            const memoData = instruction.data;
+                            if (memoData) {
+                                // Decode base58 memo data
+                                const memo = Buffer.from(memoData, 'base64').toString('utf8');
+                                if (memo.trim() === expectedMemo.trim()) {
+                                    return { verified: true, memo, source: endpoint };
+                                }
+                            }
+                        }
+                    }
+                } catch (apiError) {
+                    console.log(`SOL RPC ${endpoint} failed:`, apiError.message);
+                    continue;
+                }
+            }
+
+            return { verified: false, error: 'Memo not found in transaction' };
+        } catch (error) {
+            console.error('Error verifying SOL memo:', error);
+            return { verified: false, error: error.message };
+        }
+    }
+
+    static async verifyTransactionMemo(cryptoType, txHash, expectedMemo) {
+        try {
+            const config = CRYPTO_CONFIG[cryptoType];
+            if (!config || !config.memo_support) {
+                return { verified: true, message: 'Memo verification not supported for this cryptocurrency' };
+            }
+
+            switch (cryptoType) {
+                case 'BTC':
+                    return await this.verifyBTCMemo(txHash, expectedMemo);
+                case 'SOL':
+                    return await this.verifySOLMemo(txHash, expectedMemo);
+                default:
+                    return { verified: true, message: 'Memo verification not implemented for this cryptocurrency' };
+            }
+        } catch (error) {
+            console.error(`Error verifying memo for ${cryptoType}:`, error);
+            return { verified: false, error: error.message };
+        }
+    }
+}
 
 // HIVE Resource Credit Monitoring Service
 class RCMonitoringService {
@@ -1478,6 +1795,87 @@ class HiveAccountService {
         }
     }
 
+    async performProactiveACTClaiming() {
+        try {
+            // Get real-time RC costs
+            const rcCosts = await rcMonitoringService.getLatestRCCosts();
+            const claimCost = rcCosts['claim_account_operation'];
+            
+            if (!claimCost) {
+                console.log('RC cost data not available for proactive ACT claiming');
+                return;
+            }
+
+            // Update current balances
+            await this.updateACTBalance();
+            await this.checkResourceCredits();
+
+            // Calculate thresholds
+            const minimumACTBalance = 5; // Keep minimum 5 ACTs
+            const optimalACTBalance = 10; // Target 10 ACTs
+            const rcThresholdMultiplier = 2.5; // Claim when we have 2.5x the RC cost
+            const rcThreshold = claimCost.rc_needed * rcThresholdMultiplier;
+
+            // Check if we should claim ACTs
+            const shouldClaim = (
+                this.actBalance < minimumACTBalance && 
+                this.resourceCredits >= rcThreshold
+            ) || (
+                this.actBalance < optimalACTBalance && 
+                this.resourceCredits >= (claimCost.rc_needed * 5) // Much higher threshold for optimal balance
+            );
+
+            if (shouldClaim) {
+                console.log(`🔄 Proactive ACT claiming triggered:`);
+                console.log(`   Current ACT balance: ${this.actBalance}`);
+                console.log(`   Current RC balance: ${(this.resourceCredits / 1e9).toFixed(2)}B`);
+                console.log(`   Claim cost: ${(claimCost.rc_needed / 1e9).toFixed(2)}B RC`);
+                console.log(`   Threshold: ${(rcThreshold / 1e9).toFixed(2)}B RC`);
+
+                // Attempt to claim multiple ACTs if we have abundant RCs
+                const maxClaims = Math.min(
+                    optimalACTBalance - this.actBalance,
+                    Math.floor(this.resourceCredits / claimCost.rc_needed)
+                );
+
+                let claimed = 0;
+                for (let i = 0; i < maxClaims; i++) {
+                    const success = await this.claimAccountCreationTokens();
+                    if (success) {
+                        claimed++;
+                        console.log(`✓ ACT ${i + 1}/${maxClaims} claimed successfully`);
+                        
+                        // Small delay between claims
+                        await new Promise(resolve => setTimeout(resolve, 5000));
+                        
+                        // Check if we still have enough RCs for another claim
+                        await this.checkResourceCredits();
+                        if (this.resourceCredits < claimCost.rc_needed) {
+                            console.log(`Stopping ACT claiming - insufficient RCs remaining`);
+                            break;
+                        }
+                    } else {
+                        console.log(`Failed to claim ACT ${i + 1}/${maxClaims}`);
+                        break;
+                    }
+                }
+
+                if (claimed > 0) {
+                    console.log(`🎉 Proactive ACT claiming completed: ${claimed} ACTs claimed`);
+                    console.log(`   New ACT balance: ${this.actBalance}`);
+                    console.log(`   Remaining RCs: ${(this.resourceCredits / 1e9).toFixed(2)}B`);
+                }
+            } else {
+                // Log status occasionally
+                if (Math.random() < 0.1) { // 10% chance to log status
+                    console.log(`ACT Status: ${this.actBalance} ACTs, ${(this.resourceCredits / 1e9).toFixed(1)}B RCs (threshold: ${(rcThreshold / 1e9).toFixed(1)}B)`);
+                }
+            }
+        } catch (error) {
+            console.error('Error in proactive ACT claiming:', error);
+        }
+    }
+
     startMonitoring() {
         // Check ACT balance every 10 minutes
         setInterval(() => {
@@ -1490,7 +1888,12 @@ class HiveAccountService {
             this.monitorPendingCreations();
         }, 30 * 1000);
 
-        // Try to claim ACTs every hour if we have sufficient RCs and low ACT balance
+        // Proactive ACT claiming every 15 minutes (more frequent than original)
+        setInterval(async () => {
+            await this.performProactiveACTClaiming();
+        }, 15 * 60 * 1000);
+
+        // Legacy hourly check (kept for backward compatibility and as fallback)
         setInterval(async () => {
             if (this.actBalance < 3) { // Keep a minimum of 3 ACTs
                 // Check if we have enough RCs based on real-time costs
@@ -1498,7 +1901,7 @@ class HiveAccountService {
                 const claimCost = rcCosts['claim_account_operation'];
 
                 if (claimCost && this.resourceCredits >= claimCost.rc_needed) {
-                    console.log(`Auto-claiming ACT: Balance low (${this.actBalance}), sufficient RCs (${(this.resourceCredits / 1e9).toFixed(1)}B available, ${(claimCost.rc_needed / 1e9).toFixed(1)}B needed)`);
+                    console.log(`Legacy auto-claiming ACT: Balance low (${this.actBalance}), sufficient RCs (${(this.resourceCredits / 1e9).toFixed(1)}B available, ${(claimCost.rc_needed / 1e9).toFixed(1)}B needed)`);
                     await this.claimAccountCreationTokens();
                 } else if (claimCost) {
                     console.log(`Cannot auto-claim ACT: Insufficient RCs. Have ${(this.resourceCredits / 1e9).toFixed(1)}B, need ${(claimCost.rc_needed / 1e9).toFixed(1)}B`);
@@ -1506,7 +1909,7 @@ class HiveAccountService {
             }
         }, 60 * 60 * 1000);
 
-        console.log('✓ HIVE Account Service monitoring started');
+        console.log('✓ HIVE Account Service monitoring started with proactive ACT claiming');
     }
 }
 
@@ -2060,7 +2463,7 @@ router.post('/api/onboarding/admin/users/:username/remove', adminActiveKeyMiddle
 });
 
 // 1. Get real-time crypto pricing (updated endpoint)
-router.get('/api/onboarding/pricing', async (req, res) => {
+router.get('/api/onboarding/pricing', rateLimits.pricing, async (req, res) => {
     try {
         const pricing = await pricingService.getLatestPricing();
 
@@ -2190,76 +2593,23 @@ router.get('/api/onboarding/pricing', async (req, res) => {
 });
 
 // 2. Initiate cryptocurrency payment (updated to require all public keys)
-router.post('/api/onboarding/payment/initiate', async (req, res) => {
+router.post('/api/onboarding/payment/initiate', 
+    rateLimits.payment,
+    validateInput(Joi.object({
+        username: validationSchemas.username,
+        cryptoType: validationSchemas.cryptoType,
+        publicKeys: validationSchemas.publicKeys
+    })),
+    async (req, res) => {
     try {
         const { username, cryptoType, publicKeys } = req.body;
 
-        // Validate input
-        if (!username || !cryptoType || !publicKeys) {
-            return res.status(400).json({
-                success: false,
-                error: 'Username, crypto type, and public keys are required'
-            });
-        }
-
+        // Additional business logic validation beyond Joi
         if (!CRYPTO_CONFIG[cryptoType]) {
             return res.status(400).json({
                 success: false,
-                error: 'Unsupported cryptocurrency'
-            });
-        }
-
-        // Validate all required public keys are provided
-        const requiredKeys = ['owner', 'active', 'posting', 'memo'];
-        const missingKeys = requiredKeys.filter(key => !publicKeys[key] || !publicKeys[key].trim());
-
-        if (missingKeys.length > 0) {
-            return res.status(400).json({
-                success: false,
-                error: `Missing required public keys: ${missingKeys.join(', ')}`,
-                requiredKeys: {
-                    owner: 'Owner public key (highest authority)',
-                    active: 'Active public key (financial operations)',
-                    posting: 'Posting public key (social operations)',
-                    memo: 'Memo public key (encrypted messages)'
-                }
-            });
-        }
-
-        // Validate public key format (basic HIVE key validation)
-        const validatePublicKey = (key, keyType) => {
-            if (!key || typeof key !== 'string') {
-                throw new Error(`${keyType} key must be a string`);
-            }
-
-            const trimmed = key.trim();
-            if (!trimmed.startsWith('STM') && !trimmed.startsWith('TST')) {
-                throw new Error(`${keyType} key must start with STM or TST`);
-            }
-
-            if (trimmed.length < 50 || trimmed.length > 60) {
-                throw new Error(`${keyType} key has invalid length`);
-            }
-
-            return trimmed;
-        };
-
-        try {
-            const validatedKeys = {
-                owner: validatePublicKey(publicKeys.owner, 'Owner'),
-                active: validatePublicKey(publicKeys.active, 'Active'),
-                posting: validatePublicKey(publicKeys.posting, 'Posting'),
-                memo: validatePublicKey(publicKeys.memo, 'Memo')
-            };
-
-            // Store the validated keys for later use
-            publicKeys.validated = validatedKeys;
-
-        } catch (keyError) {
-            return res.status(400).json({
-                success: false,
-                error: `Invalid public key: ${keyError.message}`,
-                help: 'Public keys should be in HIVE format (STMxxx... or TSTxxx...) and 50-60 characters long'
+                error: 'Unsupported cryptocurrency',
+                supportedCurrencies: Object.keys(CRYPTO_CONFIG)
             });
         }
 
@@ -2283,12 +2633,28 @@ router.post('/api/onboarding/payment/initiate', async (req, res) => {
                     suggestion: 'Choose a different username or check the status of your existing request'
                 });
             }
+        } catch (dbError) {
+            console.error('Database error checking existing channels:', dbError);
+            return res.status(500).json({
+                success: false,
+                error: 'Database error while checking existing accounts'
+            });
         } finally {
             client.release();
         }
 
         // Get current pricing
-        const pricing = await pricingService.getLatestPricing();
+        let pricing;
+        try {
+            pricing = await pricingService.getLatestPricing();
+        } catch (pricingError) {
+            console.error('Error fetching pricing data:', pricingError);
+            return res.status(500).json({
+                success: false,
+                error: 'Pricing service temporarily unavailable',
+                details: 'Please try again in a few moments'
+            });
+        }
 
         // Parse crypto rates if they're stored as JSON string
         let cryptoRates = {};
@@ -2312,19 +2678,29 @@ router.post('/api/onboarding/payment/initiate', async (req, res) => {
         }
 
         // Generate payment details
-        const paymentAddress = getPaymentAddress(cryptoType);
-        const memo = generateMemo(username, generateChannelId());
+        let paymentAddress, memo, channel;
+        try {
+            paymentAddress = getPaymentAddress(cryptoType);
+            memo = generateMemo(username, generateChannelId());
 
-        // Create payment channel with provided public keys
-        const channel = await createPaymentChannel(
-            username,
-            cryptoType,
-            cryptoRate.total_amount,
-            cryptoRate.final_cost_usd, // Use the per-crypto price
-            paymentAddress,
-            memo,
-            publicKeys.validated // Store the validated public keys
-        );
+            // Create payment channel with provided public keys
+            channel = await createPaymentChannel(
+                username,
+                cryptoType,
+                cryptoRate.total_amount,
+                cryptoRate.final_cost_usd, // Use the per-crypto price
+                paymentAddress,
+                memo,
+                publicKeys // Store the validated public keys (Joi already validated them)
+            );
+        } catch (channelError) {
+            console.error('Error creating payment channel:', channelError);
+            return res.status(500).json({
+                success: false,
+                error: 'Failed to create payment channel',
+                details: channelError.message
+            });
+        }
 
         res.json({
             success: true,
@@ -2342,10 +2718,10 @@ router.post('/api/onboarding/payment/initiate', async (req, res) => {
                 confirmationsRequired: CRYPTO_CONFIG[cryptoType].confirmations_required,
                 estimatedConfirmationTime: `${Math.ceil(CRYPTO_CONFIG[cryptoType].block_time_seconds * CRYPTO_CONFIG[cryptoType].confirmations_required / 60)} minutes`,
                 publicKeysStored: {
-                    owner: publicKeys.validated.owner,
-                    active: publicKeys.validated.active,
-                    posting: publicKeys.validated.posting,
-                    memo: publicKeys.validated.memo
+                    owner: publicKeys.owner,
+                    active: publicKeys.active,
+                    posting: publicKeys.posting,
+                    memo: publicKeys.memo
                 },
                 instructions: [
                     `Send exactly ${parseFloat(cryptoRate.total_amount).toFixed(CRYPTO_CONFIG[cryptoType].decimals === 18 ? 6 : CRYPTO_CONFIG[cryptoType].decimals)} ${cryptoType} to the address above`,
@@ -3082,24 +3458,17 @@ router.post('/api/onboarding/request/validate', async (req, res) => {
 });
 
 // 5. Send friend account request
-router.post('/api/onboarding/request/send', async (req, res) => {
-    try {
-        const { requesterUsername, requestedFrom, message, publicKeys } = req.body
-
-        // Validate input
-        if (!requestedFrom || !publicKeys) {
-            return res.status(400).json({
-                success: false,
-                error: 'Missing required fields: requestedFrom, publicKeys'
-            });
-        }
-
-        if (!/^[a-z0-9\-\.]{3,16}$/.test(requestedFrom)) {
-            return res.status(400).json({
-                success: false,
-                error: 'Invalid target username format.'
-            });
-        }
+router.post('/api/onboarding/request/send', 
+    rateLimits.strict,
+    validateInput(Joi.object({
+        requesterUsername: validationSchemas.username,
+        requestedFrom: validationSchemas.username,
+        message: validationSchemas.message,
+        publicKeys: validationSchemas.publicKeys
+    })),
+    async (req, res) => {
+            try {
+            const { requesterUsername, requestedFrom, message, publicKeys } = req.body;
 
         // Check if user already has pending request
         const client = await pool.connect();
@@ -3398,27 +3767,79 @@ router.post('/api/onboarding/notifications/dismiss/:notificationId', async (req,
     try {
         const { notificationId } = req.params;
 
-        const transaction = await fetch(config.clientURL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                id: 1,
-                jsonrpc: '2.0',
-                method: 'condenser_api.get_transaction',
-                params: [notificationId]
-            })
-        });
+        // Validate notification ID format (should be a transaction hash)
+        if (!/^[a-fA-F0-9]{40}$/.test(notificationId)) {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid transaction hash format'
+            });
+        }
 
-        const transactionResult = await transaction.json();
-        const tx = transactionResult.result;
-
-        let username
+        let transaction, transactionResult;
         try {
-            username = tx.operations[0][1].required_posting_auths[0]
-        } catch (error) {
+            transaction = await fetch(config.clientURL, {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'DLUX-Onboarding/1.0'
+                },
+                body: JSON.stringify({
+                    id: 1,
+                    jsonrpc: '2.0',
+                    method: 'condenser_api.get_transaction',
+                    params: [notificationId]
+                }),
+                timeout: 10000
+            });
+
+            if (!transaction.ok) {
+                throw new Error(`HIVE API request failed: ${transaction.status}`);
+            }
+
+            transactionResult = await transaction.json();
+        } catch (fetchError) {
+            console.error('Error fetching transaction for notification dismissal:', fetchError);
+            return res.status(500).json({
+                success: false,
+                error: 'Failed to fetch transaction from HIVE blockchain',
+                details: fetchError.message
+            });
+        }
+
+        if (!transactionResult.result) {
             return res.status(404).json({
                 success: false,
-                error: 'Notification not found'
+                error: 'Transaction not found on HIVE blockchain'
+            });
+        }
+
+        const tx = transactionResult.result;
+
+        let username;
+        try {
+            // Enhanced username extraction with multiple fallbacks
+            if (tx.operations?.[0]?.[1]?.required_posting_auths?.[0]) {
+                username = tx.operations[0][1].required_posting_auths[0];
+            } else if (tx.operations?.[0]?.[1]?.required_auths?.[0]) {
+                username = tx.operations[0][1].required_auths[0];
+            } else if (tx.operations?.[0]?.[1]?.from) {
+                username = tx.operations[0][1].from;
+            } else if (tx.operations?.[0]?.[1]?.account) {
+                username = tx.operations[0][1].account;
+            } else {
+                throw new Error('Cannot extract username from transaction');
+            }
+
+            // Validate username format
+            if (!/^[a-z0-9\-\.]{3,16}$/.test(username)) {
+                throw new Error(`Invalid username format: ${username}`);
+            }
+        } catch (error) {
+            console.error('Error extracting username from transaction:', error);
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid transaction format - cannot extract valid username',
+                details: error.message
             });
         }
 
@@ -3544,46 +3965,154 @@ router.post('/api/onboarding/notifications/ignore/:notificationId', authMiddlewa
     }
 });
 
+// Enhanced transaction verification helper
+const verifyHiveAccountCreationTransaction = (tx, expectedUsername = null) => {
+    try {
+        if (!tx || !tx.operations || !Array.isArray(tx.operations)) {
+            throw new Error('Invalid transaction structure - missing operations');
+        }
+
+        if (tx.operations.length === 0) {
+            throw new Error('Transaction has no operations');
+        }
+
+        const operation = tx.operations[0];
+        if (!Array.isArray(operation) || operation.length !== 2) {
+            throw new Error('Invalid operation format');
+        }
+
+        const [opType, opData] = operation;
+        
+        // Check for valid account creation operations
+        const validAccountCreationOps = [
+            'account_create',
+            'create_claimed_account',
+            'account_create_with_delegation'
+        ];
+
+        if (!validAccountCreationOps.includes(opType)) {
+            throw new Error(`Invalid operation type: ${opType}. Expected account creation operation.`);
+        }
+
+        // Extract username based on operation type
+        let username;
+        if (opType === 'account_create' || opType === 'account_create_with_delegation') {
+            username = opData.new_account_name;
+        } else if (opType === 'create_claimed_account') {
+            username = opData.new_account_name;
+        }
+
+        if (!username) {
+            throw new Error('Could not extract username from transaction');
+        }
+
+        // Validate username format
+        if (!/^[a-z0-9\-\.]{3,16}$/.test(username)) {
+            throw new Error(`Invalid username format: ${username}`);
+        }
+
+        // If expected username provided, verify it matches
+        if (expectedUsername && username !== expectedUsername) {
+            throw new Error(`Username mismatch: expected ${expectedUsername}, got ${username}`);
+        }
+
+        // Additional validation based on operation type
+        if (opType === 'account_create' && !opData.fee) {
+            throw new Error('Account creation operation missing fee');
+        }
+
+        if (!opData.owner || !opData.active || !opData.posting || !opData.memo_key) {
+            throw new Error('Account creation operation missing required keys');
+        }
+
+        return {
+            valid: true,
+            username,
+            operationType: opType,
+            creator: opData.creator,
+            fee: opData.fee || '0.000 HIVE',
+            keys: {
+                owner: opData.owner,
+                active: opData.active,
+                posting: opData.posting,
+                memo: opData.memo_key
+            }
+        };
+
+    } catch (error) {
+        return {
+            valid: false,
+            error: error.message
+        };
+    }
+};
+
 // 8. Accept friend request (mark as completed)
 router.post('/api/onboarding/request/accept/:requestId', async (req, res) => {
     try {
         const { requestId } = req.params;
 
-        const transaction = await fetch(config.clientURL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                id: 1,
-                jsonrpc: '2.0',
-                method: 'condenser_api.get_transaction',
-                params: [requestId]
-            })
-        });
+        // Validate request ID format (should be a transaction hash)
+        if (!/^[a-fA-F0-9]{40}$/.test(requestId)) {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid transaction hash format. Must be 40 character hexadecimal string.'
+            });
+        }
 
-        const transactionResult = await transaction.json();
+        let transaction, transactionResult;
+        
+        try {
+            transaction = await fetch(config.clientURL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    id: 1,
+                    jsonrpc: '2.0',
+                    method: 'condenser_api.get_transaction',
+                    params: [requestId]
+                })
+            });
+
+            if (!transaction.ok) {
+                throw new Error(`HIVE API request failed: ${transaction.status} ${transaction.statusText}`);
+            }
+
+            transactionResult = await transaction.json();
+        } catch (fetchError) {
+            console.error('Error fetching transaction from HIVE API:', fetchError);
+            return res.status(500).json({
+                success: false,
+                error: 'Failed to fetch transaction from HIVE blockchain',
+                details: fetchError.message
+            });
+        }
         
         if (!transactionResult.result) {
             return res.status(404).json({
                 success: false,
-                error: 'Transaction not found'
+                error: 'Transaction not found on HIVE blockchain',
+                txHash: requestId
             });
         }
 
         const tx = transactionResult.result;
 
-        let username;
-        try {
-            username = tx.operations[0][1].new_account_name;
-            console.log('Transaction operations:', JSON.stringify(tx.operations, null, 2));
-            console.log('Extracted username:', username, 'Type:', typeof username);
-        } catch (error) {
-            console.log('Error extracting username from transaction:', error);
+        // Enhanced transaction verification
+        const verification = verifyHiveAccountCreationTransaction(tx);
+        
+        if (!verification.valid) {
+            console.log('Transaction verification failed:', verification.error);
             console.log('Transaction structure:', JSON.stringify(tx, null, 2));
-            return res.status(404).json({
+            return res.status(400).json({
                 success: false,
-                error: 'Invalid transaction format - not an account creation transaction'
+                error: 'Invalid account creation transaction',
+                details: verification.error,
+                txHash: requestId
             });
         }
+
+        const { username, operationType, creator } = verification;
         
         console.log('Account Created:', username);
 
@@ -3682,39 +4211,103 @@ router.post('/api/onboarding/request/accept/:requestId', async (req, res) => {
 });
 
 // 6b. Manual transaction verification endpoint
-router.post('/api/onboarding/payment/verify-transaction', async (req, res) => {
+router.post('/api/onboarding/payment/verify-transaction', 
+    validateInput(Joi.object({
+        channelId: validationSchemas.channelId,
+        txHash: validationSchemas.txHash
+    })),
+    async (req, res) => {
     try {
         const { channelId, txHash } = req.body;
 
-        if (!channelId || !txHash) {
-            return res.status(400).json({
+        // Get channel details for memo verification
+        const client = await pool.connect();
+        let channel;
+        try {
+            const channelResult = await client.query(
+                'SELECT * FROM payment_channels WHERE channel_id = $1',
+                [channelId]
+            );
+
+            if (channelResult.rows.length === 0) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Payment channel not found'
+                });
+            }
+
+            channel = channelResult.rows[0];
+        } catch (dbError) {
+            console.error('Database error fetching channel:', dbError);
+            return res.status(500).json({
                 success: false,
-                error: 'Channel ID and transaction hash are required'
+                error: 'Database error while fetching channel details'
             });
+        } finally {
+            client.release();
+        }
+
+        // Verify memo if supported by the cryptocurrency
+        const cryptoConfig = CRYPTO_CONFIG[channel.crypto_type];
+        let memoVerification = { verified: true };
+
+        if (cryptoConfig?.memo_support && channel.memo) {
+            try {
+                memoVerification = await MemoVerification.verifyTransactionMemo(
+                    channel.crypto_type,
+                    txHash,
+                    channel.memo
+                );
+                console.log(`Memo verification for ${channel.crypto_type}:`, memoVerification);
+            } catch (memoError) {
+                console.error('Memo verification failed:', memoError);
+                memoVerification = { 
+                    verified: false, 
+                    error: 'Memo verification service error' 
+                };
+            }
         }
 
         // Verify the transaction using blockchain monitoring service
-        const verificationResult = await blockchainMonitor.manualVerifyTransaction(channelId, txHash);
+        let verificationResult;
+        try {
+            verificationResult = await blockchainMonitor.manualVerifyTransaction(channelId, txHash);
+        } catch (verifyError) {
+            console.error('Blockchain verification error:', verifyError);
+            return res.status(500).json({
+                success: false,
+                error: 'Blockchain verification service error',
+                details: verifyError.message
+            });
+        }
 
         if (verificationResult.success) {
             res.json({
                 success: true,
                 message: 'Transaction verified and payment processed',
                 transaction: verificationResult.transaction,
-                channelId: verificationResult.channel
+                channelId: verificationResult.channel,
+                memoVerification: {
+                    supported: cryptoConfig?.memo_support || false,
+                    verified: memoVerification.verified,
+                    memo: channel.memo,
+                    details: memoVerification.message || memoVerification.error
+                }
             });
         } else {
             res.status(400).json({
                 success: false,
                 error: verificationResult.error,
-                details: 'Transaction could not be verified against payment requirements'
+                details: 'Transaction could not be verified against payment requirements',
+                memoVerification: memoVerification.verified ? 'passed' : 'failed'
             });
         }
     } catch (error) {
         console.error('Error verifying transaction:', error);
         res.status(500).json({
             success: false,
-            error: 'Failed to verify transaction'
+            error: 'Failed to verify transaction',
+            details: error.message
         });
     }
 });
