@@ -1,5 +1,5 @@
 // Payment Channels Component
-Vue.createApp({}).component('payment-channels-view', {
+window.DLUX_COMPONENTS['payment-channels-view'] = {
     props: ['apiClient'],
     emits: ['loading'],
     
@@ -352,7 +352,7 @@ Vue.createApp({}).component('payment-channels-view', {
                     params.append('crypto_type', this.filters.cryptoType);
                 }
 
-                const response = await this.apiClient.get(`/api/onboarding/admin/channels?${params}`);
+                const response = await this.apiClient.get(`/api/admin/channels?${params}`);
                 
                 if (response.success) {
                     this.data = {
@@ -578,4 +578,4 @@ Vue.createApp({}).component('payment-channels-view', {
             this.alert = { message: '', type: 'info', icon: '' };
         }
     }
-}); 
+}; 

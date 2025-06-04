@@ -1,5 +1,5 @@
 // Blockchain Status Component
-Vue.createApp({}).component('blockchain-status-view', {
+window.DLUX_COMPONENTS['blockchain-status-view'] = {
     props: ['apiClient'],
     emits: ['loading'],
     
@@ -199,8 +199,8 @@ Vue.createApp({}).component('blockchain-status-view', {
                                     <h6>{{ stat.cryptoType }} - {{ stat.status }}</h6>
                                     <h4>{{ stat.count }}</h4>
                                     <small class="text-muted">
-                                        Avg: ${{ stat.avgAmount.toFixed(2) }} | 
-                                        Total: ${{ stat.totalUsd.toFixed(2) }}
+                                        Avg: ${{ (stat.avgAmount || 0).toFixed(2) }} | 
+                                        Total: ${{ (stat.totalUsd || 0).toFixed(2) }}
                                     </small>
                                 </div>
                             </div>
@@ -279,7 +279,7 @@ Vue.createApp({}).component('blockchain-status-view', {
             this.$emit('loading', true);
             
             try {
-                const response = await this.apiClient.get('/api/onboarding/admin/blockchain-status');
+                const response = await this.apiClient.get('/api/admin/blockchain-status');
                 
                 if (response.success) {
                     this.data = {
@@ -492,4 +492,4 @@ Vue.createApp({}).component('blockchain-status-view', {
             this.alert = { message: '', type: 'info', icon: '' };
         }
     }
-}); 
+}; 

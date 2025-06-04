@@ -68,7 +68,7 @@ class ApiClient {
 }
 
 // Main Vue Application
-createApp({
+const app = createApp({
     data() {
         return {
             // Authentication state
@@ -142,7 +142,7 @@ createApp({
                 }
 
                 // Get challenge from server
-                const challengeResponse = await fetch(`${window.location.origin}/api/onboarding/auth/challenge`);
+                const challengeResponse = await fetch(`${window.location.origin}/api/auth/challenge`);
                 const challengeData = await challengeResponse.json();
 
                 if (!challengeData.success) {
@@ -187,7 +187,7 @@ createApp({
 
                 // Test the authentication by making a whoami request
                 this.apiClient.setAuth(authData);
-                const whoamiResponse = await this.apiClient.get('/api/onboarding/auth/whoami');
+                const whoamiResponse = await this.apiClient.get('/api/auth/whoami');
 
                 if (whoamiResponse.success && whoamiResponse.isAdmin) {
                     // Save authentication data
@@ -242,8 +242,8 @@ createApp({
             try {
                 // Load multiple data sources in parallel
                 const [actStatusData, channelsData] = await Promise.all([
-                    this.apiClient.get('/api/onboarding/admin/act-status'),
-                    this.apiClient.get('/api/onboarding/admin/channels?limit=10')
+                    this.apiClient.get('/api/admin/act-status'),
+                    this.apiClient.get('/api/admin/channels?limit=10')
                 ]);
 
                 // Process ACT status data
@@ -422,4 +422,18 @@ createApp({
             }
         }
     }
-}).mount('#app'); 
+});
+
+// This will be populated by component files
+window.DLUX_COMPONENTS = {};
+
+// Mount the app after all components are loaded
+window.mountDLUXApp = function() {
+    // Register all components
+    Object.keys(window.DLUX_COMPONENTS).forEach(name => {
+        app.component(name, window.DLUX_COMPONENTS[name]);
+    });
+    
+    // Mount the app
+    app.mount('#app');
+}; 

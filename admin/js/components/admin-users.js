@@ -1,5 +1,5 @@
 // Admin Users Component
-Vue.createApp({}).component('admin-users-view', {
+window.DLUX_COMPONENTS['admin-users-view'] = {
     props: ['apiClient'],
     emits: ['loading'],
     
@@ -348,7 +348,7 @@ Vue.createApp({}).component('admin-users-view', {
             this.$emit('loading', true);
             
             try {
-                const response = await this.apiClient.get('/api/onboarding/admin/users');
+                const response = await this.apiClient.get('/api/admin/users');
                 
                 if (response.success) {
                     this.data = {
@@ -392,7 +392,7 @@ Vue.createApp({}).component('admin-users-view', {
             this.addingAdmin = true;
             
             try {
-                const response = await this.apiClient.post('/api/onboarding/admin/users/add', {
+                const response = await this.apiClient.post('/api/admin/users/add', {
                     username: this.newAdmin.username.toLowerCase().replace('@', ''),
                     permissions: this.newAdmin.permissions
                 });
@@ -443,7 +443,7 @@ Vue.createApp({}).component('admin-users-view', {
             this.removingAdmin = true;
             
             try {
-                const response = await this.apiClient.post(`/api/onboarding/admin/users/${this.adminToRemove.username}/remove`);
+                const response = await this.apiClient.post(`/api/admin/users/${this.adminToRemove.username}/remove`);
                 
                 if (response.success) {
                     this.showAlert(response.message, 'success', 'bi-check-circle');
@@ -493,4 +493,4 @@ Vue.createApp({}).component('admin-users-view', {
             this.alert = { message: '', type: 'info', icon: '' };
         }
     }
-}); 
+}; 

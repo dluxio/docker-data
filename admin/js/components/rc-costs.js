@@ -1,5 +1,5 @@
 // RC Costs Component
-Vue.createApp({}).component('rc-costs-view', {
+window.DLUX_COMPONENTS['rc-costs-view'] = {
     props: ['apiClient'],
     emits: ['loading'],
     
@@ -256,7 +256,7 @@ Vue.createApp({}).component('rc-costs-view', {
             this.$emit('loading', true);
             
             try {
-                const response = await this.apiClient.get('/api/onboarding/admin/rc-costs');
+                const response = await this.apiClient.get('/api/admin/rc-costs');
                 
                 if (response.success) {
                     this.data = {
@@ -424,4 +424,4 @@ Vue.createApp({}).component('rc-costs-view', {
             this.alert = { message: '', type: 'info', icon: '' };
         }
     }
-}); 
+}; 
