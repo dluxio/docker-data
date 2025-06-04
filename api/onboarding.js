@@ -228,7 +228,7 @@ const setupDatabase = async () => {
             INSERT INTO admin_users (username, permissions, added_by)
             VALUES ($1, $2, 'system')
           `, [config.username, JSON.stringify({ admin: true, super: true })]);
-                console.log(`✓ Default admin user created: @${config.username}`);
+        
             }
 
             // Payment addresses are now stored in environment/config
@@ -397,7 +397,7 @@ const setupDatabase = async () => {
                     ALTER TABLE onboarding_requests 
                     ADD COLUMN IF NOT EXISTS account_created_tx VARCHAR(255)
                 `);
-                console.log('✓ Database schema updated - added missing columns');
+    
             } catch (alterError) {
                 // This might fail on some PostgreSQL versions that don't support IF NOT EXISTS
                 // Try without it
@@ -406,14 +406,14 @@ const setupDatabase = async () => {
                         ALTER TABLE onboarding_requests 
                         ADD COLUMN account_created_tx VARCHAR(255)
                     `);
-                    console.log('✓ Database schema updated - added account_created_tx column');
+    
                 } catch (secondError) {
                     // Column probably already exists, which is fine
-                    console.log('Database schema already up to date');
+    
                 }
             }
 
-            console.log('Database tables created successfully');
+    
         } finally {
             client.release();
         }
@@ -580,7 +580,7 @@ class PricingService {
                 }
                 
                 const hivePrice = baseAmount / quoteAmount;
-                console.log(`HIVE price from fallback API: $${hivePrice.toFixed(6)}`);
+    
                 
                 return { 
                     price: hivePrice, 
@@ -676,7 +676,7 @@ class PricingService {
                                 }
                             }
                         } catch (gasNowError) {
-                            console.log('GasNow API failed, trying alternative...');
+            
                         }
 
                         // If GasNow failed, try gas station API
@@ -696,18 +696,18 @@ class PricingService {
                                     }
                                 }
                             } catch (gasStationError) {
-                                console.log('Gas Station API failed, using default');
+        
                             }
                         }
 
                         // If all APIs failed, ensure we have a valid default
                         if (!gasSuccess) {
-                            console.log('All ETH gas APIs failed, using fallback estimate');
+        
                             avgFee = config.avg_transfer_fee; // Use the default 0.002 ETH
                             congestion = 'unknown';
                         }
                     } catch (gasError) {
-                        console.log('ETH gas estimation completely failed, using default:', gasError.message);
+    
                         avgFee = config.avg_transfer_fee; // Ensure we always have a valid fee
                         congestion = 'unknown';
                     }
@@ -748,28 +748,19 @@ class PricingService {
 
     async updatePricing() {
         if (this.isUpdating) {
-            console.log('Pricing update already in progress, skipping...');
             return;
         }
 
         this.isUpdating = true;
-        console.log('Starting hourly pricing update...');
 
         try {
             const client = await pool.connect();
 
             try {
                 // Fetch all pricing data
-                console.log('Fetching HIVE price...');
                 const hiveData = await this.fetchHivePrice();
-
-                console.log('Fetching crypto prices...');
                 const cryptoPrices = await this.fetchCryptoPrices();
-
-                console.log('Estimating transfer costs...');
                 const transferCosts = await this.estimateTransferCosts(cryptoPrices);
-
-                console.log('Calculating account creation pricing...');
                 const pricingData = this.calculateAccountCreationPrice(hiveData.price, transferCosts);
 
                 // Store HIVE price
@@ -836,15 +827,6 @@ class PricingService {
                 await client.query('DELETE FROM account_creation_pricing WHERE updated_at < $1', [cleanupDate]);
 
                 this.lastUpdate = new Date();
-                console.log(`Pricing update completed successfully at ${this.lastUpdate.toISOString()}`);
-                console.log(`Base account creation cost: $${pricingData.account_creation_cost_usd.toFixed(6)} USD`);
-                console.log(`HIVE price: $${hiveData.price.toFixed(6)} USD`);
-
-                // Log per-crypto pricing
-                console.log('Per-crypto final costs:');
-                Object.entries(cryptoRates).forEach(([symbol, data]) => {
-                    console.log(`  ${symbol}: $${data.final_cost_usd.toFixed(6)} USD (base + $${data.network_fee_surcharge_usd.toFixed(6)} network fee)`);
-                });
 
             } finally {
                 client.release();
@@ -866,7 +848,6 @@ class PricingService {
 
                 if (result.rows.length === 0) {
                     // No pricing data available, trigger an update
-                    console.log('No pricing data found, triggering update...');
                     await this.updatePricing();
 
                     // Try again
@@ -888,7 +869,6 @@ class PricingService {
                 const maxAge = 2 * 60 * 60 * 1000; // 2 hours
 
                 if (dataAge > maxAge) {
-                    console.log('Pricing data is stale, triggering background update...');
                     // Trigger update in background, but return current data
                     setImmediate(() => this.updatePricing());
                 }
@@ -912,7 +892,6 @@ class PricingService {
             this.updatePricing();
         }, this.updateInterval);
 
-        console.log('Scheduled pricing updates started (every hour)');
     }
 }
 
@@ -960,7 +939,7 @@ class MemoVerification {
                         }
                     }
                 } catch (apiError) {
-                    console.log(`BTC API ${apiUrl} failed:`, apiError.message);
+
                     continue;
                 }
             }
@@ -1020,7 +999,7 @@ class MemoVerification {
                         }
                     }
                 } catch (apiError) {
-                    console.log(`SOL RPC ${endpoint} failed:`, apiError.message);
+
                     continue;
                 }
             }
@@ -1066,7 +1045,7 @@ class RCMonitoringService {
 
     async fetchRCCosts() {
         try {
-            console.log('Fetching latest RC costs from HIVE API...');
+    
             const response = await fetch(this.rcApiUrl);
 
             if (!response.ok) {
@@ -1090,7 +1069,7 @@ class RCMonitoringService {
                 };
             });
 
-            console.log(`✓ Fetched RC costs for ${data.costs.length} operations (timestamp: ${apiTimestamp.toISOString()})`);
+
 
             return {
                 timestamp: apiTimestamp,
@@ -1105,12 +1084,10 @@ class RCMonitoringService {
 
     async updateRCCosts() {
         if (this.isUpdating) {
-            console.log('RC costs update already in progress, skipping...');
             return;
         }
 
         this.isUpdating = true;
-        console.log('Starting RC costs update...');
 
         try {
             const rcData = await this.fetchRCCosts();
@@ -1138,7 +1115,7 @@ class RCMonitoringService {
                 );
 
                 if (cleanupResult.rowCount > 0) {
-                    console.log(`Cleaned up ${cleanupResult.rowCount} old RC cost records`);
+    
                 }
 
                 // Update current costs cache
@@ -1190,7 +1167,6 @@ class RCMonitoringService {
 
                 // If no data in database, try to fetch fresh data
                 if (Object.keys(costs).length === 0) {
-                    console.log('No RC costs in database, fetching fresh data...');
                     await this.updateRCCosts();
                     return this.currentCosts;
                 }
@@ -1201,7 +1177,6 @@ class RCMonitoringService {
                 const maxAge = 6 * 60 * 60 * 1000; // 6 hours
 
                 if (dataAge > maxAge) {
-                    console.log('RC costs data is stale, triggering background update...');
                     setImmediate(() => this.updateRCCosts());
                 }
 
@@ -1228,7 +1203,6 @@ class RCMonitoringService {
             this.updateRCCosts();
         }, this.updateInterval);
 
-        console.log('✓ RC monitoring service started (updates every 3 hours)');
     }
 }
 
@@ -1329,13 +1303,11 @@ class HiveAccountService {
             const claimAccountCost = rcCosts['claim_account_operation'];
 
             if (!claimAccountCost) {
-                console.log('RC cost data not available for claim_account_operation, using fallback');
                 // Fallback to a conservative estimate based on current data
                 const rcNeeded = 13686780357957; // From the API data
                 await this.checkResourceCredits();
 
                 if (this.resourceCredits < rcNeeded) {
-                    console.log(`Insufficient RCs for claiming ACT. Have: ${this.resourceCredits.toLocaleString()}, Need: ${rcNeeded.toLocaleString()}`);
                     return false;
                 }
             } else {
@@ -1343,14 +1315,9 @@ class HiveAccountService {
                 await this.checkResourceCredits();
 
                 if (this.resourceCredits < rcNeeded) {
-                    console.log(`Insufficient RCs for claiming ACT. Have: ${this.resourceCredits.toLocaleString()}, Need: ${rcNeeded.toLocaleString()} (${claimAccountCost.hp_needed.toFixed(2)} HP equivalent)`);
                     return false;
                 }
-
-                console.log(`RC check passed. Using ${rcNeeded.toLocaleString()} RC (${claimAccountCost.hp_needed.toFixed(2)} HP equivalent) to claim ACT`);
             }
-
-            console.log('Attempting to claim Account Creation Token...');
 
             // Create claim_account operation
             const claimAccountOp = [
@@ -1406,7 +1373,7 @@ class HiveAccountService {
                 throw new Error(`Broadcast error: ${broadcastResult.error.message}`);
             }
 
-            console.log('✓ Account Creation Token claimed successfully');
+
 
             // Update ACT balance in database
             this.actBalance += 1;
@@ -1439,7 +1406,7 @@ class HiveAccountService {
                 throw new Error('Creator key not configured');
             }
 
-            console.log(`Creating HIVE account: @${username}`);
+    
 
             // Check if account already exists
             const existingAccount = await this.getHiveAccount(username);
@@ -1595,7 +1562,7 @@ class HiveAccountService {
             const txId = broadcastResult.result.id;
             const blockNum = broadcastResult.result.block_num;
 
-            console.log(`✓ HIVE account @${username} created successfully! TX: ${txId}`);
+            console.log(`✓ Account @${username} created! TX: ${txId}`);
 
             // Update ACT balance if we used one
             if (useACT) {
@@ -1688,7 +1655,7 @@ class HiveAccountService {
                     client.release();
                 }
 
-                console.log(`Current ACT balance: ${this.actBalance}`);
+        
                 return this.actBalance;
             }
         } catch (error) {
@@ -1714,7 +1681,7 @@ class HiveAccountService {
 
                 for (const channel of result.rows) {
                     try {
-                        console.log(`Processing confirmed payment for @${channel.username}...`);
+        
 
                         const publicKeys = typeof channel.public_keys === 'string'
                             ? JSON.parse(channel.public_keys)
@@ -1735,7 +1702,7 @@ class HiveAccountService {
                   WHERE channel_id = $1
                 `, [channel.channel_id]);
 
-                            console.log(`✓ Account @${channel.username} created and channel marked as completed`);
+                            console.log(`✓ Account @${channel.username} created`);
                         }
 
                     } catch (error) {
@@ -1778,7 +1745,7 @@ class HiveAccountService {
                 for (const channel of result.rows) {
                     const account = await this.getHiveAccount(channel.username);
                     if (account) {
-                        console.log(`Account @${channel.username} found on blockchain - updating status`);
+                        console.log(`✓ Account @${channel.username} created`);
 
                         await client.query(`
                 UPDATE payment_channels 
@@ -1802,7 +1769,6 @@ class HiveAccountService {
             const claimCost = rcCosts['claim_account_operation'];
             
             if (!claimCost) {
-                console.log('RC cost data not available for proactive ACT claiming');
                 return;
             }
 
@@ -1826,11 +1792,7 @@ class HiveAccountService {
             );
 
             if (shouldClaim) {
-                console.log(`🔄 Proactive ACT claiming triggered:`);
-                console.log(`   Current ACT balance: ${this.actBalance}`);
-                console.log(`   Current RC balance: ${(this.resourceCredits / 1e9).toFixed(2)}B`);
-                console.log(`   Claim cost: ${(claimCost.rc_needed / 1e9).toFixed(2)}B RC`);
-                console.log(`   Threshold: ${(rcThreshold / 1e9).toFixed(2)}B RC`);
+                
 
                 // Attempt to claim multiple ACTs if we have abundant RCs
                 const maxClaims = Math.min(
@@ -1843,7 +1805,7 @@ class HiveAccountService {
                     const success = await this.claimAccountCreationTokens();
                     if (success) {
                         claimed++;
-                        console.log(`✓ ACT ${i + 1}/${maxClaims} claimed successfully`);
+
                         
                         // Small delay between claims
                         await new Promise(resolve => setTimeout(resolve, 5000));
@@ -1851,25 +1813,13 @@ class HiveAccountService {
                         // Check if we still have enough RCs for another claim
                         await this.checkResourceCredits();
                         if (this.resourceCredits < claimCost.rc_needed) {
-                            console.log(`Stopping ACT claiming - insufficient RCs remaining`);
                             break;
                         }
                     } else {
-                        console.log(`Failed to claim ACT ${i + 1}/${maxClaims}`);
                         break;
                     }
                 }
 
-                if (claimed > 0) {
-                    console.log(`🎉 Proactive ACT claiming completed: ${claimed} ACTs claimed`);
-                    console.log(`   New ACT balance: ${this.actBalance}`);
-                    console.log(`   Remaining RCs: ${(this.resourceCredits / 1e9).toFixed(2)}B`);
-                }
-            } else {
-                // Log status occasionally
-                if (Math.random() < 0.1) { // 10% chance to log status
-                    console.log(`ACT Status: ${this.actBalance} ACTs, ${(this.resourceCredits / 1e9).toFixed(1)}B RCs (threshold: ${(rcThreshold / 1e9).toFixed(1)}B)`);
-                }
             }
         } catch (error) {
             console.error('Error in proactive ACT claiming:', error);
@@ -1901,15 +1851,12 @@ class HiveAccountService {
                 const claimCost = rcCosts['claim_account_operation'];
 
                 if (claimCost && this.resourceCredits >= claimCost.rc_needed) {
-                    console.log(`Legacy auto-claiming ACT: Balance low (${this.actBalance}), sufficient RCs (${(this.resourceCredits / 1e9).toFixed(1)}B available, ${(claimCost.rc_needed / 1e9).toFixed(1)}B needed)`);
                     await this.claimAccountCreationTokens();
-                } else if (claimCost) {
-                    console.log(`Cannot auto-claim ACT: Insufficient RCs. Have ${(this.resourceCredits / 1e9).toFixed(1)}B, need ${(claimCost.rc_needed / 1e9).toFixed(1)}B`);
                 }
             }
         }, 60 * 60 * 1000);
 
-        console.log('✓ HIVE Account Service monitoring started with proactive ACT claiming');
+
     }
 }
 
@@ -1929,7 +1876,7 @@ const createNotification = async (username, type, title, message, data = null, p
           VALUES ($1, $2, $3, $4, $5, $6, $7)
         `, [username, type, title, message, data ? JSON.stringify(data) : null, priority, expiresAt]);
 
-            console.log(`✓ Notification created for @${username}: ${title}`);
+
         } finally {
             client.release();
         }
@@ -1977,6 +1924,8 @@ const createPaymentChannel = async (username, cryptoType, amountCrypto, amountUs
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING *
       `, [channelId, username, cryptoType, paymentAddress.address, amountCrypto, amountUsd, memo, JSON.stringify(publicKeys)]);
+
+        console.log(`📝 Channel created for @${username}: ${amountCrypto} ${cryptoType} (${channelId})`);
 
         return {
             ...result.rows[0],
@@ -2485,16 +2434,7 @@ router.get('/api/onboarding/pricing', rateLimits.pricing, async (req, res) => {
                 transferCosts = pricing.transfer_costs;
             }
 
-            // Debug logging
-            console.log('Parsed pricing data:', {
-                hivePrice: pricing.hive_price_usd,
-                baseCost: pricing.base_cost_usd,
-                finalCost: pricing.final_cost_usd,
-                cryptoRatesType: typeof cryptoRates,
-                cryptoRatesKeys: Object.keys(cryptoRates),
-                transferCostsType: typeof transferCosts,
-                transferCostsKeys: Object.keys(transferCosts)
-            });
+
 
         } catch (parseError) {
             console.error('Error parsing pricing JSON data:', parseError);
@@ -2543,14 +2483,7 @@ router.get('/api/onboarding/pricing', rateLimits.pricing, async (req, res) => {
         // Force recalculation of account_creation_cost_usd to ensure it's never null
         const finalAccountCreationCost = accountCreationCost || (baseCost * 1.5) || 1.0776; // Ultimate fallback
 
-        // Debug logging before response
-        console.log('Final response data:', {
-            account_creation_cost_usd: finalAccountCreationCost,
-            cryptoRatesSample: Object.keys(cryptoRates).slice(0, 2).reduce((acc, key) => {
-                acc[key] = cryptoRates[key];
-                return acc;
-            }, {})
-        });
+
 
         res.json({
             success: true,
@@ -4102,8 +4035,7 @@ router.post('/api/onboarding/request/accept/:requestId', async (req, res) => {
         const verification = verifyHiveAccountCreationTransaction(tx);
         
         if (!verification.valid) {
-            console.log('Transaction verification failed:', verification.error);
-            console.log('Transaction structure:', JSON.stringify(tx, null, 2));
+            
             return res.status(400).json({
                 success: false,
                 error: 'Invalid account creation transaction',
@@ -4114,7 +4046,7 @@ router.post('/api/onboarding/request/accept/:requestId', async (req, res) => {
 
         const { username, operationType, creator } = verification;
         
-        console.log('Account Created:', username);
+                    console.log(`✓ Account @${username} created`);
 
         const client = await pool.connect();
         try {
@@ -4126,7 +4058,7 @@ router.post('/api/onboarding/request/accept/:requestId', async (req, res) => {
                 [username]
             );
             
-            console.log(`Found ${debugQuery.rows.length} requests for username "${username}":`, debugQuery.rows);
+
 
             // Also check for any pending requests regardless of username
             const allPendingQuery = await client.query(
@@ -4135,7 +4067,7 @@ router.post('/api/onboarding/request/accept/:requestId', async (req, res) => {
                  ORDER BY created_at DESC LIMIT 5`
             );
             
-            console.log(`All pending requests:`, allPendingQuery.rows);
+
 
             // First, find the request by username and verify it exists and is pending
             const requestQuery = await client.query(
@@ -4157,7 +4089,7 @@ router.post('/api/onboarding/request/accept/:requestId', async (req, res) => {
             }
 
             const request = requestQuery.rows[0];
-            console.log('Found request:', request.request_id);
+
 
             // Now update the request
             const result = await client.query(
@@ -4258,7 +4190,7 @@ router.post('/api/onboarding/payment/verify-transaction',
                     txHash,
                     channel.memo
                 );
-                console.log(`Memo verification for ${channel.crypto_type}:`, memoVerification);
+    
             } catch (memoError) {
                 console.error('Memo verification failed:', memoError);
                 memoVerification = { 
@@ -4336,7 +4268,7 @@ router.post('/api/onboarding/webhook/payment', async (req, res) => {
 
                     if (channelResult.rows.length > 0) {
                         const channel = channelResult.rows[0];
-                        console.log(`Payment confirmed for channel ${channelId}, @${channel.username}`);
+                
 
                         // The monitorPendingCreations() will pick this up automatically
                         // But we can also try to process it immediately
@@ -4367,7 +4299,7 @@ router.post('/api/onboarding/webhook/payment', async (req, res) => {
                                             updateClient.release();
                                         }
 
-                                        console.log(`✓ Account @${channel.username} created via webhook`);
+                                        console.log(`✓ Account @${channel.username} created`);
                                     } catch (error) {
                                         console.error(`Failed to create account for @${channel.username} via webhook:`, error);
 
@@ -4403,7 +4335,7 @@ router.post('/api/onboarding/webhook/payment', async (req, res) => {
 
                     if (legacyResult.rows.length > 0) {
                         const payment = legacyResult.rows[0];
-                        console.log(`Legacy payment confirmed for ${payment.username}`);
+            
 
                         // Handle legacy payment creation if needed
                         // This would require adapting the old system to the new account creation logic
@@ -4471,31 +4403,20 @@ const initializeOnboardingService = async () => {
 
         // Set up database
         await setupDatabase();
-        console.log('✓ Database tables created/verified');
 
         // Start pricing service
         pricingService.startScheduledUpdates();
-        console.log('✓ Pricing service started with hourly updates');
 
         // Start RC monitoring service
         rcMonitoringService.startScheduledUpdates();
-        console.log('✓ RC monitoring service started with 3-hour updates');
 
         // Initialize and start HIVE account service
         await hiveAccountService.updateACTBalance();
         await hiveAccountService.checkResourceCredits();
         hiveAccountService.startMonitoring();
-        console.log('✓ HIVE Account Service initialized and monitoring started');
 
         // Start blockchain monitoring service
         await blockchainMonitor.startMonitoring();
-        console.log('✓ Blockchain monitoring service started');
-
-        console.log('DLUX Onboarding Service initialized successfully!');
-        console.log(`Supported cryptocurrencies: ${Object.keys(CRYPTO_CONFIG).join(', ')}`);
-        console.log(`HIVE creator account: @${config.username}`);
-        console.log(`Current ACT balance: ${hiveAccountService.actBalance}`);
-        console.log(`Current RC balance: ${hiveAccountService.resourceCredits.toLocaleString()}`);
 
     } catch (error) {
         console.error('Failed to initialize Onboarding Service:', error);
@@ -4508,7 +4429,7 @@ const initializeWebSocketMonitor = (server) => {
     if (!global.paymentMonitor) {
         global.paymentMonitor = new PaymentChannelMonitor();
         global.paymentMonitor.initialize(server);
-        console.log('✓ Payment channel WebSocket monitor initialized');
+
     }
     return global.paymentMonitor;
 };
@@ -5002,11 +4923,11 @@ router.post('/api/onboarding/request/:requestId/create-account', authMiddleware,
                 const claimCost = rcCosts['claim_account_operation'];
 
                 if (claimCost && hiveAccountService.resourceCredits >= claimCost.rc_needed) {
-                    console.log(`Attempting to claim ACT for friend request...`);
+            
                     const claimed = await hiveAccountService.claimAccountCreationTokens();
                     if (claimed) {
                         canUseACT = true;
-                        console.log(`✓ ACT claimed successfully for friend request`);
+
                     }
                 }
             }
@@ -5115,11 +5036,11 @@ module.exports = {
 // Auto-initialize if this file is run directly
 if (require.main === module) {
     initializeOnboardingService().then(() => {
-        console.log('Onboarding service is running...');
+
 
         // Keep the process alive for testing
         setInterval(() => {
-            console.log(`[${new Date().toISOString()}] Service running - Last pricing update: ${pricingService.lastUpdate || 'Never'}`);
+
         }, 10 * 60 * 1000); // Every 10 minutes
     });
 } 

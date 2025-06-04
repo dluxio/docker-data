@@ -49,12 +49,9 @@ class PaymentChannelMonitor {
             path: '/ws/payment-monitor',
             verifyClient: (info) => {
                 const origin = info.origin;
-                const userAgent = info.req.headers['user-agent'] || '';
-                console.log(`WebSocket connection attempt from origin: ${origin}, User-Agent: ${userAgent}`);
                 
                 // Allow connections without origin (for testing tools, native apps, etc.)
                 if (!origin) {
-                    console.log('WebSocket connection allowed (no origin header)');
                     return true;
                 }
                 
@@ -68,35 +65,12 @@ class PaymentChannelMonitor {
                     return false;
                 });
                 
-                if (isAllowed) {
-                    console.log(`WebSocket connection allowed from: ${origin}`);
-                } else {
-                    console.log(`WebSocket connection REJECTED from: ${origin}`);
-                    console.log(`Allowed origins: ${allowedOrigins.join(', ')}`);
-                    // Log additional debugging info for troubleshooting
-                    console.log(`Request headers:`, {
-                        host: info.req.headers.host,
-                        'user-agent': userAgent,
-                        'sec-websocket-version': info.req.headers['sec-websocket-version'],
-                        'sec-websocket-key': info.req.headers['sec-websocket-key'] ? '[PRESENT]' : '[MISSING]'
-                    });
-                }
-                
                 return isAllowed;
             }
         });
 
         this.wss.on('connection', (ws, req) => {
-            const clientIP = req.socket.remoteAddress;
-            const userAgent = req.headers['user-agent'];
-            const origin = req.headers.origin;
             const connectionId = Math.random().toString(36).substring(7);
-            
-            console.log(`WebSocket connection established from ${clientIP} (Origin: ${origin}) [ID: ${connectionId}]`);
-            console.log(`User Agent: ${userAgent}`);
-            console.log(`Connection state: ${ws.readyState} (1=OPEN)`);
-            console.log(`Request URL: ${req.url}`);
-            console.log(`Protocol: ${req.headers['sec-websocket-protocol'] || 'none'}`);
             
             // Store connection ID and start time for debugging
             ws.connectionId = connectionId;
@@ -106,18 +80,12 @@ class PaymentChannelMonitor {
 
             ws.on('message', async (message) => {
                 try {
-                    console.log(`[ID: ${ws.connectionId}] WebSocket message received: ${message}`);
-                    console.log(`[ID: ${ws.connectionId}] Message length: ${message.length} bytes`);
-                    console.log(`[ID: ${ws.connectionId}] Message type: ${typeof message}`);
-                    
                     const data = JSON.parse(message);
-                    console.log(`[ID: ${ws.connectionId}] Parsed data:`, data);
                     ws.messageCount++;
                     ws.lastMessageTime = Date.now();
                     await this.handleMessage(ws, data);
                 } catch (error) {
-                    console.error(`[ID: ${ws.connectionId}] WebSocket message error:`, error);
-                    console.error(`[ID: ${ws.connectionId}] Raw message that caused error:`, message);
+                    console.error(`WebSocket message error:`, error);
                     
                     try {
                         ws.send(JSON.stringify({
@@ -127,91 +95,62 @@ class PaymentChannelMonitor {
                             timestamp: new Date().toISOString()
                         }));
                     } catch (sendError) {
-                        console.error(`[ID: ${ws.connectionId}] Failed to send error message:`, sendError);
+                        console.error(`Failed to send error message:`, sendError);
                     }
                 }
             });
 
             ws.on('close', (code, reason) => {
-                const connectionTime = Date.now() - (ws.connectionStartTime || Date.now());
-                console.log(`WebSocket connection closed [ID: ${ws.connectionId}] - Code: ${code}, Reason: ${reason || 'No reason'}`);
-                console.log(`Client was: ${clientIP} (Origin: ${origin})`);
-                console.log(`Connection duration: ${connectionTime}ms`);
-                console.log(`Close code meaning: ${getCloseCodeMeaning(code)}`);
-                console.log(`Messages received during connection: ${ws.messageCount || 0}`);
-                console.log(`Last message: ${ws.lastMessageTime ? new Date(ws.lastMessageTime).toISOString() : 'never'}`);
                 this.removeClient(ws);
             });
 
             ws.on('error', (error) => {
-                console.error(`WebSocket error from ${clientIP} [ID: ${ws.connectionId}]:`, error);
-                console.error(`Error type: ${error.constructor.name}`);
-                console.error(`Error message: ${error.message}`);
-                console.error(`Error code: ${error.code || 'unknown'}`);
+                console.error(`WebSocket error:`, error);
                 this.removeClient(ws);
             });
 
-            // Send initial connection confirmation with enhanced error handling
-            try {
-                // Wait a moment to ensure connection is fully established
-                setTimeout(() => {
-                    if (ws.readyState === WebSocket.OPEN) {
-                        const welcomeMessage = {
-                            type: 'connected',
-                            message: 'WebSocket connection established',
-                            timestamp: new Date().toISOString(),
-                            server: 'DLUX Payment Monitor',
-                            connectionId: connectionId
-                        };
-                        
-                        console.log(`[ID: ${connectionId}] Sending welcome message:`, JSON.stringify(welcomeMessage));
-                        
-                        try {
-                            ws.send(JSON.stringify(welcomeMessage));
-                            console.log(`[ID: ${connectionId}] Welcome message sent successfully`);
-                        } catch (sendError) {
-                            console.error(`[ID: ${connectionId}] Error sending welcome message:`, sendError);
-                            console.log(`[ID: ${connectionId}] WebSocket state at error:`, ws.readyState);
-                        }
-                    } else {
-                        console.log(`[ID: ${connectionId}] WebSocket not in OPEN state, not sending welcome message. State:`, ws.readyState);
+            // Send initial connection confirmation
+            setTimeout(() => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    const welcomeMessage = {
+                        type: 'connected',
+                        message: 'WebSocket connection established',
+                        timestamp: new Date().toISOString(),
+                        server: 'DLUX Payment Monitor',
+                        connectionId: connectionId
+                    };
+                    
+                    try {
+                        ws.send(JSON.stringify(welcomeMessage));
+                    } catch (sendError) {
+                        console.error(`Error sending welcome message:`, sendError);
                     }
-                }, 150); // Increased delay for better stability
-                
-            } catch (error) {
-                console.error(`[ID: ${connectionId}] Failed to setup welcome message:`, error);
-            }
+                }
+            }, 150);
         });
 
-        console.log('WebSocket server initialized on path /ws/payment-monitor');
+
     }
 
     async handleMessage(ws, data) {
-        console.log(`Handling WebSocket message type: ${data.type}`, data);
-        
         try {
             switch (data.type) {
                 case 'subscribe':
-                    console.log(`Client subscribing to channel: ${data.channelId}`);
                     await this.subscribeToChannel(ws, data.channelId);
                     break;
                 case 'unsubscribe':
-                    console.log(`Client unsubscribing from channel: ${data.channelId}`);
                     this.unsubscribeFromChannel(ws, data.channelId);
                     break;
                 case 'payment_sent':
-                    console.log(`Payment sent notification for channel: ${data.channelId}, tx: ${data.txHash}`);
                     await this.handlePaymentSent(data.channelId, data.txHash);
                     break;
                 case 'ping':
-                    console.log('Ping received, sending pong');
                     ws.send(JSON.stringify({ 
                         type: 'pong',
                         timestamp: new Date().toISOString()
                     }));
                     break;
                 default:
-                    console.log(`Unknown message type: ${data.type}`);
                     ws.send(JSON.stringify({
                         type: 'error',
                         message: 'Unknown message type',
@@ -259,7 +198,7 @@ class PaymentChannelMonitor {
             this.startChannelMonitoring(channelId);
         }
 
-        console.log(`Client subscribed to channel: ${channelId}`);
+
     }
 
     unsubscribeFromChannel(ws, channelId) {
@@ -275,7 +214,7 @@ class PaymentChannelMonitor {
             ws.channels.delete(channelId);
         }
 
-        console.log(`Client unsubscribed from channel: ${channelId}`);
+
     }
 
     removeClient(ws) {
@@ -287,11 +226,8 @@ class PaymentChannelMonitor {
     }
 
     async sendChannelStatus(channelId) {
-        console.log(`Sending channel status for: ${channelId}`);
-        
         try {
             const client = await pool.connect();
-            console.log('Database connection established for channel status');
             
             try {
                 const result = await client.query(
@@ -299,10 +235,7 @@ class PaymentChannelMonitor {
                     [channelId]
                 );
 
-                console.log(`Database query result: ${result.rows.length} rows found`);
-
                 if (result.rows.length === 0) {
-                    console.log(`Channel ${channelId} not found in database`);
                     this.broadcastToChannel(channelId, {
                         type: 'error',
                         message: 'Payment channel not found',
@@ -312,14 +245,7 @@ class PaymentChannelMonitor {
                 }
 
                 const channel = result.rows[0];
-                console.log(`Found channel data for ${channelId}:`, {
-                    username: channel.username,
-                    status: channel.status,
-                    crypto_type: channel.crypto_type
-                });
-                
                 const status = this.determineDetailedStatus(channel);
-                console.log(`Determined status for ${channelId}:`, status);
 
                 const statusMessage = {
                     type: 'status_update',
@@ -343,16 +269,13 @@ class PaymentChannelMonitor {
                     }
                 };
 
-                console.log(`Broadcasting status message for ${channelId}:`, JSON.stringify(statusMessage));
                 this.broadcastToChannel(channelId, statusMessage);
                 
             } finally {
                 client.release();
-                console.log('Database connection released');
             }
         } catch (error) {
             console.error(`Error sending channel status for ${channelId}:`, error);
-            console.error('Error stack:', error.stack);
             
             try {
                 this.broadcastToChannel(channelId, {
