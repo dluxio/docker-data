@@ -64,6 +64,33 @@ const validationSchemas = {
         })
 };
 
+// Custom keyGenerator to handle malformed IP addresses
+const customKeyGenerator = (req) => {
+    try {
+        // Extract IP and remove port if present
+        let ip = req.ip || req.connection.remoteAddress || '127.0.0.1';
+        
+        // Remove port number if present (e.g., "192.168.1.1:8080" -> "192.168.1.1")
+        if (ip.includes(':') && !ip.includes('::')) {
+            // IPv4 with port
+            ip = ip.split(':')[0];
+        } else if (ip.startsWith('[') && ip.includes(']:')) {
+            // IPv6 with port [::1]:8080
+            ip = ip.substring(1, ip.lastIndexOf(']:'));
+        }
+        
+        // Validate the cleaned IP
+        if (!ip || ip === 'undefined' || ip === 'null') {
+            return '127.0.0.1';
+        }
+        
+        return ip;
+    } catch (error) {
+        console.error('Error in rate limit keyGenerator:', error);
+        return '127.0.0.1'; // Fallback IP
+    }
+};
+
 // Rate limiting configurations
 const rateLimits = {
     general: rateLimit({
@@ -74,7 +101,8 @@ const rateLimits = {
             error: 'Too many requests, please try again later.'
         },
         standardHeaders: true,
-        legacyHeaders: false
+        legacyHeaders: false,
+        keyGenerator: customKeyGenerator
     }),
     
     pricing: rateLimit({
@@ -83,7 +111,8 @@ const rateLimits = {
         message: {
             success: false,
             error: 'Pricing endpoint rate limit exceeded. Please wait before making another request.'
-        }
+        },
+        keyGenerator: customKeyGenerator
     }),
     
     payment: rateLimit({
@@ -92,7 +121,8 @@ const rateLimits = {
         message: {
             success: false,
             error: 'Payment initiation rate limit exceeded. Please wait before creating another payment.'
-        }
+        },
+        keyGenerator: customKeyGenerator
     }),
     
     strict: rateLimit({
@@ -101,7 +131,8 @@ const rateLimits = {
         message: {
             success: false,
             error: 'Hourly rate limit exceeded for this endpoint.'
-        }
+        },
+        keyGenerator: customKeyGenerator
     })
 };
 

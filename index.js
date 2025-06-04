@@ -14,7 +14,8 @@ const { router: onboardingRouter, setupDatabase, initializeWebSocketMonitor } = 
 
 // Trust proxy setting for rate limiting and real client IP detection
 // This is required when running behind Docker/nginx/load balancer
-api.set('trust proxy', true);
+// Using 1 to trust only the first proxy (more secure than true)
+api.set('trust proxy', 1);
 
 async function initializeDatabase() {
   try {
