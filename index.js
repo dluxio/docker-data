@@ -38,6 +38,15 @@ const wsMonitor = initializeWebSocketMonitor(http);
 api.use(API.https_redirect);
 api.use(cors());
 api.use(onboardingRouter);
+
+// Serve admin dashboard static files
+api.use('/admin', express.static('admin'));
+
+// Redirect /admin/ to /admin/index.html for convenience
+api.get('/admin/', (req, res) => {
+  res.redirect('/admin/index.html');
+});
+
 api.get("/api/:api_type/:api_call", API.hive_api);
 api.get("/dapps/@:author/:permlink", API.getPostRoute);
 api.get("/dapps/@:author", API.getAuthorPosts);
