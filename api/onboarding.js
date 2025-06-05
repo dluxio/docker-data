@@ -2168,11 +2168,19 @@ class HiveAuth {
     static async verifySignature(challenge, signature, publicKey) {
         try {
             // Use hive-tx to verify the signature
-            const isValid = hiveTx.verify(challenge, signature, publicKey);
+            // For Hive Keychain, we need to verify the signature of the challenge string
+            const isValid = hiveTx.Signature.fromString(signature).verify(challenge, hiveTx.PublicKey.fromString(publicKey));
             return isValid;
         } catch (error) {
             console.error('Signature verification error:', error);
-            return false;
+            // Try the alternative verification method
+            try {
+                const altValid = hiveTx.verify(challenge, signature, publicKey);
+                return altValid;
+            } catch (altError) {
+                console.error('Alternative signature verification error:', altError);
+                return false;
+            }
         }
     }
 
@@ -2392,6 +2400,62 @@ router.get('/api/onboarding/auth/whoami', authMiddleware, (req, res) => {
         keyType: req.auth.keyType,
         isAdmin: req.auth.isAdmin
     });
+});
+
+router.get('/api/onboarding/auth/debug', async (req, res) => {
+    try {
+        const account = req.headers['x-account'];
+        const challenge = req.headers['x-challenge'];
+        const pubKey = req.headers['x-pubkey'];
+        const signature = req.headers['x-signature'];
+
+        const debug = {
+            headers: {
+                account,
+                challenge,
+                pubKey,
+                signature: signature ? signature.substring(0, 20) + '...' : null
+            },
+            timestamp: {
+                current: Math.floor(Date.now() / 1000),
+                challenge: parseInt(challenge),
+                diff: Math.floor(Date.now() / 1000) - parseInt(challenge)
+            }
+        };
+
+        if (account) {
+            try {
+                const accountKeys = await HiveAuth.getAccountKeys(account);
+                debug.accountKeys = {
+                    found: !!accountKeys,
+                    hasActive: accountKeys ? accountKeys.active.length > 0 : false,
+                    publicKeyMatches: accountKeys ? accountKeys.active.includes(pubKey) : false
+                };
+            } catch (error) {
+                debug.accountKeysError = error.message;
+            }
+        }
+
+        if (challenge && signature && pubKey) {
+            try {
+                const isValidSignature = await HiveAuth.verifySignature(challenge.toString(), signature, pubKey);
+                debug.signatureValid = isValidSignature;
+            } catch (error) {
+                debug.signatureError = error.message;
+            }
+        }
+
+        res.json({
+            success: true,
+            debug
+        });
+    } catch (error) {
+        res.json({
+            success: false,
+            error: error.message,
+            debug: 'Debug endpoint error'
+        });
+    }
 });
 
 router.get('/api/onboarding/auth/help', (req, res) => {
