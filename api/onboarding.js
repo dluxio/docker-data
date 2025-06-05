@@ -2451,6 +2451,25 @@ router.get('/api/onboarding/auth/debug', async (req, res) => {
     }
 });
 
+router.get('/api/onboarding/auth/check-admin/:username', async (req, res) => {
+    try {
+        const { username } = req.params;
+        const isAdmin = await HiveAuth.isAdmin(username);
+        
+        res.json({
+            success: true,
+            username,
+            isAdmin,
+            message: isAdmin ? `@${username} is an admin` : `@${username} is not an admin`
+        });
+    } catch (error) {
+        res.json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
 router.get('/api/onboarding/auth/help', (req, res) => {
     res.json({
         success: true,
