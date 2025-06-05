@@ -495,6 +495,47 @@ const app = createApp({
                     alertEl.parentNode.removeChild(alertEl);
                 }
             }, 5000);
+        },
+
+        async checkServiceStatus() {
+            this.loading = true;
+            try {
+                const response = await this.apiClient.post('/api/onboarding/admin/service-status');
+                if (response.success) {
+                    console.log('Service Status:', response.data);
+                    this.showSuccessMessage('Services updated and checked successfully');
+                    // Refresh dashboard after service update
+                    await this.loadDashboard();
+                } else {
+                    this.showErrorMessage('Failed to check service status: ' + response.error);
+                }
+            } catch (error) {
+                console.error('Error checking service status:', error);
+                this.showErrorMessage('Error checking service status: ' + error.message);
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        showErrorMessage(message) {
+            // Create temporary alert element
+            const alertEl = document.createElement('div');
+            alertEl.className = 'alert alert-danger alert-dismissible fade show position-fixed top-0 end-0 m-3';
+            alertEl.style.zIndex = '9999';
+            alertEl.innerHTML = `
+                <i class="bi bi-exclamation-triangle"></i>
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            `;
+            
+            document.body.appendChild(alertEl);
+            
+            // Auto-remove after 8 seconds for errors
+            setTimeout(() => {
+                if (alertEl.parentNode) {
+                    alertEl.parentNode.removeChild(alertEl);
+                }
+            }, 8000);
         }
     }
 });

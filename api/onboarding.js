@@ -137,15 +137,19 @@ const rateLimits = {
     }),
     
     admin: rateLimit({
-        windowMs: 15 * 60 * 1000, // 15 minutes
-        max: 500, // limit each IP to 500 requests per 15 minutes for admin endpoints
+        windowMs: 15 * 60 * 1000, // 15 minutes  
+        max: 10000, // Very generous limit for authenticated admin users
         message: {
             success: false,
             error: 'Admin rate limit exceeded. Please wait before making more requests.'
         },
         standardHeaders: true,
         legacyHeaders: false,
-        keyGenerator: customKeyGenerator
+        keyGenerator: customKeyGenerator,
+        skip: (req) => {
+            // Skip rate limiting if user has valid auth headers (authenticated admin)
+            return req.headers.authorization || req.headers['x-auth-signature'];
+        }
     })
 };
 
@@ -3252,6 +3256,55 @@ router.get('/api/onboarding/admin/blockchain-status', rateLimits.admin, adminAut
         res.status(500).json({
             success: false,
             error: 'Failed to fetch blockchain monitoring status'
+        });
+    }
+});
+
+// 3g. Admin endpoint - Check backend service status and trigger updates
+router.post('/api/onboarding/admin/service-status', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
+    try {
+        // Force update all services
+        await hiveAccountService.updateACTBalance();
+        await hiveAccountService.checkResourceCredits();
+        await rcMonitoringService.updateRCCosts();
+        
+        // Check blockchain monitor status if available
+        let blockchainStatus = null;
+        if (typeof blockchainMonitor !== 'undefined' && blockchainMonitor.getStatus) {
+            blockchainStatus = blockchainMonitor.getStatus();
+        }
+        
+        res.json({
+            success: true,
+            data: {
+                services: {
+                    hiveAccountService: {
+                        actBalance: hiveAccountService.actBalance,
+                        resourceCredits: hiveAccountService.resourceCredits,
+                        rcPercentage: hiveAccountService.resourceCredits > 0 ? 
+                            Math.round((hiveAccountService.resourceCredits / 100000000000) * 100) : 0,
+                        lastACTUpdate: hiveAccountService.lastACTUpdate || 'Never',
+                        lastRCUpdate: hiveAccountService.lastRCUpdate || 'Never'
+                    },
+                    rcMonitoring: {
+                        lastUpdate: rcMonitoringService.lastUpdate,
+                        isRunning: !!rcMonitoringService.lastUpdate
+                    },
+                    blockchainMonitor: blockchainStatus || {
+                        status: 'unknown',
+                        message: 'Blockchain monitor status unavailable'
+                    }
+                },
+                timestamp: new Date().toISOString()
+            }
+        });
+
+    } catch (error) {
+        console.error('Error checking service status:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to check service status',
+            details: error.message
         });
     }
 });

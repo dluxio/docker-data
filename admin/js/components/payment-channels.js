@@ -38,16 +38,16 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
 
             <!-- Summary Cards -->
             <div class="row mb-4">
-                <div class="col-md-3" v-for="stat in data.summary" :key="stat.status">
+                <div class="col-md-3" v-for="(stat, status) in data.summary" :key="status">
                     <div class="card">
                         <div class="card-body">
                             <div class="d-flex justify-content-between">
                                 <div>
-                                    <h6 class="card-title text-capitalize">{{ stat.status }}</h6>
-                                    <h3>{{ stat.count }}</h3>
-                                    <small class="text-muted">\${{ (stat.total_usd || 0).toFixed(2) }}</small>
+                                    <h6 class="card-title text-capitalize">{{ status }}</h6>
+                                    <h3>{{ stat.count || 0 }}</h3>
+                                    <small class="text-muted">Avg: ${{ getAverage(stat.totalUsd, stat.count) }} | Total: ${{ (stat.totalUsd || 0).toFixed(2) }}</small>
                                 </div>
-                                <i class="bi fs-1 opacity-50" :class="getStatusIcon(stat.status)"></i>
+                                <i class="bi fs-1 opacity-50" :class="getStatusIcon(status)"></i>
                             </div>
                         </div>
                     </div>
@@ -122,11 +122,11 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
                                 </tr>
                             </thead>
                             <tbody>
-                                <tr v-for="channel in data.channels" :key="channel.channel_id">
+                                <tr v-for="channel in data.channels" :key="channel.channelId || channel.channel_id">
                                     <td>
-                                        <code>{{ channel.channel_id.substring(0, 8) }}...</code>
+                                        <code>{{ (channel.channelId || channel.channel_id || 'N/A').substring(0, 8) }}...</code>
                                         <button class="btn btn-sm btn-outline-secondary ms-1" 
-                                                @click="copyToClipboard(channel.channel_id)"
+                                                @click="copyToClipboard(channel.channelId || channel.channel_id)"
                                                 title="Copy full ID">
                                             <i class="bi bi-clipboard"></i>
                                         </button>
@@ -135,13 +135,13 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
                                         <strong>@{{ channel.username }}</strong>
                                     </td>
                                     <td>
-                                        <span class="badge bg-info">{{ channel.crypto_type }}</span>
+                                        <span class="badge bg-info">{{ channel.cryptoType || channel.crypto_type || 'N/A' }}</span>
                                     </td>
                                     <td>
-                                        <strong>{{ channel.amount_crypto }} {{ channel.crypto_type }}</strong>
+                                        <strong>{{ channel.amountCrypto || channel.amount_crypto || 0 }} {{ channel.cryptoType || channel.crypto_type || '' }}</strong>
                                     </td>
                                     <td>
-                                        \${{ (channel.amount_usd || 0).toFixed(2) }}
+                                        ${{ ((channel.amountUsd || channel.amount_usd) || 0).toFixed(2) }}
                                     </td>
                                     <td>
                                         <span class="badge" :class="getStatusClass(channel.status)">
@@ -598,6 +598,11 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
 
         clearAlert() {
             this.alert = { message: '', type: 'info', icon: '' };
+        },
+
+        getAverage(totalUsd, count) {
+            if (!count || count === 0) return '0.00';
+            return ((totalUsd || 0) / count).toFixed(2);
         }
     }
 }; 

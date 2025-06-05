@@ -216,10 +216,16 @@
                     <div v-if="currentView === 'dashboard'" class="dashboard-view">
                         <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
                             <h1 class="h2">Dashboard Overview</h1>
-                            <button class="btn btn-outline-primary" @click="refreshDashboard" :disabled="loading">
-                                <i class="bi bi-arrow-clockwise"></i>
-                                Refresh
-                            </button>
+                            <div class="btn-group">
+                                <button class="btn btn-outline-primary" @click="refreshDashboard" :disabled="loading">
+                                    <i class="bi bi-arrow-clockwise"></i>
+                                    Refresh
+                                </button>
+                                <button class="btn btn-outline-success" @click="checkServiceStatus" :disabled="loading">
+                                    <i class="bi bi-gear"></i>
+                                    Check Services
+                                </button>
+                            </div>
                         </div>
 
                         <!-- Stats Cards -->
