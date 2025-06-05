@@ -1786,7 +1786,6 @@ class HiveAccountService {
 
             // Check if we should claim ACTs
             const shouldClaimMinimum = (
-                this.actBalance < minimumACTBalance && 
                 this.resourceCredits >= rcThreshold
             );
             
