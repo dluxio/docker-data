@@ -188,38 +188,40 @@ window.DLUX_COMPONENTS['admin-users-view'] = {
                                 <div class="col-md-6">
                                     <h6>Basic Information</h6>
                                     <table class="table table-sm">
-                                        <tr>
-                                            <td><strong>Username:</strong></td>
-                                            <td>@{{ selectedAdmin.username }}</td>
-                                        </tr>
-                                        <tr>
-                                            <td><strong>Status:</strong></td>
-                                            <td>
-                                                <span class="badge" :class="selectedAdmin.active ? 'bg-success' : 'bg-secondary'">
-                                                    {{ selectedAdmin.active ? 'Active' : 'Inactive' }}
-                                                </span>
-                                            </td>
-                                        </tr>
-                                        <tr>
-                                            <td><strong>Added By:</strong></td>
-                                            <td>
-                                                <span v-if="selectedAdmin.added_by === 'system'" class="badge bg-secondary">System</span>
-                                                <span v-else>@{{ selectedAdmin.added_by }}</span>
-                                            </td>
-                                        </tr>
-                                        <tr>
-                                            <td><strong>Added Date:</strong></td>
-                                            <td>{{ formatDate(selectedAdmin.added_at) }}</td>
-                                        </tr>
-                                        <tr>
-                                            <td><strong>Last Login:</strong></td>
-                                            <td>
-                                                <span v-if="selectedAdmin.last_login">
-                                                    {{ formatDate(selectedAdmin.last_login) }}
-                                                </span>
-                                                <span v-else class="text-muted">Never</span>
-                                            </td>
-                                        </tr>
+                                        <tbody>
+                                            <tr>
+                                                <td><strong>Username:</strong></td>
+                                                <td>@{{ selectedAdmin.username || 'N/A' }}</td>
+                                            </tr>
+                                            <tr>
+                                                <td><strong>Status:</strong></td>
+                                                <td>
+                                                    <span class="badge" :class="selectedAdmin.active ? 'bg-success' : 'bg-secondary'">
+                                                        {{ selectedAdmin.active ? 'Active' : 'Inactive' }}
+                                                    </span>
+                                                </td>
+                                            </tr>
+                                            <tr>
+                                                <td><strong>Added By:</strong></td>
+                                                <td>
+                                                    <span v-if="selectedAdmin.added_by === 'system'" class="badge bg-secondary">System</span>
+                                                    <span v-else>@{{ selectedAdmin.added_by || 'N/A' }}</span>
+                                                </td>
+                                            </tr>
+                                            <tr>
+                                                <td><strong>Added Date:</strong></td>
+                                                <td>{{ formatDate(selectedAdmin.added_at) }}</td>
+                                            </tr>
+                                            <tr>
+                                                <td><strong>Last Login:</strong></td>
+                                                <td>
+                                                    <span v-if="selectedAdmin.last_login">
+                                                        {{ formatDate(selectedAdmin.last_login) }}
+                                                    </span>
+                                                    <span v-else class="text-muted">Never</span>
+                                                </td>
+                                            </tr>
+                                        </tbody>
                                     </table>
                                 </div>
                                 <div class="col-md-6">

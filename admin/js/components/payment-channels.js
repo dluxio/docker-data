@@ -419,12 +419,14 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
 
             // Count by crypto type
             const cryptoCounts = {};
-            this.data.channels.forEach(channel => {
-                if (channel && channel.crypto_type) {
-                    const crypto = channel.crypto_type;
-                    cryptoCounts[crypto] = (cryptoCounts[crypto] || 0) + 1;
-                }
-            });
+            if (Array.isArray(this.data.channels)) {
+                this.data.channels.forEach(channel => {
+                    if (channel && channel.crypto_type) {
+                        const crypto = channel.crypto_type;
+                        cryptoCounts[crypto] = (cryptoCounts[crypto] || 0) + 1;
+                    }
+                });
+            }
 
             const labels = Object.keys(cryptoCounts);
             const data = Object.values(cryptoCounts);
@@ -464,16 +466,18 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
                 '> 1 hour': 0
             };
 
-            this.data.channels.forEach(channel => {
-                if (channel && channel.processing_time_seconds) {
-                    const minutes = channel.processing_time_seconds / 60;
-                    if (minutes < 1) buckets['< 1 min']++;
-                    else if (minutes <= 5) buckets['1-5 min']++;
-                    else if (minutes <= 15) buckets['5-15 min']++;
-                    else if (minutes <= 60) buckets['15-60 min']++;
-                    else buckets['> 1 hour']++;
-                }
-            });
+            if (Array.isArray(this.data.channels)) {
+                this.data.channels.forEach(channel => {
+                    if (channel && channel.processing_time_seconds) {
+                        const minutes = channel.processing_time_seconds / 60;
+                        if (minutes < 1) buckets['< 1 min']++;
+                        else if (minutes <= 5) buckets['1-5 min']++;
+                        else if (minutes <= 15) buckets['5-15 min']++;
+                        else if (minutes <= 60) buckets['15-60 min']++;
+                        else buckets['> 1 hour']++;
+                    }
+                });
+            }
 
             const labels = Object.keys(buckets);
             const data = Object.values(buckets);
@@ -511,7 +515,19 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
         },
 
         viewChannelDetails(channel) {
-            this.selectedChannel = channel;
+            // Map the API field names to what the template expects
+            this.selectedChannel = {
+                channel_id: channel.channelId || channel.channel_id,
+                username: channel.username,
+                status: channel.status,
+                crypto_type: channel.cryptoType || channel.crypto_type,
+                amount_crypto: channel.amountCrypto || channel.amount_crypto,
+                amount_usd: channel.amountUsd || channel.amount_usd,
+                payment_address: channel.address || channel.payment_address,
+                memo: channel.memo,
+                created_at: channel.createdAt || channel.created_at,
+                confirmed_at: channel.confirmedAt || channel.confirmed_at
+            };
             const modal = new bootstrap.Modal(document.getElementById('channelDetailsModal'));
             modal.show();
         },

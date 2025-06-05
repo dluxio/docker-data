@@ -230,14 +230,14 @@ window.DLUX_COMPONENTS['act-status-view'] = {
                 const response = await this.apiClient.get('/api/onboarding/admin/act-status');
                 
                 if (response.success) {
-                    const statusData = response.data?.status || response.status || {};
+                    const statusData = response.data?.actStatus || response.actStatus || {};
                     this.data = {
-                        actBalance: statusData.actBalance || 0,
-                        resourceCredits: statusData.resourceCredits || 0,
+                        actBalance: statusData.currentACTBalance || 0,
+                        resourceCredits: statusData.currentResourceCredits || 0,
                         rcPercentage: statusData.rcPercentage || 0,
                         pendingCount: response.data?.pendingCount || response.pendingCount || 0,
                         recentCreations: response.data?.recentCreations || response.recentCreations || [],
-                        weeklyStats: response.data?.weeklyStats || response.weeklyStats || []
+                        weeklyStats: response.data?.creationStats || response.creationStats || []
                     };
 
                     // Create charts after data loads

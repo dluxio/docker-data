@@ -247,21 +247,31 @@ const app = createApp({
                 ]);
 
                 // Process ACT status data
-                if (actStatusData.success && actStatusData.data) {
-                    const statusData = actStatusData.data.status || actStatusData.status || {};
-                    this.dashboardData.actBalance = statusData.actBalance || 0;
-                    this.dashboardData.rcAvailable = statusData.resourceCredits || 0;
-                    this.dashboardData.recentAccounts = actStatusData.data.recentCreations || actStatusData.recentCreations || [];
+                if (actStatusData.success) {
+                    const statusData = actStatusData.data?.actStatus || actStatusData.actStatus || {};
+                    this.dashboardData.actBalance = statusData.currentACTBalance || 0;
+                    this.dashboardData.rcAvailable = statusData.currentResourceCredits || 0;
+                    this.dashboardData.recentAccounts = actStatusData.data?.recentCreations || actStatusData.recentCreations || [];
                     
                     // Count pending accounts
-                    const recentCreations = actStatusData.data.recentCreations || actStatusData.recentCreations || [];
+                    const recentCreations = actStatusData.data?.recentCreations || actStatusData.recentCreations || [];
                     this.dashboardData.pendingAccounts = recentCreations.filter(acc => acc && acc.status === 'pending').length;
                 }
 
                 // Process channels data
                 if (channelsData.success) {
                     const summary = channelsData.data?.summary || channelsData.summary || [];
-                    this.dashboardData.activeChannels = summary.filter(s => s && (s.status === 'pending' || s.status === 'confirmed')).length;
+                    // Handle both array and object summary formats
+                    if (Array.isArray(summary)) {
+                        this.dashboardData.activeChannels = summary.filter(s => s && (s.status === 'pending' || s.status === 'confirmed')).length;
+                    } else if (summary && typeof summary === 'object') {
+                        // If summary is an object with status keys, count pending and confirmed
+                        const pendingCount = summary.pending?.count || 0;
+                        const confirmedCount = summary.confirmed?.count || 0;
+                        this.dashboardData.activeChannels = pendingCount + confirmedCount;
+                    } else {
+                        this.dashboardData.activeChannels = 0;
+                    }
                 }
 
                 // Verify pending channels
