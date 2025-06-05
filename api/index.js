@@ -1136,4 +1136,231 @@ exports.getpic = async (req, res, next) => {
     }
 };
 
+// API endpoints for posts management
+
+exports.getPosts = async (req, res, next) => {
+  const { limit = 100, offset = 0, type, search } = req.query;
+  
+  try {
+    let whereClause = '';
+    const params = [];
+    let paramIndex = 1;
+    
+    if (type) {
+      whereClause += `WHERE type = $${paramIndex}`;
+      params.push(type);
+      paramIndex++;
+    }
+    
+    if (search) {
+      const searchCondition = `(author ILIKE $${paramIndex} OR permlink ILIKE $${paramIndex})`;
+      if (whereClause) {
+        whereClause += ` AND ${searchCondition}`;
+      } else {
+        whereClause = `WHERE ${searchCondition}`;
+      }
+      params.push(`%${search}%`);
+      paramIndex++;
+    }
+    
+    // Get total count
+    const countQuery = `SELECT COUNT(*) as total FROM posts ${whereClause}`;
+    const countResult = await executeQuery(countQuery, params, 'Error counting posts');
+    const totalCount = parseInt(countResult.rows[0].total);
+    
+    // Get posts with pagination
+    const postsQuery = `
+      SELECT author, permlink, type, block, votes, voteweight, promote, paid
+      FROM posts 
+      ${whereClause}
+      ORDER BY block DESC 
+      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+    `;
+    params.push(parseInt(limit), parseInt(offset));
+    
+    const postsResult = await executeQuery(postsQuery, params, 'Error fetching posts');
+    
+    // Add URL to each post
+    const posts = postsResult.rows.map(post => ({
+      ...post,
+      url: `/dlux/@${post.author}/${post.permlink}`
+    }));
+    
+    res.json({
+      posts,
+      totalCount,
+      limit: parseInt(limit),
+      offset: parseInt(offset)
+    });
+    
+  } catch (error) {
+    console.error('Error in getPosts:', error);
+    res.status(500).json({ error: 'Failed to fetch posts' });
+  }
+};
+
+exports.getPostsStats = async (req, res, next) => {
+  try {
+    // Get total posts
+    const totalQuery = 'SELECT COUNT(*) as total FROM posts';
+    const totalResult = await executeQuery(totalQuery, [], 'Error counting total posts');
+    
+    // Get unique authors
+    const authorsQuery = 'SELECT COUNT(DISTINCT author) as authors FROM posts';
+    const authorsResult = await executeQuery(authorsQuery, [], 'Error counting authors');
+    
+    // Get unique types
+    const typesQuery = 'SELECT COUNT(DISTINCT type) as types FROM posts';
+    const typesResult = await executeQuery(typesQuery, [], 'Error counting types');
+    
+    // Get recent posts (last 24 hours, assuming block numbers are recent)
+    const recentQuery = `
+      SELECT COUNT(*) as recent 
+      FROM posts 
+      WHERE block > (SELECT MAX(block) - 2880 FROM posts)
+    `;
+    const recentResult = await executeQuery(recentQuery, [], 'Error counting recent posts');
+    
+    const stats = {
+      total: parseInt(totalResult.rows[0].total),
+      authors: parseInt(authorsResult.rows[0].authors),
+      types: parseInt(typesResult.rows[0].types),
+      recent: parseInt(recentResult.rows[0].recent)
+    };
+    
+    res.json({ stats });
+    
+  } catch (error) {
+    console.error('Error in getPostsStats:', error);
+    res.status(500).json({ error: 'Failed to fetch posts statistics' });
+  }
+};
+
+exports.createPost = async (req, res, next) => {
+  const { author, permlink, type, block, votes = 0, voteweight = 0, promote = 0, paid = false } = req.body;
+  
+  if (!author || !permlink || !type) {
+    return res.status(400).json({ error: 'Author, permlink, and type are required' });
+  }
+  
+  try {
+    const query = `
+      INSERT INTO posts (author, permlink, type, block, votes, voteweight, promote, paid)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      ON CONFLICT (author, permlink) DO NOTHING
+      RETURNING *
+    `;
+    const params = [author, permlink, type, block, votes, voteweight, promote, paid];
+    
+    const result = await executeQuery(query, params, 'Error creating post');
+    
+    if (result.rows.length === 0) {
+      return res.status(409).json({ error: 'Post already exists' });
+    }
+    
+    const post = result.rows[0];
+    post.url = `/dlux/@${post.author}/${post.permlink}`;
+    
+    res.status(201).json({ post });
+    
+  } catch (error) {
+    console.error('Error in createPost:', error);
+    res.status(500).json({ error: 'Failed to create post' });
+  }
+};
+
+exports.updatePost = async (req, res, next) => {
+  const { author, permlink } = req.params;
+  const { type, block, votes, voteweight, promote, paid } = req.body;
+  
+  try {
+    const updates = [];
+    const params = [];
+    let paramIndex = 1;
+    
+    if (type !== undefined) {
+      updates.push(`type = $${paramIndex}`);
+      params.push(type);
+      paramIndex++;
+    }
+    if (block !== undefined) {
+      updates.push(`block = $${paramIndex}`);
+      params.push(block);
+      paramIndex++;
+    }
+    if (votes !== undefined) {
+      updates.push(`votes = $${paramIndex}`);
+      params.push(votes);
+      paramIndex++;
+    }
+    if (voteweight !== undefined) {
+      updates.push(`voteweight = $${paramIndex}`);
+      params.push(voteweight);
+      paramIndex++;
+    }
+    if (promote !== undefined) {
+      updates.push(`promote = $${paramIndex}`);
+      params.push(promote);
+      paramIndex++;
+    }
+    if (paid !== undefined) {
+      updates.push(`paid = $${paramIndex}`);
+      params.push(paid);
+      paramIndex++;
+    }
+    
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'No fields to update' });
+    }
+    
+    const query = `
+      UPDATE posts 
+      SET ${updates.join(', ')}
+      WHERE author = $${paramIndex} AND permlink = $${paramIndex + 1}
+      RETURNING *
+    `;
+    params.push(author, permlink);
+    
+    const result = await executeQuery(query, params, 'Error updating post');
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Post not found' });
+    }
+    
+    const post = result.rows[0];
+    post.url = `/dlux/@${post.author}/${post.permlink}`;
+    
+    res.json({ post });
+    
+  } catch (error) {
+    console.error('Error in updatePost:', error);
+    res.status(500).json({ error: 'Failed to update post' });
+  }
+};
+
+exports.deletePost = async (req, res, next) => {
+  const { author, permlink } = req.params;
+  
+  try {
+    const query = `
+      DELETE FROM posts 
+      WHERE author = $1 AND permlink = $2
+      RETURNING author, permlink
+    `;
+    const params = [author, permlink];
+    
+    const result = await executeQuery(query, params, 'Error deleting post');
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Post not found' });
+    }
+    
+    res.json({ message: 'Post deleted successfully' });
+    
+  } catch (error) {
+    console.error('Error in deletePost:', error);
+    res.status(500).json({ error: 'Failed to delete post' });
+  }
+};
+
 

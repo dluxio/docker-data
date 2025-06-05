@@ -1,5 +1,5 @@
 // Payment Channels Component
-window.DLUX_COMPONENTS['payment-channels-view'] = {
+window.DLUX_COMPONENTS['PaymentChannelsView'] = {
     props: ['apiClient'],
     emits: ['loading'],
     
@@ -45,7 +45,7 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
                                 <div>
                                     <h6 class="card-title text-capitalize">{{ status }}</h6>
                                     <h3>{{ stat.count || 0 }}</h3>
-                                    <small class="text-muted">Avg: ${{ getAverage(stat.totalUsd, stat.count) }} | Total: ${{ (stat.totalUsd || 0).toFixed(2) }}</small>
+                                    <small class="text-muted">Avg: {{ getAverageDisplay(stat.totalUsd, stat.count) }} | Total: {{ getTotalDisplay(stat.totalUsd) }}</small>
                                 </div>
                                 <i class="bi fs-1 opacity-50" :class="getStatusIcon(status)"></i>
                             </div>
@@ -124,7 +124,7 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
                             <tbody>
                                 <tr v-for="channel in data.channels" :key="channel.channelId || channel.channel_id">
                                     <td>
-                                        <code>{{ (channel.channelId || channel.channel_id || 'N/A').substring(0, 8) }}...</code>
+                                        <code>{{ getChannelIdDisplay(channel) }}</code>
                                         <button class="btn btn-sm btn-outline-secondary ms-1" 
                                                 @click="copyToClipboard(channel.channelId || channel.channel_id)"
                                                 title="Copy full ID">
@@ -138,10 +138,10 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
                                         <span class="badge bg-info">{{ channel.cryptoType || channel.crypto_type || 'N/A' }}</span>
                                     </td>
                                     <td>
-                                        <strong>{{ channel.amountCrypto || channel.amount_crypto || 0 }} {{ channel.cryptoType || channel.crypto_type || '' }}</strong>
+                                        <strong>{{ getAmountDisplay(channel) }}</strong>
                                     </td>
                                     <td>
-                                        ${{ ((channel.amountUsd || channel.amount_usd) || 0).toFixed(2) }}
+                                        {{ getUsdDisplay(channel) }}
                                     </td>
                                     <td>
                                         <span class="badge" :class="getStatusClass(channel.status)">
@@ -292,18 +292,17 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
             loading: false,
             data: {
                 channels: [],
-                summary: [],
+                summary: {},
                 totalCount: 0
             },
+            selectedChannel: null,
             filters: {
                 status: null,
                 cryptoType: null,
-                days: 7,
+                days: 30,
                 limit: 50,
                 offset: 0
             },
-            currentPage: 1,
-            selectedChannel: null,
             alert: {
                 message: '',
                 type: 'info',
@@ -317,16 +316,20 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
     },
 
     computed: {
+        currentPage() {
+            return Math.floor(this.filters.offset / this.filters.limit) + 1;
+        },
+        
         totalPages() {
             return Math.ceil(this.data.totalCount / this.filters.limit);
         },
-
+        
         visiblePages() {
+            const total = this.totalPages;
+            const current = this.currentPage;
             const pages = [];
-            const start = Math.max(1, this.currentPage - 2);
-            const end = Math.min(this.totalPages, this.currentPage + 2);
             
-            for (let i = start; i <= end; i++) {
+            for (let i = Math.max(1, current - 2); i <= Math.min(total, current + 2); i++) {
                 pages.push(i);
             }
             return pages;
@@ -344,154 +347,99 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
             
             try {
                 const params = new URLSearchParams({
+                    days: this.filters.days,
                     limit: this.filters.limit,
-                    offset: this.filters.offset,
-                    days: this.filters.days
+                    offset: this.filters.offset
                 });
-
+                
                 if (this.filters.status) {
                     params.append('status', this.filters.status);
                 }
                 if (this.filters.cryptoType) {
-                    params.append('crypto_type', this.filters.cryptoType);
+                    params.append('cryptoType', this.filters.cryptoType);
                 }
-
-                const response = await this.apiClient.get(`/api/onboarding/admin/channels?${params}`);
                 
-                if (response.success) {
+                const response = await this.apiClient.get(`/api/onboarding/admin/payment-channels?${params}`);
+                
+                if (response.ok) {
+                    const result = await response.json();
                     this.data = {
-                        channels: response.data?.channels || response.channels || [],
-                        summary: response.data?.summary || response.summary || [],
-                        totalCount: response.data?.totalCount || response.totalCount || 0
+                        channels: result.channels || [],
+                        summary: result.summary || {},
+                        totalCount: result.totalCount || 0
                     };
-
-                    // Create charts after data loads
-                    this.$nextTick(() => {
-                        this.createCharts();
-                    });
+                    
+                    setTimeout(() => this.createCharts(), 100);
                 } else {
-                    this.showAlert('Failed to load payment channels', 'danger', 'bi-exclamation-triangle');
+                    console.error('Failed to load payment channels:', response.statusText);
+                    this.showAlert('Failed to load payment channels', 'danger', 'exclamation-triangle');
                 }
             } catch (error) {
                 console.error('Error loading payment channels:', error);
-                this.showAlert('Error loading payment channels: ' + error.message, 'danger', 'bi-exclamation-triangle');
+                this.showAlert('Error loading payment channels: ' + error.message, 'danger', 'exclamation-triangle');
             } finally {
                 this.loading = false;
                 this.$emit('loading', false);
             }
         },
-
+        
         async refreshData() {
-            this.filters.offset = 0;
-            this.currentPage = 1;
             await this.loadData();
         },
-
+        
         setStatusFilter(status) {
             this.filters.status = status;
+            this.filters.offset = 0;
             this.refreshData();
         },
-
+        
         setCryptoFilter(cryptoType) {
             this.filters.cryptoType = cryptoType;
+            this.filters.offset = 0;
             this.refreshData();
         },
-
+        
         goToPage(page) {
-            if (page < 1 || page > this.totalPages) return;
-            this.currentPage = page;
-            this.filters.offset = (page - 1) * this.filters.limit;
-            this.loadData();
+            if (page >= 1 && page <= this.totalPages) {
+                this.filters.offset = (page - 1) * this.filters.limit;
+                this.loadData();
+            }
         },
-
+        
         createCharts() {
             this.createCryptoTypeChart();
             this.createProcessingTimeChart();
         },
-
+        
         createCryptoTypeChart() {
             const ctx = document.getElementById('cryptoTypeChart');
             if (!ctx) return;
-
-            if (this.charts.cryptoType) {
-                this.charts.cryptoType.destroy();
+            
+            // Destroy existing chart if it exists
+            if (window.cryptoChart) {
+                window.cryptoChart.destroy();
             }
-
-            // Count by crypto type
-            const cryptoCounts = {};
-            if (Array.isArray(this.data.channels)) {
-                this.data.channels.forEach(channel => {
-                    if (channel && channel.crypto_type) {
-                        const crypto = channel.crypto_type;
-                        cryptoCounts[crypto] = (cryptoCounts[crypto] || 0) + 1;
-                    }
-                });
+            
+            const cryptoData = {};
+            for (const channel of this.data.channels) {
+                const crypto = channel.cryptoType || channel.crypto_type || 'Unknown';
+                cryptoData[crypto] = (cryptoData[crypto] || 0) + 1;
             }
-
-            const labels = Object.keys(cryptoCounts);
-            const data = Object.values(cryptoCounts);
-            const colors = ['#e31337', '#28a745', '#ffc107', '#17a2b8', '#6f42c1'];
-
-            this.charts.cryptoType = new Chart(ctx, {
+            
+            window.cryptoChart = new Chart(ctx, {
                 type: 'doughnut',
                 data: {
-                    labels: labels,
+                    labels: Object.keys(cryptoData),
                     datasets: [{
-                        data: data,
-                        backgroundColor: colors.slice(0, labels.length),
-                        borderWidth: 2
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false
-                }
-            });
-        },
-
-        createProcessingTimeChart() {
-            const ctx = document.getElementById('processingTimeChart');
-            if (!ctx) return;
-
-            if (this.charts.processingTime) {
-                this.charts.processingTime.destroy();
-            }
-
-            // Group processing times into buckets
-            const buckets = {
-                '< 1 min': 0,
-                '1-5 min': 0,
-                '5-15 min': 0,
-                '15-60 min': 0,
-                '> 1 hour': 0
-            };
-
-            if (Array.isArray(this.data.channels)) {
-                this.data.channels.forEach(channel => {
-                    if (channel && channel.processing_time_seconds) {
-                        const minutes = channel.processing_time_seconds / 60;
-                        if (minutes < 1) buckets['< 1 min']++;
-                        else if (minutes <= 5) buckets['1-5 min']++;
-                        else if (minutes <= 15) buckets['5-15 min']++;
-                        else if (minutes <= 60) buckets['15-60 min']++;
-                        else buckets['> 1 hour']++;
-                    }
-                });
-            }
-
-            const labels = Object.keys(buckets);
-            const data = Object.values(buckets);
-
-            this.charts.processingTime = new Chart(ctx, {
-                type: 'bar',
-                data: {
-                    labels: labels,
-                    datasets: [{
-                        label: 'Channels',
-                        data: data,
-                        backgroundColor: 'rgba(54, 162, 235, 0.5)',
-                        borderColor: 'rgba(54, 162, 235, 1)',
-                        borderWidth: 1
+                        data: Object.values(cryptoData),
+                        backgroundColor: [
+                            '#FF6384',
+                            '#36A2EB',
+                            '#FFCE56',
+                            '#4BC0C0',
+                            '#9966FF',
+                            '#FF9F40'
+                        ]
                     }]
                 },
                 options: {
@@ -499,9 +447,57 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
                     maintainAspectRatio: false,
                     plugins: {
                         legend: {
-                            display: false
+                            position: 'bottom'
                         }
-                    },
+                    }
+                }
+            });
+        },
+        
+        createProcessingTimeChart() {
+            const ctx = document.getElementById('processingTimeChart');
+            if (!ctx) return;
+            
+            // Destroy existing chart if it exists
+            if (window.timeChart) {
+                window.timeChart.destroy();
+            }
+            
+            const timeRanges = {
+                '< 1 min': 0,
+                '1-5 min': 0,
+                '5-15 min': 0,
+                '15-60 min': 0,
+                '> 1 hour': 0
+            };
+            
+            for (const channel of this.data.channels) {
+                const seconds = channel.processing_time_seconds;
+                if (!seconds) continue;
+                
+                const minutes = seconds / 60;
+                if (minutes < 1) timeRanges['< 1 min']++;
+                else if (minutes < 5) timeRanges['1-5 min']++;
+                else if (minutes < 15) timeRanges['5-15 min']++;
+                else if (minutes < 60) timeRanges['15-60 min']++;
+                else timeRanges['> 1 hour']++;
+            }
+            
+            window.timeChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: Object.keys(timeRanges),
+                    datasets: [{
+                        label: 'Number of Channels',
+                        data: Object.values(timeRanges),
+                        backgroundColor: '#36A2EB',
+                        borderColor: '#36A2EB',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
                     scales: {
                         y: {
                             beginAtZero: true,
@@ -509,100 +505,116 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
                                 stepSize: 1
                             }
                         }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
                     }
                 }
             });
         },
-
+        
         viewChannelDetails(channel) {
-            // Map the API field names to what the template expects
-            this.selectedChannel = {
-                channel_id: channel.channelId || channel.channel_id,
-                username: channel.username,
-                status: channel.status,
-                crypto_type: channel.cryptoType || channel.crypto_type,
-                amount_crypto: channel.amountCrypto || channel.amount_crypto,
-                amount_usd: channel.amountUsd || channel.amount_usd,
-                payment_address: channel.address || channel.payment_address,
-                memo: channel.memo,
-                created_at: channel.createdAt || channel.created_at,
-                confirmed_at: channel.confirmedAt || channel.confirmed_at
-            };
+            this.selectedChannel = channel;
             const modal = new bootstrap.Modal(document.getElementById('channelDetailsModal'));
             modal.show();
         },
-
+        
         openExplorer(channel) {
-            const explorers = {
+            const explorerUrls = {
                 'BTC': `https://blockstream.info/address/${channel.payment_address}`,
                 'ETH': `https://etherscan.io/address/${channel.payment_address}`,
                 'BNB': `https://bscscan.com/address/${channel.payment_address}`,
                 'MATIC': `https://polygonscan.com/address/${channel.payment_address}`,
-                'SOL': `https://explorer.solana.com/address/${channel.payment_address}`
+                'SOL': `https://solscan.io/account/${channel.payment_address}`
             };
             
-            const url = explorers[channel.crypto_type];
+            const cryptoType = channel.cryptoType || channel.crypto_type;
+            const url = explorerUrls[cryptoType];
             if (url) {
                 window.open(url, '_blank');
             }
         },
-
+        
         async copyToClipboard(text) {
             try {
                 await navigator.clipboard.writeText(text);
-                this.showAlert('Copied to clipboard', 'success', 'bi-check-circle');
-            } catch (error) {
-                this.showAlert('Failed to copy', 'warning', 'bi-exclamation-triangle');
+                this.showAlert('Copied to clipboard!', 'success', 'check');
+            } catch (err) {
+                console.error('Failed to copy to clipboard:', err);
+                this.showAlert('Failed to copy to clipboard', 'warning', 'exclamation');
             }
         },
-
+        
         getStatusClass(status) {
-            switch (status?.toLowerCase()) {
-                case 'completed': return 'bg-success';
-                case 'confirmed': return 'bg-info';
-                case 'pending': return 'bg-warning';
-                case 'failed': return 'bg-danger';
-                default: return 'bg-secondary';
-            }
+            const classes = {
+                'pending': 'bg-warning text-dark',
+                'confirmed': 'bg-info',
+                'completed': 'bg-success',
+                'failed': 'bg-danger'
+            };
+            return classes[status] || 'bg-secondary';
         },
-
+        
         getStatusIcon(status) {
-            switch (status?.toLowerCase()) {
-                case 'completed': return 'bi-check-circle';
-                case 'confirmed': return 'bi-info-circle';
-                case 'pending': return 'bi-hourglass-split';
-                case 'failed': return 'bi-x-circle';
-                default: return 'bi-circle';
-            }
+            const icons = {
+                'pending': 'bi-clock',
+                'confirmed': 'bi-check-circle',
+                'completed': 'bi-check-circle-fill',
+                'failed': 'bi-x-circle'
+            };
+            return icons[status] || 'bi-question-circle';
         },
-
+        
         formatProcessingTime(seconds) {
             if (seconds < 60) return `${seconds}s`;
             const minutes = Math.floor(seconds / 60);
-            if (minutes < 60) return `${minutes}m`;
-            const hours = Math.floor(minutes / 60);
-            return `${hours}h ${minutes % 60}m`;
+            const remainingSeconds = seconds % 60;
+            return remainingSeconds > 0 ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
         },
-
+        
         formatDate(dateString) {
             if (!dateString) return 'N/A';
             return new Date(dateString).toLocaleString();
         },
-
-        showAlert(message, type, icon) {
-            this.alert = { message, type, icon };
-            setTimeout(() => {
-                this.clearAlert();
-            }, 5000);
+        
+        showAlert(message, type = 'info', icon = 'info-circle') {
+            // This will be handled by the parent component or global alert system
+            console.log(`Alert [${type}]: ${message}`);
         },
-
+        
         clearAlert() {
-            this.alert = { message: '', type: 'info', icon: '' };
+            // Clear any existing alerts
         },
-
+        
         getAverage(totalUsd, count) {
-            if (!count || count === 0) return '0.00';
-            return ((totalUsd || 0) / count).toFixed(2);
+            return count > 0 ? (totalUsd / count).toFixed(2) : '0.00';
+        },
+        
+        // Template helper methods
+        getChannelIdDisplay(channel) {
+            const id = channel.channelId || channel.channel_id || 'N/A';
+            return id.length > 8 ? id.substring(0, 8) + '...' : id;
+        },
+        
+        getAmountDisplay(channel) {
+            const amount = channel.amountCrypto || channel.amount_crypto || 0;
+            const crypto = channel.cryptoType || channel.crypto_type || '';
+            return `${amount} ${crypto}`;
+        },
+        
+        getUsdDisplay(channel) {
+            const usd = (channel.amountUsd || channel.amount_usd) || 0;
+            return `$${usd.toFixed(2)}`;
+        },
+        
+        getAverageDisplay(totalUsd, count) {
+            return `$${this.getAverage(totalUsd, count)}`;
+        },
+        
+        getTotalDisplay(totalUsd) {
+            return `$${(totalUsd || 0).toFixed(2)}`;
         }
     }
 }; 

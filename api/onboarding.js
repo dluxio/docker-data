@@ -5500,6 +5500,15 @@ router.post('/api/onboarding/request/:requestId/create-account', authMiddleware,
     }
 });
 
+// Posts Management Routes
+const { getPosts, getPostsStats, createPost, updatePost, deletePost } = require('./index');
+
+router.get('/api/posts', rateLimits.admin, adminAuthMiddleware, getPosts);
+router.get('/api/posts/stats', rateLimits.admin, adminAuthMiddleware, getPostsStats);
+router.post('/api/posts', rateLimits.admin, adminAuthMiddleware, createPost);
+router.put('/api/posts/:author/:permlink', rateLimits.admin, adminAuthMiddleware, updatePost);
+router.delete('/api/posts/:author/:permlink', rateLimits.admin, adminAuthMiddleware, deletePost);
+
 // Export the router and initialization function
 module.exports = {
     router,

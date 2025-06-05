@@ -206,6 +206,13 @@
                                     Admin Users
                                 </a>
                             </li>
+                            <li class="nav-item">
+                                <a class="nav-link" :class="{ active: currentView === 'posts' }" 
+                                   @click="setView('posts')">
+                                    <i class="bi bi-collection"></i>
+                                    Posts
+                                </a>
+                            </li>
                         </ul>
                     </div>
                 </nav>
@@ -366,15 +373,20 @@
                                             @loading="setLoading">
                     </blockchain-status-view>
 
-                    <payment-channels-view v-if="currentView === 'channels'" 
-                                           :api-client="apiClient" 
-                                           @loading="setLoading">
-                    </payment-channels-view>
+                    <PaymentChannelsView v-if="currentView === 'channels'" 
+                                         :api-client="apiClient" 
+                                         @loading="setLoading">
+                    </PaymentChannelsView>
 
                     <admin-users-view v-if="currentView === 'users'" 
                                       :api-client="apiClient" 
                                       @loading="setLoading">
                     </admin-users-view>
+
+                    <PostsView v-if="currentView === 'posts'" 
+                               :api-client="apiClient" 
+                               @loading="setLoading">
+                    </PostsView>
                 </main>
             </div>
         </div>
@@ -390,6 +402,7 @@
     <script src="js/components/blockchain-status.js"></script>
     <script src="js/components/payment-channels.js"></script>
     <script src="js/components/admin-users.js"></script>
+    <script src="js/components/posts-view.js"></script>
     <script>
         // Mount the app after all components are loaded
         if (window.mountDLUXApp) {
