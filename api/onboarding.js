@@ -1799,7 +1799,7 @@ class HiveAccountService {
                 const maxClaimsByRc = Math.floor(rcAfterBuffer / claimCost.rc_needed);
                 const maxClaims = Math.min(maxClaimsByRc, 5); // Max 5 at once
 
-                console.log(`📈 Can claim: ${maxClaims} ACTs (RC limit: ${maxClaimsByRc}, Target limit: 5)`);
+                console.log(`📈 Can claim: ${maxClaims} ACTs (RC limit: ${maxClaimsByRc})`);
 
                 let claimed = 0;
                 for (let i = 0; i < maxClaims; i++) {
