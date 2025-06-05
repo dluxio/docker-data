@@ -1393,56 +1393,16 @@ class HiveAccountService {
                 }
             ];
 
-            // Get dynamic global properties for transaction
-            const dgpResponse = await fetch(config.clientURL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    jsonrpc: '2.0',
-                    method: 'condenser_api.get_dynamic_global_properties',
-                    params: [],
-                    id: 1
-                })
-            });
-
-            const dgpResult = await dgpResponse.json();
-            const dgp = dgpResult.result;
-
-            // Build transaction
-            const tx = {
-                ref_block_num: dgp.head_block_number & 0xffff,
-                ref_block_prefix: Buffer.from(dgp.head_block_id, 'hex').readUInt32LE(4),
-                expiration: new Date(Date.now() + 60000).toISOString().slice(0, -5),
-                operations: [claimAccountOp],
-                extensions: []
-            };
-
-            // Sign and broadcast transaction
-            const signedTx = hiveTx.sign(tx, this.creatorKey);
-
-            const broadcastResponse = await fetch(config.clientURL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    jsonrpc: '2.0',
-                    method: 'condenser_api.broadcast_transaction',
-                    params: [signedTx],
-                    id: 1
-                })
-            });
-
-            const broadcastResult = await broadcastResponse.json();
+            const broadcastResult = await this.broadcastTransaction([claimAccountOp], this.creatorKey);
 
             if (broadcastResult.error) {
                 throw new Error(`Broadcast error: ${broadcastResult.error.message}`);
             }
 
-            const txId = broadcastResult.result.id;
-            const blockNum = broadcastResult.result.block_num;
+            const txId = broadcastResult.result.tx_id;
             
             console.log(`✅ Account Creation Token claimed successfully!`);
             console.log(`  Transaction: ${txId}`);
-            console.log(`  Block: ${blockNum}`);
 
             // Update ACT balance in database
             this.actBalance += 1;
@@ -1585,52 +1545,14 @@ class HiveAccountService {
                 ];
             }
 
-            // Get dynamic global properties for transaction
-            const dgpResponse = await fetch(config.clientURL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    jsonrpc: '2.0',
-                    method: 'condenser_api.get_dynamic_global_properties',
-                    params: [],
-                    id: 1
-                })
-            });
 
-            const dgpResult = await dgpResponse.json();
-            const dgp = dgpResult.result;
-
-            // Build transaction
-            const tx = {
-                ref_block_num: dgp.head_block_number & 0xffff,
-                ref_block_prefix: Buffer.from(dgp.head_block_id, 'hex').readUInt32LE(4),
-                expiration: new Date(Date.now() + 60000).toISOString().slice(0, -5),
-                operations: [createAccountOp],
-                extensions: []
-            };
-
-            // Sign and broadcast transaction
-            const signedTx = hiveTx.sign(tx, this.creatorKey);
-
-            const broadcastResponse = await fetch(config.clientURL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    jsonrpc: '2.0',
-                    method: 'condenser_api.broadcast_transaction',
-                    params: [signedTx],
-                    id: 1
-                })
-            });
-
-            const broadcastResult = await broadcastResponse.json();
+            const broadcastResult = await this.broadcastTransaction([createAccountOp], this.creatorKey);
 
             if (broadcastResult.error) {
                 throw new Error(`Broadcast error: ${broadcastResult.error.message}`);
             }
-
-            const txId = broadcastResult.result.id;
-            const blockNum = broadcastResult.result.block_num;
+            console.log(broadcastResult);
+            const txId = broadcastResult.result.tx_id;
 
             console.log(`✓ Account @${username} created! TX: ${txId}`);
 
@@ -1654,9 +1576,9 @@ class HiveAccountService {
             try {
                 await finalClient.query(`
             UPDATE hive_account_creations 
-            SET status = 'success', hive_tx_id = $1, hive_block_num = $2, completed_at = CURRENT_TIMESTAMP
-            WHERE id = $3
-          `, [txId, blockNum, creationAttemptId]);
+            SET status = 'success', hive_tx_id = $1, completed_at = CURRENT_TIMESTAMP
+            WHERE id = $2
+          `, [txId, creationAttemptId]);
             } finally {
                 finalClient.release();
             }
@@ -1665,7 +1587,6 @@ class HiveAccountService {
                 success: true,
                 username,
                 txId,
-                blockNum,
                 creationMethod,
                 actUsed: actUsed > 0
             };
@@ -2180,7 +2101,13 @@ class HiveAuth {
             return false
         }
     }
-
+    static async broadcastTransaction(operations, key) {
+        const tx = new hiveTx.Transaction()
+        const stx = await tx.create(operations)
+        const privateKey = hiveTx.PrivateKey.from(key)
+        stx.sign(privateKey)
+        return await stx.broadcast()
+    }
     static async getAccountKeys(username) {
         try {
             const response = await fetch(config.clientURL, {
