@@ -1776,12 +1776,11 @@ class HiveAccountService {
             console.log(`💰 Claim cost: ${(claimCost.rc_needed / 1e12).toFixed(2)}T RC (${claimCost.hp_needed} HP equiv)`);
 
             // Calculate thresholds - more aggressive to maintain buffer
-            const minimumACTBalance = 3; // Keep minimum 3 ACTs (reduced from 5)
+
             const optimalACTBalance = 8; // Target 8 ACTs (reduced from 10)
             const rcBufferMultiplier = 3.0; // Keep 3x claim cost as buffer (was 2.5x)
             const rcThreshold = claimCost.rc_needed * rcBufferMultiplier;
 
-            console.log(`🎯 Thresholds: Min ACTs: ${minimumACTBalance}, Optimal: ${optimalACTBalance}`);
             console.log(`⚡ RC Threshold: ${(rcThreshold / 1e12).toFixed(2)}T RC (${rcBufferMultiplier}x claim cost)`);
 
             // Check if we should claim ACTs
@@ -1789,10 +1788,6 @@ class HiveAccountService {
                 this.resourceCredits >= rcThreshold
             );
             
-            const shouldClaimOptimal = (
-                this.actBalance < optimalACTBalance && 
-                this.resourceCredits >= (claimCost.rc_needed * 6) // Higher threshold for optimal balance
-            );
 
             const shouldClaim = shouldClaimMinimum || shouldClaimOptimal;
 
@@ -1802,10 +1797,9 @@ class HiveAccountService {
                 // Calculate how many we can safely claim
                 const rcAfterBuffer = this.resourceCredits - (claimCost.rc_needed * 2); // Keep 2x claim cost as safety buffer
                 const maxClaimsByRc = Math.floor(rcAfterBuffer / claimCost.rc_needed);
-                const maxClaimsByTarget = optimalACTBalance - this.actBalance;
-                const maxClaims = Math.min(maxClaimsByRc, maxClaimsByTarget, 5); // Max 5 at once
+                const maxClaims = Math.min(maxClaimsByRc, 5); // Max 5 at once
 
-                console.log(`📈 Can claim: ${maxClaims} ACTs (RC limit: ${maxClaimsByRc}, Target limit: ${maxClaimsByTarget})`);
+                console.log(`📈 Can claim: ${maxClaims} ACTs (RC limit: ${maxClaimsByRc}, Target limit: 5)`);
 
                 let claimed = 0;
                 for (let i = 0; i < maxClaims; i++) {
