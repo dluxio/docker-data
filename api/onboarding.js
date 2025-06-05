@@ -3309,7 +3309,34 @@ router.post('/api/onboarding/admin/service-status', rateLimits.admin, adminAuthM
     }
 });
 
-// 3f. Admin endpoint - Verify pending accounts exist on blockchain
+// 3f. Simple status check endpoint (no auth required for debugging)
+router.get('/api/onboarding/status', async (req, res) => {
+    try {
+        let blockchainStatus = null;
+        if (typeof blockchainMonitor !== 'undefined' && blockchainMonitor.getStatus) {
+            blockchainStatus = blockchainMonitor.getStatus();
+        }
+        
+        res.json({
+            success: true,
+            timestamp: new Date().toISOString(),
+            services: {
+                blockchainMonitor: blockchainStatus || {
+                    status: 'unavailable',
+                    message: 'Blockchain monitor not initialized'
+                }
+            }
+        });
+    } catch (error) {
+        res.json({
+            success: false,
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
+// 3g. Admin endpoint - Verify pending accounts exist on blockchain
 router.post('/api/onboarding/admin/verify-accounts', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
     try {
         const { usernames } = req.body;
