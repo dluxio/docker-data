@@ -10,7 +10,7 @@ const pool = new Pool({
 exports.pool = pool;
 
 const API = require("./api/index");
-const { router: onboardingRouter, setupDatabase, initializeWebSocketMonitor } = require('./api/onboarding');
+const { router: onboardingRouter, setupDatabase, initializeWebSocketMonitor, initializeOnboardingService } = require('./api/onboarding');
 
 // Trust proxy setting for rate limiting and real client IP detection
 // This is required when running behind Docker/nginx/load balancer
@@ -66,6 +66,9 @@ api.get("/hc/tickers", API.tickers);
 http.listen(config.port, async function () {
 
   await initializeDatabase();
+  
+  // Initialize the full onboarding service including blockchain monitoring
+  await initializeOnboardingService();
   
   // Graceful shutdown
   process.on('SIGTERM', () => {

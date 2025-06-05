@@ -73,6 +73,7 @@ class BlockchainMonitoringService {
         this.networks = new Map();
         this.lastBlockChecked = new Map();
         this.processedTransactions = new Set(); // Track processed transactions to prevent duplicates
+        this.configurationStatus = null; // Will be set by validateConfiguration
         
         this.validateConfiguration();
         this.initializeNetworks();
@@ -91,10 +92,19 @@ class BlockchainMonitoringService {
             }
         }
 
+        // Store configuration status instead of throwing
+        this.configurationStatus = {
+            isValid: missingKeys.length === 0,
+            missingKeys: missingKeys,
+            message: missingKeys.length > 0 ? 
+                `Missing required API keys: ${missingKeys.join(', ')}. Please set these environment variables.` :
+                'Configuration is valid'
+        };
+
         if (missingKeys.length > 0) {
-            throw new InvalidConfigurationError(
-                `Missing required API keys: ${missingKeys.join(', ')}. Please set these environment variables.`
-            );
+            Logger.warn('Blockchain monitoring configuration incomplete', {
+                missingKeys: missingKeys
+            });
         }
     }
 
@@ -184,10 +194,24 @@ class BlockchainMonitoringService {
     // Start monitoring all active payment channels
     async startMonitoring() {
         if (this.isRunning) {
+            Logger.info('Blockchain monitoring is already running');
             return;
         }
 
+        // Check configuration before starting
+        if (!this.configurationStatus.isValid) {
+            Logger.warn('Cannot start blockchain monitoring due to configuration issues', {
+                issues: this.configurationStatus.missingKeys
+            });
+            this.isRunning = false;
+            return; // Don't throw, just don't start
+        }
+
         this.isRunning = true;
+        this.startTime = Date.now(); // Track start time for uptime calculation
+        Logger.info('Starting blockchain monitoring service', {
+            networks: Array.from(this.networks.keys())
+        });
 
         try {
             // Monitor each network
@@ -204,7 +228,9 @@ class BlockchainMonitoringService {
                 }
             }, 30000); // Check every 30 seconds
 
-            // Blockchain monitoring service started
+            Logger.info('Blockchain monitoring service started successfully', {
+                activeNetworks: this.monitoringIntervals.size
+            });
         } catch (error) {
             this.isRunning = false;
             Logger.error('Failed to start blockchain monitoring service', { error: error.message });
@@ -1185,7 +1211,9 @@ class BlockchainMonitoringService {
             isRunning: this.isRunning,
             networks: Array.from(this.networks.keys()),
             activeMonitors: this.monitoringIntervals.size,
-            lastBlockChecked: Object.fromEntries(this.lastBlockChecked)
+            lastBlockChecked: Object.fromEntries(this.lastBlockChecked),
+            configuration: this.configurationStatus,
+            uptime: this.isRunning ? Date.now() - (this.startTime || Date.now()) : 0
         };
     }
 }

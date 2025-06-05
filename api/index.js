@@ -379,8 +379,6 @@ async function fetchDex(tok) {
           vol += trade.target_vol || 0;
         }
       }
-    } else {
-        console.warn(`No trade history (dex.hive.his) found for ${tok}`)
     }
 
     if (changePrice && typeof changePrice === 'number' && changePrice !== 0 && tickers[tok].tick && typeof tickers[tok].tick === 'number') {
