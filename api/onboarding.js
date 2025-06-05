@@ -2386,13 +2386,26 @@ router.get('/api/onboarding/auth/challenge', (req, res) => {
     });
 });
 
-router.get('/api/onboarding/auth/whoami', authMiddleware, (req, res) => {
-    res.json({
-        success: true,
-        account: req.auth.account,
-        keyType: req.auth.keyType,
-        isAdmin: req.auth.isAdmin
-    });
+router.get('/api/onboarding/auth/whoami', authMiddleware, async (req, res) => {
+    try {
+        // Check if the user is actually an admin
+        const isAdmin = await HiveAuth.isAdmin(req.auth.account);
+        
+        res.json({
+            success: true,
+            account: req.auth.account,
+            keyType: req.auth.keyType,
+            isAdmin: isAdmin
+        });
+    } catch (error) {
+        console.error('Error checking admin status in whoami:', error);
+        res.json({
+            success: true,
+            account: req.auth.account,
+            keyType: req.auth.keyType,
+            isAdmin: false
+        });
+    }
 });
 
 router.get('/api/onboarding/auth/debug', async (req, res) => {
