@@ -5654,7 +5654,7 @@ router.get('/api/onboarding/admin/account-info', rateLimits.admin, adminAuthMidd
     try {
         const adminUsername = req.auth.account;
 
-        // Get account information from Hive blockchain
+        // Get account information directly from Hive blockchain API for real-time data
         const response = await fetch(config.clientURL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

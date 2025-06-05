@@ -265,6 +265,21 @@ const app = createApp({
                 this.$nextTick(() => {
                     this.loadDashboard();
                 });
+            } else if (view === 'channels') {
+                // Refresh admin account info when viewing channels for latest ACT/RC data
+                this.$nextTick(async () => {
+                    try {
+                        const adminAccountData = await this.apiClient.get('/api/onboarding/admin/account-info');
+                        if (adminAccountData.success) {
+                            this.adminAccountInfo = adminAccountData.account;
+                            if (this.adminAccountInfo.resourceCredits) {
+                                this.adminAccountInfo.rcPercentage = this.adminAccountInfo.resourceCredits.percentage || 0;
+                            }
+                        }
+                    } catch (error) {
+                        console.error('Failed to refresh admin account info:', error);
+                    }
+                });
             }
         },
 
