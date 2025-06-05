@@ -1352,11 +1352,13 @@ class HiveAccountService {
         return 0;
     }
     async broadcastTransaction(operations, key) {
-        const tx = new hiveTx.Transaction()
-        const stx = await tx.create(operations)
-        const privateKey = hiveTx.PrivateKey.from(key)
-        stx.sign(privateKey)
-        return await stx.broadcast()
+        const tx = new hiveTx.Transaction();
+          await tx.create(operations); 
+          console.log("Transaction before signing:", tx.transaction);
+          const privateKey = hiveTx.PrivateKey.from(key);
+          tx.sign(privateKey);
+          const result = await tx.broadcast();
+          return result;
     }
     async claimAccountCreationTokens() {
         try {
