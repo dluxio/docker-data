@@ -279,7 +279,7 @@ window.DLUX_COMPONENTS['blockchain-status-view'] = {
             this.$emit('loading', true);
             
             try {
-                const response = await this.apiClient.get('/api/admin/blockchain-status');
+                const response = await this.apiClient.get('/api/onboarding/admin/blockchain-status');
                 
                 if (response.success) {
                     this.data = {

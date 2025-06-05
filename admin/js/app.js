@@ -142,7 +142,7 @@ const app = createApp({
                 }
 
                 // Get challenge from server
-                const challengeResponse = await fetch(`${window.location.origin}/api/auth/challenge`);
+                const challengeResponse = await fetch(`${window.location.origin}/api/onboarding/auth/challenge`);
                 const challengeData = await challengeResponse.json();
 
                 if (!challengeData.success) {
@@ -187,7 +187,7 @@ const app = createApp({
 
                 // Test the authentication by making a whoami request
                 this.apiClient.setAuth(authData);
-                const whoamiResponse = await this.apiClient.get('/api/auth/whoami');
+                const whoamiResponse = await this.apiClient.get('/api/onboarding/auth/whoami');
 
                 if (whoamiResponse.success && whoamiResponse.isAdmin) {
                     // Save authentication data
@@ -242,8 +242,8 @@ const app = createApp({
             try {
                 // Load multiple data sources in parallel
                 const [actStatusData, channelsData] = await Promise.all([
-                    this.apiClient.get('/api/admin/act-status'),
-                    this.apiClient.get('/api/admin/channels?limit=10')
+                    this.apiClient.get('/api/onboarding/admin/act-status'),
+                    this.apiClient.get('/api/onboarding/admin/channels?limit=10')
                 ]);
 
                 // Process ACT status data

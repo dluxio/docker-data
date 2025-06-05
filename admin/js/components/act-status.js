@@ -227,7 +227,7 @@ window.DLUX_COMPONENTS['act-status-view'] = {
             this.$emit('loading', true);
             
             try {
-                const response = await this.apiClient.get('/api/admin/act-status');
+                const response = await this.apiClient.get('/api/onboarding/admin/act-status');
                 
                 if (response.success) {
                     this.data = {
@@ -262,7 +262,7 @@ window.DLUX_COMPONENTS['act-status-view'] = {
         async claimACT() {
             this.loading = true;
             try {
-                const response = await this.apiClient.post('/api/admin/claim-act');
+                const response = await this.apiClient.post('/api/onboarding/admin/claim-act');
                 
                 if (response.success) {
                     this.showAlert('ACT claimed successfully!', 'success', 'bi-check-circle');
@@ -281,7 +281,7 @@ window.DLUX_COMPONENTS['act-status-view'] = {
         async processAccounts() {
             this.loading = true;
             try {
-                const response = await this.apiClient.post('/api/admin/process-pending');
+                const response = await this.apiClient.post('/api/onboarding/admin/process-pending');
                 
                 if (response.success) {
                     this.showAlert('Pending account processing triggered', 'info', 'bi-info-circle');
@@ -300,7 +300,7 @@ window.DLUX_COMPONENTS['act-status-view'] = {
         async healthCheck() {
             this.loading = true;
             try {
-                const response = await this.apiClient.post('/api/admin/health-check');
+                const response = await this.apiClient.post('/api/onboarding/admin/health-check');
                 
                 if (response.success) {
                     this.showAlert('Health check completed successfully', 'success', 'bi-check-circle');

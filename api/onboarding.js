@@ -133,6 +133,18 @@ const rateLimits = {
             error: 'Hourly rate limit exceeded for this endpoint.'
         },
         keyGenerator: customKeyGenerator
+    }),
+    
+    admin: rateLimit({
+        windowMs: 15 * 60 * 1000, // 15 minutes
+        max: 500, // limit each IP to 500 requests per 15 minutes for admin endpoints
+        message: {
+            success: false,
+            error: 'Admin rate limit exceeded. Please wait before making more requests.'
+        },
+        standardHeaders: true,
+        legacyHeaders: false,
+        keyGenerator: customKeyGenerator
     })
 };
 
@@ -170,7 +182,8 @@ router.use(cors({
         'http://localhost:3000',
         'https://dlux.io',
         'https://www.dlux.io',
-        'https://vue.dlux.io'
+        'https://vue.dlux.io',
+        'https://data.dlux.io'
     ],
     credentials: true
 }));
@@ -2428,7 +2441,7 @@ const response = await fetch('/api/onboarding/notifications/123/read', {
 });
 
 // Admin management endpoints
-router.get('/api/onboarding/admin/users', adminAuthMiddleware, async (req, res) => {
+router.get('/api/onboarding/admin/users', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
     try {
         const client = await pool.connect();
         try {
@@ -2461,7 +2474,7 @@ router.get('/api/onboarding/admin/users', adminAuthMiddleware, async (req, res) 
     }
 });
 
-router.post('/api/onboarding/admin/users/add', adminActiveKeyMiddleware, async (req, res) => {
+router.post('/api/onboarding/admin/users/add', rateLimits.admin, adminActiveKeyMiddleware, async (req, res) => {
     try {
         const { username, permissions = { admin: true } } = req.body;
 
@@ -2519,7 +2532,7 @@ router.post('/api/onboarding/admin/users/add', adminActiveKeyMiddleware, async (
     }
 });
 
-router.post('/api/onboarding/admin/users/:username/remove', adminActiveKeyMiddleware, async (req, res) => {
+router.post('/api/onboarding/admin/users/:username/remove', rateLimits.admin, adminActiveKeyMiddleware, async (req, res) => {
     try {
         const { username } = req.params;
 
@@ -2825,7 +2838,7 @@ router.post('/api/onboarding/payment/initiate',
 });
 
 // 3. Admin endpoint - ACT status and management
-router.get('/api/onboarding/admin/act-status', adminAuthMiddleware, async (req, res) => {
+router.get('/api/onboarding/admin/act-status', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
     try {
         // Update current status
         await hiveAccountService.updateACTBalance();
@@ -2906,7 +2919,7 @@ router.get('/api/onboarding/admin/act-status', adminAuthMiddleware, async (req, 
 });
 
 // 3b. Admin endpoint - Manually claim ACT
-router.post('/api/onboarding/admin/claim-act', adminActiveKeyMiddleware, async (req, res) => {
+router.post('/api/onboarding/admin/claim-act', rateLimits.admin, adminActiveKeyMiddleware, async (req, res) => {
     try {
         const result = await hiveAccountService.claimAccountCreationTokens();
 
@@ -2933,7 +2946,7 @@ router.post('/api/onboarding/admin/claim-act', adminActiveKeyMiddleware, async (
 });
 
 // 3c. Admin endpoint - Manually trigger account creation processing
-router.post('/api/onboarding/admin/process-pending', adminAuthMiddleware, async (req, res) => {
+router.post('/api/onboarding/admin/process-pending', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
     try {
         await hiveAccountService.monitorPendingCreations();
 
@@ -2952,7 +2965,7 @@ router.post('/api/onboarding/admin/process-pending', adminAuthMiddleware, async 
 });
 
 // 3d. Admin endpoint - Trigger health check and detailed status
-router.post('/api/onboarding/admin/health-check', adminAuthMiddleware, async (req, res) => {
+router.post('/api/onboarding/admin/health-check', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
     try {
         // Run health check
         await hiveAccountService.performDailyHealthCheck();
@@ -3004,7 +3017,7 @@ router.post('/api/onboarding/admin/health-check', adminAuthMiddleware, async (re
 });
 
 // 3d. Admin endpoint - View current RC costs
-router.get('/api/onboarding/admin/rc-costs', adminAuthMiddleware, async (req, res) => {
+router.get('/api/onboarding/admin/rc-costs', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
     try {
         const costs = await rcMonitoringService.getLatestRCCosts();
 
@@ -3087,7 +3100,7 @@ router.get('/api/onboarding/admin/rc-costs', adminAuthMiddleware, async (req, re
 });
 
 // 3e. Admin endpoint - Blockchain monitoring status
-router.get('/api/onboarding/admin/blockchain-status', adminAuthMiddleware, async (req, res) => {
+router.get('/api/onboarding/admin/blockchain-status', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
     try {
         const status = blockchainMonitor.getStatus();
         
@@ -3155,7 +3168,7 @@ router.get('/api/onboarding/admin/blockchain-status', adminAuthMiddleware, async
 });
 
 // 4. Admin endpoint - Get payment channels (last 7 days)
-router.get('/api/onboarding/admin/channels', adminAuthMiddleware, async (req, res) => {
+router.get('/api/onboarding/admin/channels', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
     try {
         const {
             limit = 50,

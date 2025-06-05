@@ -256,7 +256,7 @@ window.DLUX_COMPONENTS['rc-costs-view'] = {
             this.$emit('loading', true);
             
             try {
-                const response = await this.apiClient.get('/api/admin/rc-costs');
+                const response = await this.apiClient.get('/api/onboarding/admin/rc-costs');
                 
                 if (response.success) {
                     this.data = {

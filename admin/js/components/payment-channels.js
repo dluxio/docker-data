@@ -352,7 +352,7 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
                     params.append('crypto_type', this.filters.cryptoType);
                 }
 
-                const response = await this.apiClient.get(`/api/admin/channels?${params}`);
+                const response = await this.apiClient.get(`/api/onboarding/admin/channels?${params}`);
                 
                 if (response.success) {
                     this.data = {
