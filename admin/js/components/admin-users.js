@@ -55,11 +55,11 @@ window.DLUX_COMPONENTS['admin-users-view'] = {
                                         <div class="d-flex flex-wrap gap-1">
                                             <span v-if="admin.permissions?.admin" class="badge bg-primary">Admin</span>
                                             <span v-if="admin.permissions?.super" class="badge bg-danger">Super Admin</span>
-                                            <span v-for="(value, key) in (admin.permissions || {})" 
-                                                  v-if="key !== 'admin' && key !== 'super' && value"
-                                                  :key="key" 
+                                            <span v-for="(value, permKey) in (admin.permissions || {})" 
+                                                  v-if="permKey !== 'admin' && permKey !== 'super' && value"
+                                                  :key="permKey" 
                                                   class="badge bg-info">
-                                                {{ key }}
+                                                {{ permKey }}
                                             </span>
                                         </div>
                                     </td>

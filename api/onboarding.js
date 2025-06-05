@@ -5509,6 +5509,156 @@ router.post('/api/posts', rateLimits.admin, adminAuthMiddleware, createPost);
 router.put('/api/posts/:author/:permlink', rateLimits.admin, adminAuthMiddleware, updatePost);
 router.delete('/api/posts/:author/:permlink', rateLimits.admin, adminAuthMiddleware, deletePost);
 
+// Manual Account Creation Route
+router.post('/api/onboarding/admin/manual-create-account', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
+    try {
+        const { channelId, username, publicKeys, useACT = true } = req.body;
+        const adminUsername = req.auth.account;
+
+        if (!channelId || !username || !publicKeys) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing required fields: channelId, username, publicKeys'
+            });
+        }
+
+        // Validate public keys structure
+        const requiredKeys = ['owner', 'active', 'posting', 'memo'];
+        for (const keyType of requiredKeys) {
+            if (!publicKeys[keyType]) {
+                return res.status(400).json({
+                    success: false,
+                    error: `Missing required public key: ${keyType}`
+                });
+            }
+        }
+
+        const client = await pool.connect();
+        try {
+            // Get the payment channel
+            const channelResult = await client.query(
+                'SELECT * FROM payment_channels WHERE channel_id = $1',
+                [channelId]
+            );
+
+            if (channelResult.rows.length === 0) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Payment channel not found'
+                });
+            }
+
+            const channel = channelResult.rows[0];
+
+            // Check if account already exists on blockchain
+            const existingAccount = await hiveAccountService.getHiveAccount(username);
+            if (existingAccount) {
+                // Update channel to completed
+                await client.query(
+                    `UPDATE payment_channels 
+                     SET status = 'completed', account_created_at = CURRENT_TIMESTAMP
+                     WHERE channel_id = $1`,
+                    [channelId]
+                );
+
+                return res.json({
+                    success: true,
+                    message: `Account @${username} already exists on HIVE blockchain`,
+                    accountExists: true
+                });
+            }
+
+            // Update ACT balance and check resources
+            await hiveAccountService.updateACTBalance();
+            await hiveAccountService.checkResourceCredits();
+
+            let creationMethod = 'DELEGATION';
+            let canUseACT = useACT && hiveAccountService.actBalance > 0;
+
+            // Try to use ACT if requested
+            if (useACT && hiveAccountService.actBalance === 0) {
+                const rcCosts = await rcMonitoringService.getLatestRCCosts();
+                const claimCost = rcCosts['claim_account_operation'];
+
+                if (claimCost && hiveAccountService.resourceCredits >= claimCost.rc_needed) {
+                    console.log(`Admin ${adminUsername} attempting to claim ACT for manual account creation`);
+                    const claimed = await hiveAccountService.claimAccountCreationTokens();
+                    if (claimed) {
+                        canUseACT = true;
+                        console.log(`ACT successfully claimed for manual creation by ${adminUsername}`);
+                    }
+                }
+            }
+
+            if (canUseACT) {
+                creationMethod = 'ACT';
+            }
+
+            console.log(`Manual account creation initiated by admin ${adminUsername} for @${username} using ${creationMethod}`);
+
+            // Attempt to create the account
+            const creationResult = await hiveAccountService.createHiveAccount(
+                username,
+                publicKeys,
+                channelId
+            );
+
+            if (creationResult.success) {
+                // Update payment channel to completed
+                await client.query(`
+                    UPDATE payment_channels 
+                    SET status = 'completed', account_created_at = CURRENT_TIMESTAMP
+                    WHERE channel_id = $1
+                `, [channelId]);
+
+                // Create notification for the user
+                await createNotification(
+                    username,
+                    'account_created',
+                    'HIVE Account Created!',
+                    `Your HIVE account @${username} has been manually created by admin @${adminUsername}!`,
+                    {
+                        channel_id: channelId,
+                        admin_creator: adminUsername,
+                        tx_id: creationResult.txId,
+                        creation_method: creationMethod
+                    },
+                    'high',
+                    168 // 7 days
+                );
+
+                console.log(`Manual account creation successful: @${username} created by admin ${adminUsername}`);
+
+                res.json({
+                    success: true,
+                    message: `Account @${username} created successfully by admin intervention!`,
+                    account: {
+                        username,
+                        creator: adminUsername,
+                        txId: creationResult.txId,
+                        blockNum: creationResult.blockNum,
+                        creationMethod,
+                        actUsed: creationResult.actUsed,
+                        manual: true
+                    }
+                });
+            } else {
+                throw new Error(creationResult.error || 'Account creation failed');
+            }
+
+        } finally {
+            client.release();
+        }
+    } catch (error) {
+        console.error(`Manual account creation failed (admin: ${req.auth?.account}):`, error);
+        res.status(500).json({
+            success: false,
+            error: 'Manual account creation failed',
+            details: error.message
+        });
+    }
+});
+
 // Export the router and initialization function
 module.exports = {
     router,

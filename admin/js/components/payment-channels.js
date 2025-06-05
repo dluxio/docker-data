@@ -118,6 +118,7 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
                                     <th>Status</th>
                                     <th>Processing Time</th>
                                     <th>Created</th>
+                                    <th>Public Keys</th>
                                     <th>Actions</th>
                                 </tr>
                             </thead>
@@ -156,6 +157,16 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
                                     </td>
                                     <td>{{ formatDate(channel.created_at) }}</td>
                                     <td>
+                                        <div v-if="hasPublicKeys(channel)" class="text-center">
+                                            <button class="btn btn-sm btn-outline-primary" 
+                                                    @click="viewPublicKeys(channel)"
+                                                    title="View Public Keys">
+                                                <i class="bi bi-key"></i>
+                                            </button>
+                                        </div>
+                                        <span v-else class="text-muted">-</span>
+                                    </td>
+                                    <td>
                                         <div class="btn-group btn-group-sm">
                                             <button class="btn btn-outline-info" 
                                                     @click="viewChannelDetails(channel)"
@@ -167,6 +178,12 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
                                                     @click="openExplorer(channel)"
                                                     title="View on Blockchain">
                                                 <i class="bi bi-box-arrow-up-right"></i>
+                                            </button>
+                                            <button v-if="canManuallyCreateAccount(channel)" 
+                                                    class="btn btn-outline-success"
+                                                    @click="showManualCreateModal(channel)"
+                                                    title="Manually Create Account">
+                                                <i class="bi bi-person-plus"></i>
                                             </button>
                                         </div>
                                     </td>
@@ -248,26 +265,60 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
                                         <tbody>
                                             <tr>
                                                 <td><strong>Crypto Type:</strong></td>
-                                                <td><span class="badge bg-info">{{ selectedChannel.crypto_type || 'N/A' }}</span></td>
+                                                <td>{{ selectedChannel.cryptoType || selectedChannel.crypto_type || 'N/A' }}</td>
                                             </tr>
                                             <tr>
                                                 <td><strong>Amount:</strong></td>
-                                                <td>{{ selectedChannel.amount_crypto || 0 }} {{ selectedChannel.crypto_type || '' }}</td>
+                                                <td>{{ getAmountDisplay(selectedChannel) }}</td>
                                             </tr>
                                             <tr>
                                                 <td><strong>USD Value:</strong></td>
-                                                <td>\${{ (selectedChannel.amount_usd || 0).toFixed(2) }}</td>
+                                                <td>{{ getUsdDisplay(selectedChannel) }}</td>
                                             </tr>
                                             <tr>
-                                                <td><strong>Address:</strong></td>
-                                                <td><code>{{ selectedChannel.payment_address || 'N/A' }}</code></td>
+                                                <td><strong>Payment Address:</strong></td>
+                                                <td><code>{{ selectedChannel.payment_address || selectedChannel.address || 'N/A' }}</code></td>
                                             </tr>
-                                            <tr v-if="selectedChannel.memo">
+                                            <tr>
                                                 <td><strong>Memo:</strong></td>
-                                                <td><code>{{ selectedChannel.memo }}</code></td>
+                                                <td><code>{{ selectedChannel.memo || 'N/A' }}</code></td>
+                                            </tr>
+                                            <tr v-if="selectedChannel.tx_hash">
+                                                <td><strong>Transaction:</strong></td>
+                                                <td><code>{{ selectedChannel.tx_hash }}</code></td>
                                             </tr>
                                         </tbody>
                                     </table>
+                                </div>
+                            </div>
+                            
+                            <!-- Public Keys Section -->
+                            <div v-if="hasPublicKeys(selectedChannel)" class="mt-4">
+                                <h6>Public Keys</h6>
+                                <div class="alert alert-info">
+                                    <i class="bi bi-key"></i>
+                                    Public keys provided for account creation
+                                </div>
+                                <div v-for="(key, keyType) in getPublicKeysObject(selectedChannel)" :key="keyType" class="mb-2">
+                                    <label class="form-label">
+                                        <strong>{{ keyType.charAt(0).toUpperCase() + keyType.slice(1) }}:</strong>
+                                    </label>
+                                    <div class="input-group input-group-sm">
+                                        <input type="text" class="form-control font-monospace small" :value="key" readonly>
+                                        <button class="btn btn-outline-secondary btn-sm" 
+                                                @click="copyToClipboard(key)"
+                                                title="Copy Key">
+                                            <i class="bi bi-clipboard"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                                
+                                <!-- Manual Creation Button -->
+                                <div v-if="canManuallyCreateAccount(selectedChannel)" class="mt-3">
+                                    <button class="btn btn-warning" @click="showManualCreateModal(selectedChannel)">
+                                        <i class="bi bi-person-plus"></i>
+                                        Manually Create Account
+                                    </button>
                                 </div>
                             </div>
                         </div>
@@ -283,6 +334,111 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
                 <i class="bi" :class="alert.icon"></i>
                 {{ alert.message }}
                 <button type="button" class="btn-close" @click="clearAlert"></button>
+            </div>
+
+            <!-- Public Keys Modal -->
+            <div class="modal fade" id="publicKeysModal" tabindex="-1">
+                <div class="modal-dialog modal-lg">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Public Keys for @{{ selectedChannel?.username }}</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        </div>
+                        <div class="modal-body" v-if="selectedChannel">
+                            <div class="alert alert-info">
+                                <i class="bi bi-info-circle"></i>
+                                These are the public keys provided during the payment process for account creation.
+                            </div>
+                            
+                            <div v-if="getPublicKeysObject(selectedChannel)">
+                                <div v-for="(key, keyType) in getPublicKeysObject(selectedChannel)" :key="keyType" class="mb-3">
+                                    <label class="form-label">
+                                        <strong>{{ keyType.charAt(0).toUpperCase() + keyType.slice(1) }} Key:</strong>
+                                    </label>
+                                    <div class="input-group">
+                                        <input type="text" class="form-control font-monospace" :value="key" readonly>
+                                        <button class="btn btn-outline-secondary" 
+                                                @click="copyToClipboard(key)"
+                                                title="Copy Key">
+                                            <i class="bi bi-clipboard"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div v-else class="text-muted">
+                                No public keys available for this channel.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Manual Account Creation Modal -->
+            <div class="modal fade" id="manualCreateModal" tabindex="-1">
+                <div class="modal-dialog">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Manual Account Creation</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        </div>
+                        <div class="modal-body" v-if="selectedChannel">
+                            <div class="alert alert-warning">
+                                <i class="bi bi-exclamation-triangle"></i>
+                                <strong>Manual Override:</strong> This will attempt to create the HIVE account using your logged-in Keychain account.
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label"><strong>Target Username:</strong></label>
+                                <input type="text" class="form-control" v-model="manualCreate.username" readonly>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label"><strong>Channel ID:</strong></label>
+                                <input type="text" class="form-control font-monospace" v-model="manualCreate.channelId" readonly>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label"><strong>Public Keys Available:</strong></label>
+                                <div v-if="getPublicKeysObject(selectedChannel)">
+                                    <div v-for="(key, keyType) in getPublicKeysObject(selectedChannel)" :key="keyType" class="mb-2">
+                                        <small class="text-muted">{{ keyType }}:</small>
+                                        <div class="font-monospace small text-break">{{ key }}</div>
+                                    </div>
+                                </div>
+                                <div v-else class="text-muted">No keys available</div>
+                            </div>
+
+                            <div class="form-check mb-3">
+                                <input class="form-check-input" type="checkbox" v-model="manualCreate.useACT" id="useACTCheck">
+                                <label class="form-check-label" for="useACTCheck">
+                                    Use Account Creation Token (if available)
+                                </label>
+                            </div>
+
+                            <div class="alert alert-info">
+                                <strong>Note:</strong> This will use your current admin account credentials to sign the account creation transaction.
+                                Make sure you have sufficient RC or ACT tokens.
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                            <button type="button" 
+                                    class="btn btn-success" 
+                                    @click="executeManualAccountCreation"
+                                    :disabled="creatingAccount || !selectedChannel">
+                                <span v-if="creatingAccount">
+                                    <i class="bi bi-hourglass-split"></i>
+                                    Creating Account...
+                                </span>
+                                <span v-else>
+                                    <i class="bi bi-person-plus"></i>
+                                    Create Account
+                                </span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     `,
@@ -311,6 +467,12 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
             charts: {
                 cryptoType: null,
                 processingTime: null
+            },
+            creatingAccount: false,
+            manualCreate: {
+                username: '',
+                channelId: '',
+                useACT: true
             }
         };
     },
@@ -613,6 +775,86 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
         
         getTotalDisplay(totalUsd) {
             return `$${(totalUsd || 0).toFixed(2)}`;
+        },
+
+        // Public Keys related methods
+        hasPublicKeys(channel) {
+            return channel.publicKeys && Object.keys(this.getPublicKeysObject(channel)).length > 0;
+        },
+
+        getPublicKeysObject(channel) {
+            if (!channel.publicKeys) return null;
+            
+            try {
+                // Handle both string and object formats
+                if (typeof channel.publicKeys === 'string') {
+                    return JSON.parse(channel.publicKeys);
+                }
+                return channel.publicKeys;
+            } catch (error) {
+                console.error('Error parsing public keys:', error);
+                return null;
+            }
+        },
+
+        viewPublicKeys(channel) {
+            this.selectedChannel = channel;
+            const modal = new bootstrap.Modal(document.getElementById('publicKeysModal'));
+            modal.show();
+        },
+
+        // Manual account creation methods
+        canManuallyCreateAccount(channel) {
+            // Show manual creation option for confirmed channels with public keys that haven't been completed
+            return ['confirmed', 'failed'].includes(channel.status) && this.hasPublicKeys(channel);
+        },
+
+        showManualCreateModal(channel) {
+            this.selectedChannel = channel;
+            this.manualCreate = {
+                username: channel.username,
+                channelId: channel.channelId || channel.channel_id,
+                useACT: true
+            };
+            const modal = new bootstrap.Modal(document.getElementById('manualCreateModal'));
+            modal.show();
+        },
+
+        async executeManualAccountCreation() {
+            if (!this.selectedChannel) return;
+
+            this.creatingAccount = true;
+            
+            try {
+                const publicKeys = this.getPublicKeysObject(this.selectedChannel);
+                if (!publicKeys) {
+                    throw new Error('No public keys available for account creation');
+                }
+
+                // Call the manual account creation API
+                const response = await this.apiClient.post('/api/onboarding/admin/manual-create-account', {
+                    channelId: this.manualCreate.channelId,
+                    username: this.manualCreate.username,
+                    publicKeys: publicKeys,
+                    useACT: this.manualCreate.useACT
+                });
+
+                if (response.success) {
+                    this.showAlert(`Account @${this.manualCreate.username} created successfully!`, 'success', 'check-circle');
+                    
+                    // Close modal and refresh data
+                    bootstrap.Modal.getInstance(document.getElementById('manualCreateModal')).hide();
+                    await this.refreshData();
+                } else {
+                    throw new Error(response.error || 'Account creation failed');
+                }
+
+            } catch (error) {
+                console.error('Manual account creation failed:', error);
+                this.showAlert('Failed to create account: ' + error.message, 'danger', 'exclamation-triangle');
+            } finally {
+                this.creatingAccount = false;
+            }
         }
     }
 }; 
