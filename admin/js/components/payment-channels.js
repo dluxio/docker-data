@@ -356,23 +356,21 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
                     params.append('status', this.filters.status);
                 }
                 if (this.filters.cryptoType) {
-                    params.append('cryptoType', this.filters.cryptoType);
+                    params.append('crypto_type', this.filters.cryptoType);
                 }
                 
-                const response = await this.apiClient.get(`/api/onboarding/admin/payment-channels?${params}`);
+                const result = await this.apiClient.get(`/api/onboarding/admin/channels?${params}`);
                 
-                if (response.ok) {
-                    const result = await response.json();
+                if (result.success) {
                     this.data = {
                         channels: result.channels || [],
                         summary: result.summary || {},
-                        totalCount: result.totalCount || 0
+                        totalCount: result.pagination?.total || 0
                     };
                     
                     setTimeout(() => this.createCharts(), 100);
                 } else {
-                    console.error('Failed to load payment channels:', response.statusText);
-                    this.showAlert('Failed to load payment channels', 'danger', 'exclamation-triangle');
+                    throw new Error(result.error || 'Failed to load payment channels');
                 }
             } catch (error) {
                 console.error('Error loading payment channels:', error);
