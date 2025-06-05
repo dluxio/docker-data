@@ -1,6 +1,6 @@
 // Payment Channels Component
 window.DLUX_COMPONENTS['payment-channels-view'] = {
-    props: ['apiClient'],
+    props: ['apiClient', 'adminAccountInfo'],
     emits: ['loading'],
     
     template: `
@@ -666,8 +666,7 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
             },
             canceling: false,
             buildingAccount: false,
-            buildingAccountACT: false,
-            adminAccountInfo: null
+            buildingAccountACT: false
         };
     },
 
@@ -1071,7 +1070,6 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
 
         async showBuildAccountModal(channel) {
             this.selectedChannel = channel;
-            await this.loadAdminAccountInfo();
             const modal = new bootstrap.Modal(document.getElementById('buildAccountModal'));
             modal.show();
         },
@@ -1134,7 +1132,6 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
 
         async showBuildAccountWithACTModal(channel) {
             this.selectedChannel = channel;
-            await this.loadAdminAccountInfo();
             const modal = new bootstrap.Modal(document.getElementById('buildAccountACTModal'));
             modal.show();
         },
@@ -1227,19 +1224,6 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
                 this.showAlert('Failed to cancel channel: ' + error.message, 'danger', 'exclamation-triangle');
             } finally {
                 this.canceling = false;
-            }
-        },
-
-        async loadAdminAccountInfo() {
-            try {
-                const response = await this.apiClient.get('/api/onboarding/admin/account-info');
-                if (response.success) {
-                    this.adminAccountInfo = response.account;
-                } else {
-                    console.error('Failed to load admin account info:', response.error);
-                }
-            } catch (error) {
-                console.error('Error loading admin account info:', error);
             }
         }
     }

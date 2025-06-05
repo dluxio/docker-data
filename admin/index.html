@@ -242,9 +242,9 @@
                                     <div class="card-body">
                                         <div class="d-flex justify-content-between">
                                             <div>
-                                                <h6 class="card-title">Backend ACT Balance</h6>
-                                                <h3>{{ dashboardData.actBalance || 0 }}</h3>
-                                                <small class="text-white-50">System account</small>
+                                                <h6 class="card-title">Your ACT Balance</h6>
+                                                <h3>{{ adminAccountInfo.actBalance || 0 }}</h3>
+                                                <small class="text-white-50">@{{ adminAccountInfo.username || currentUser }}</small>
                                             </div>
                                             <i class="bi bi-wallet2 fs-1 opacity-50"></i>
                                         </div>
@@ -256,9 +256,9 @@
                                     <div class="card-body">
                                         <div class="d-flex justify-content-between">
                                             <div>
-                                                <h6 class="card-title">Backend RC Available</h6>
-                                                <h3>{{ formatNumber(dashboardData.rcAvailable) }}</h3>
-                                                <small class="text-white-50">{{ dashboardData.rcPercentage.toFixed(1) }}%</small>
+                                                <h6 class="card-title">Your RC Available</h6>
+                                                <h3>{{ formatNumber(adminAccountInfo.resourceCredits?.current_mana || 0) }}</h3>
+                                                <small class="text-white-50">{{ (adminAccountInfo.resourceCredits?.percentage || 0).toFixed(1) }}%</small>
                                             </div>
                                             <i class="bi bi-lightning fs-1 opacity-50"></i>
                                         </div>
@@ -298,52 +298,43 @@
                             <div class="col-md-6">
                                 <div class="card">
                                     <div class="card-header">
-                                        <h5>Your Admin Account (@{{ adminAccountInfo.username || currentUser }})</h5>
+                                        <h5>Account Actions</h5>
                                     </div>
                                     <div class="card-body">
-                                        <div class="row">
-                                            <div class="col-6">
-                                                <div class="text-center mb-3">
-                                                    <h6>ACT Balance</h6>
-                                                    <h4>{{ adminAccountInfo.actBalance || 0 }}</h4>
-                                                    <button class="btn btn-primary btn-sm" 
-                                                            @click="claimACT" 
-                                                            :disabled="actClaiming || !canClaimACT()"
-                                                            title="Claim Account Creation Token">
-                                                        <span v-if="actClaiming">
-                                                            <i class="bi bi-hourglass-split"></i>
-                                                            Claiming...
-                                                        </span>
-                                                        <span v-else>
-                                                            <i class="bi bi-plus-circle"></i>
-                                                            Claim ACT
-                                                        </span>
-                                                    </button>
-                                                    <div v-if="!canClaimACT()" class="small text-muted mt-1">
-                                                        Need more RC to claim
-                                                    </div>
-                                                </div>
+                                        <div class="text-center">
+                                            <button class="btn btn-primary btn-lg" 
+                                                    @click="claimACT" 
+                                                    :disabled="actClaiming || !canClaimACT()"
+                                                    title="Claim Account Creation Token">
+                                                <span v-if="actClaiming">
+                                                    <i class="bi bi-hourglass-split"></i>
+                                                    Claiming ACT...
+                                                </span>
+                                                <span v-else>
+                                                    <i class="bi bi-plus-circle"></i>
+                                                    Claim ACT Token
+                                                </span>
+                                            </button>
+                                            <div v-if="!canClaimACT()" class="small text-muted mt-2">
+                                                <i class="bi bi-info-circle"></i>
+                                                Need at least 20% RC to claim ACT tokens
                                             </div>
-                                            <div class="col-6">
-                                                <div class="text-center mb-3">
-                                                    <h6>Resource Credits</h6>
-                                                    <h4>{{ getRCDisplayText() }}</h4>
-                                                    <small class="text-muted">Your RC available</small>
-                                                </div>
+                                            <div v-else class="small text-success mt-2">
+                                                <i class="bi bi-check-circle"></i>
+                                                You have enough RC to claim ACT tokens
                                             </div>
                                         </div>
-                                        <div class="row">
+                                        
+                                        <hr>
+                                        
+                                        <div class="row text-center">
                                             <div class="col-6">
-                                                <div class="text-center">
-                                                    <h6>HIVE Balance</h6>
-                                                    <h4>{{ (adminAccountInfo.balance?.hive || 0).toFixed(3) }}</h4>
-                                                </div>
+                                                <h6>HIVE Balance</h6>
+                                                <h4>{{ (adminAccountInfo.balance?.hive || 0).toFixed(3) }}</h4>
                                             </div>
                                             <div class="col-6">
-                                                <div class="text-center">
-                                                    <h6>HBD Balance</h6>
-                                                    <h4>{{ (adminAccountInfo.balance?.hbd || 0).toFixed(3) }}</h4>
-                                                </div>
+                                                <h6>HBD Balance</h6>
+                                                <h4>{{ (adminAccountInfo.balance?.hbd || 0).toFixed(3) }}</h4>
                                             </div>
                                         </div>
                                     </div>
@@ -503,8 +494,9 @@
                     </blockchain-status-view>
 
                     <payment-channels-view v-if="currentView === 'channels'" 
-                                           :api-client="apiClient" 
-                                           @loading="setLoading">
+                                         :api-client="apiClient"
+                                         :admin-account-info="adminAccountInfo"
+                                         @loading="setLoading">
                     </payment-channels-view>
 
                     <admin-users-view v-if="currentView === 'users'" 
