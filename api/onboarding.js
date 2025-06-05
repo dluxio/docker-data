@@ -1797,7 +1797,7 @@ class HiveAccountService {
             );
             
 
-            const shouldClaim = shouldClaimMinimum || shouldClaimOptimal;
+            const shouldClaim = shouldClaimMinimum
 
             if (shouldClaim) {
                 console.log(`✅ Should claim ACTs: Min check: ${shouldClaimMinimum}`);
@@ -5603,6 +5603,479 @@ router.post('/api/onboarding/admin/manual-create-account', rateLimits.admin, adm
             success: false,
             error: 'Manual account creation failed',
             details: error.message
+        });
+    }
+});
+
+// 13. Admin endpoint - Cancel payment channel
+router.delete('/api/onboarding/admin/channels/:channelId', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
+    try {
+        const { channelId } = req.params;
+        const adminUsername = req.auth.account;
+
+        const client = await pool.connect();
+        try {
+            // Check if channel exists
+            const channelResult = await client.query(
+                'SELECT * FROM payment_channels WHERE channel_id = $1',
+                [channelId]
+            );
+
+            if (channelResult.rows.length === 0) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Payment channel not found'
+                });
+            }
+
+            // Delete the channel
+            await client.query('DELETE FROM payment_channels WHERE channel_id = $1', [channelId]);
+
+            console.log(`Payment channel ${channelId} canceled by admin ${adminUsername}`);
+
+            res.json({
+                success: true,
+                message: 'Payment channel canceled successfully'
+            });
+        } finally {
+            client.release();
+        }
+    } catch (error) {
+        console.error('Error canceling payment channel:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to cancel payment channel'
+        });
+    }
+});
+
+// 14. Admin endpoint - Get admin account information
+router.get('/api/onboarding/admin/account-info', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
+    try {
+        const adminUsername = req.auth.account;
+
+        // Get account information from Hive blockchain
+        const response = await fetch(config.clientURL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                jsonrpc: '2.0',
+                method: 'condenser_api.get_accounts',
+                params: [[adminUsername]],
+                id: 1
+            })
+        });
+
+        const result = await response.json();
+        if (!result.result || result.result.length === 0) {
+            return res.status(404).json({
+                success: false,
+                error: 'Admin account not found on blockchain'
+            });
+        }
+
+        const account = result.result[0];
+        
+        // Get Resource Credits
+        const rcResponse = await fetch(config.clientURL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                jsonrpc: '2.0',
+                method: 'rc_api.find_rc_accounts',
+                params: { accounts: [adminUsername] },
+                id: 1
+            })
+        });
+
+        const rcResult = await rcResponse.json();
+        let rcData = null;
+        let rcPercentage = 0;
+        
+        if (rcResult.result && rcResult.result.rc_accounts && rcResult.result.rc_accounts.length > 0) {
+            const rcAccount = rcResult.result.rc_accounts[0];
+            const currentMana = parseInt(rcAccount.rc_manabar.current_mana);
+            const maxMana = parseInt(rcAccount.max_rc);
+            rcPercentage = maxMana > 0 ? (currentMana / maxMana) * 100 : 0;
+            
+            rcData = {
+                current_mana: currentMana,
+                max_rc: maxMana,
+                percentage: rcPercentage,
+                last_update_time: rcAccount.rc_manabar.last_update_time
+            };
+        }
+
+        // Calculate HIVE balance
+        const hiveBalance = parseFloat(account.balance.split(' ')[0]);
+        const hbdBalance = parseFloat(account.hbd_balance.split(' ')[0]);
+        const vestingShares = parseFloat(account.vesting_shares.split(' ')[0]);
+        
+        res.json({
+            success: true,
+            account: {
+                username: account.name,
+                created: account.created,
+                reputation: account.reputation,
+                balance: {
+                    hive: hiveBalance,
+                    hbd: hbdBalance,
+                    vesting_shares: vestingShares
+                },
+                actBalance: account.pending_claimed_accounts || 0,
+                resourceCredits: rcData,
+                postCount: account.post_count,
+                followingCount: account.following_count,
+                followerCount: account.follower_count
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching admin account info:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch admin account information'
+        });
+    }
+});
+
+// 15. Admin endpoint - Claim ACT token for admin account
+router.post('/api/onboarding/admin/claim-act', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
+    try {
+        const adminUsername = req.auth.account;
+
+        // Get real-time RC costs for claim_account operation
+        const rcCosts = await rcMonitoringService.getLatestRCCosts();
+        const claimAccountCost = rcCosts['claim_account_operation'];
+
+        if (!claimAccountCost) {
+            return res.status(400).json({
+                success: false,
+                error: 'RC cost data not available for claim_account operation'
+            });
+        }
+
+        // Get admin's current RC
+        const rcResponse = await fetch(config.clientURL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                jsonrpc: '2.0',
+                method: 'rc_api.find_rc_accounts',
+                params: { accounts: [adminUsername] },
+                id: 1
+            })
+        });
+
+        const rcResult = await rcResponse.json();
+        if (!rcResult.result || !rcResult.result.rc_accounts || rcResult.result.rc_accounts.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Unable to fetch admin Resource Credits'
+            });
+        }
+
+        const rcAccount = rcResult.result.rc_accounts[0];
+        const currentRC = parseInt(rcAccount.rc_manabar.current_mana);
+        const rcNeeded = claimAccountCost.rc_needed;
+
+        if (currentRC < rcNeeded) {
+            return res.status(400).json({
+                success: false,
+                error: `Insufficient Resource Credits. Need: ${(rcNeeded / 1e12).toFixed(2)}T RC, Have: ${(currentRC / 1e12).toFixed(2)}T RC`,
+                rcInfo: {
+                    current: currentRC,
+                    needed: rcNeeded,
+                    deficit: rcNeeded - currentRC
+                }
+            });
+        }
+
+        // Return the operation for keychain to execute
+        const claimOperation = [
+            'claim_account',
+            {
+                creator: adminUsername,
+                fee: '0.000 HIVE',
+                extensions: []
+            }
+        ];
+
+        res.json({
+            success: true,
+            operation: claimOperation,
+            rcCost: {
+                needed: rcNeeded,
+                current: currentRC,
+                after_claim: currentRC - rcNeeded
+            },
+            message: 'Operation ready for keychain signature'
+        });
+
+    } catch (error) {
+        console.error('Error preparing ACT claim:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to prepare ACT claim operation'
+        });
+    }
+});
+
+// 16. Admin endpoint - Build account with admin keychain
+router.post('/api/onboarding/admin/build-account', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
+    try {
+        const { channelId, useACT = true } = req.body;
+        const adminUsername = req.auth.account;
+
+        if (!channelId) {
+            return res.status(400).json({
+                success: false,
+                error: 'Channel ID is required'
+            });
+        }
+
+        const client = await pool.connect();
+        try {
+            // Get the payment channel
+            const channelResult = await client.query(
+                'SELECT * FROM payment_channels WHERE channel_id = $1',
+                [channelId]
+            );
+
+            if (channelResult.rows.length === 0) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Payment channel not found'
+                });
+            }
+
+            const channel = channelResult.rows[0];
+
+            if (!channel.username) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'No username specified in payment channel'
+                });
+            }
+
+            if (!channel.public_keys) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'No public keys available for account creation'
+                });
+            }
+
+            let publicKeys;
+            try {
+                publicKeys = typeof channel.public_keys === 'string' 
+                    ? JSON.parse(channel.public_keys) 
+                    : channel.public_keys;
+            } catch (error) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Invalid public keys format'
+                });
+            }
+
+            // Check if account already exists
+            const existingAccount = await hiveAccountService.getHiveAccount(channel.username);
+            if (existingAccount) {
+                // Update channel to completed
+                await client.query(
+                    `UPDATE payment_channels 
+                     SET status = 'completed', account_created_at = CURRENT_TIMESTAMP
+                     WHERE channel_id = $1`,
+                    [channelId]
+                );
+
+                return res.json({
+                    success: true,
+                    message: `Account @${channel.username} already exists on HIVE blockchain`,
+                    accountExists: true
+                });
+            }
+
+            // Get admin's current ACT balance and RC
+            const adminAccountResponse = await fetch(config.clientURL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    jsonrpc: '2.0',
+                    method: 'condenser_api.get_accounts',
+                    params: [[adminUsername]],
+                    id: 1
+                })
+            });
+
+            const adminAccountResult = await adminAccountResponse.json();
+            if (!adminAccountResult.result || adminAccountResult.result.length === 0) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Admin account not found'
+                });
+            }
+
+            const adminAccount = adminAccountResult.result[0];
+            const adminACTBalance = adminAccount.pending_claimed_accounts || 0;
+
+            let operation;
+            let creationMethod = 'DELEGATION';
+
+            if (useACT && adminACTBalance > 0) {
+                // Use ACT
+                creationMethod = 'ACT';
+                operation = [
+                    'create_claimed_account',
+                    {
+                        creator: adminUsername,
+                        new_account_name: channel.username,
+                        owner: {
+                            weight_threshold: 1,
+                            account_auths: [],
+                            key_auths: [[publicKeys.owner, 1]]
+                        },
+                        active: {
+                            weight_threshold: 1,
+                            account_auths: [],
+                            key_auths: [[publicKeys.active, 1]]
+                        },
+                        posting: {
+                            weight_threshold: 1,
+                            account_auths: [],
+                            key_auths: [[publicKeys.posting, 1]]
+                        },
+                        memo_key: publicKeys.memo,
+                        json_metadata: JSON.stringify({
+                            created_by: 'dlux.io',
+                            creation_method: 'admin_keychain_with_act',
+                            admin_creator: adminUsername
+                        }),
+                        extensions: []
+                    }
+                ];
+            } else {
+                // Use HIVE delegation
+                operation = [
+                    'account_create',
+                    {
+                        fee: '3.000 HIVE',
+                        creator: adminUsername,
+                        new_account_name: channel.username,
+                        owner: {
+                            weight_threshold: 1,
+                            account_auths: [],
+                            key_auths: [[publicKeys.owner, 1]]
+                        },
+                        active: {
+                            weight_threshold: 1,
+                            account_auths: [],
+                            key_auths: [[publicKeys.active, 1]]
+                        },
+                        posting: {
+                            weight_threshold: 1,
+                            account_auths: [],
+                            key_auths: [[publicKeys.posting, 1]]
+                        },
+                        memo_key: publicKeys.memo,
+                        json_metadata: JSON.stringify({
+                            created_by: 'dlux.io',
+                            creation_method: 'admin_keychain_with_hive',
+                            admin_creator: adminUsername
+                        })
+                    }
+                ];
+            }
+
+            res.json({
+                success: true,
+                operation: operation,
+                creationMethod: creationMethod,
+                username: channel.username,
+                channelId: channelId,
+                adminACTBalance: adminACTBalance,
+                message: 'Account creation operation ready for keychain signature'
+            });
+
+        } finally {
+            client.release();
+        }
+
+    } catch (error) {
+        console.error('Error preparing account creation:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to prepare account creation operation'
+        });
+    }
+});
+
+// 17. Admin endpoint - Complete keychain account creation
+router.post('/api/onboarding/admin/complete-account-creation', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
+    try {
+        const { channelId, txId, username, creationMethod } = req.body;
+        const adminUsername = req.auth.account;
+
+        if (!channelId || !txId || !username) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing required parameters: channelId, txId, username'
+            });
+        }
+
+        const client = await pool.connect();
+        try {
+            // Update payment channel to completed
+            await client.query(`
+                UPDATE payment_channels 
+                SET status = 'completed', account_created_at = CURRENT_TIMESTAMP
+                WHERE channel_id = $1
+            `, [channelId]);
+
+            // Record the creation
+            await client.query(`
+                INSERT INTO hive_account_creations 
+                (channel_id, username, creation_method, hive_tx_id, status, completed_at)
+                VALUES ($1, $2, $3, $4, 'success', CURRENT_TIMESTAMP)
+            `, [channelId, username, creationMethod, txId]);
+
+            // Create notification for the user
+            await createNotification(
+                username,
+                'account_created',
+                'HIVE Account Created!',
+                `Your HIVE account @${username} has been created by admin @${adminUsername} using keychain!`,
+                {
+                    channel_id: channelId,
+                    admin_creator: adminUsername,
+                    tx_id: txId,
+                    creation_method: creationMethod
+                },
+                'high',
+                168 // 7 days
+            );
+
+            console.log(`Account @${username} created successfully by admin ${adminUsername} via keychain. TX: ${txId}`);
+
+            res.json({
+                success: true,
+                message: `Account @${username} created successfully!`,
+                account: {
+                    username,
+                    creator: adminUsername,
+                    txId,
+                    creationMethod,
+                    channelId
+                }
+            });
+
+        } finally {
+            client.release();
+        }
+
+    } catch (error) {
+        console.error('Error completing account creation:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to complete account creation'
         });
     }
 });

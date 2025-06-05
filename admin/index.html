@@ -242,8 +242,9 @@
                                     <div class="card-body">
                                         <div class="d-flex justify-content-between">
                                             <div>
-                                                <h6 class="card-title">ACT Balance</h6>
+                                                <h6 class="card-title">Backend ACT Balance</h6>
                                                 <h3>{{ dashboardData.actBalance || 0 }}</h3>
+                                                <small class="text-white-50">System account</small>
                                             </div>
                                             <i class="bi bi-wallet2 fs-1 opacity-50"></i>
                                         </div>
@@ -255,8 +256,9 @@
                                     <div class="card-body">
                                         <div class="d-flex justify-content-between">
                                             <div>
-                                                <h6 class="card-title">RC Available</h6>
+                                                <h6 class="card-title">Backend RC Available</h6>
                                                 <h3>{{ formatNumber(dashboardData.rcAvailable) }}</h3>
+                                                <small class="text-white-50">{{ dashboardData.rcPercentage.toFixed(1) }}%</small>
                                             </div>
                                             <i class="bi bi-lightning fs-1 opacity-50"></i>
                                         </div>
@@ -285,6 +287,87 @@
                                                 <h3>{{ dashboardData.activeChannels || 0 }}</h3>
                                             </div>
                                             <i class="bi bi-credit-card fs-1 opacity-50"></i>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Admin Account Info -->
+                        <div class="row mb-4">
+                            <div class="col-md-6">
+                                <div class="card">
+                                    <div class="card-header">
+                                        <h5>Your Admin Account (@{{ adminAccountInfo.username || currentUser }})</h5>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="row">
+                                            <div class="col-6">
+                                                <div class="text-center mb-3">
+                                                    <h6>ACT Balance</h6>
+                                                    <h4>{{ adminAccountInfo.actBalance || 0 }}</h4>
+                                                    <button class="btn btn-primary btn-sm" 
+                                                            @click="claimACT" 
+                                                            :disabled="actClaiming || !canClaimACT()"
+                                                            title="Claim Account Creation Token">
+                                                        <span v-if="actClaiming">
+                                                            <i class="bi bi-hourglass-split"></i>
+                                                            Claiming...
+                                                        </span>
+                                                        <span v-else>
+                                                            <i class="bi bi-plus-circle"></i>
+                                                            Claim ACT
+                                                        </span>
+                                                    </button>
+                                                    <div v-if="!canClaimACT()" class="small text-muted mt-1">
+                                                        Need more RC to claim
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div class="col-6">
+                                                <div class="text-center mb-3">
+                                                    <h6>Resource Credits</h6>
+                                                    <h4>{{ getRCDisplayText() }}</h4>
+                                                    <small class="text-muted">Your RC available</small>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="row">
+                                            <div class="col-6">
+                                                <div class="text-center">
+                                                    <h6>HIVE Balance</h6>
+                                                    <h4>{{ (adminAccountInfo.balance?.hive || 0).toFixed(3) }}</h4>
+                                                </div>
+                                            </div>
+                                            <div class="col-6">
+                                                <div class="text-center">
+                                                    <h6>HBD Balance</h6>
+                                                    <h4>{{ (adminAccountInfo.balance?.hbd || 0).toFixed(3) }}</h4>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="card">
+                                    <div class="card-header">
+                                        <h5>RC Costs Information</h5>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="row">
+                                            <div class="col-12">
+                                                <h6>Account Creation Options:</h6>
+                                                <ul class="list-unstyled">
+                                                    <li><strong>Claim ACT:</strong> ~13.7T RC</li>
+                                                    <li><strong>Use ACT:</strong> ~3.6B RC</li>
+                                                    <li><strong>HIVE Delegation:</strong> ~3.6B RC + 3 HIVE</li>
+                                                </ul>
+                                                <div class="alert alert-info small">
+                                                    <i class="bi bi-lightbulb"></i>
+                                                    <strong>Tip:</strong> Claiming ACTs when you have high RC is very efficient for bulk account creation.
+                                                </div>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>

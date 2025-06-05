@@ -185,6 +185,24 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
                                                     title="Manually Create Account">
                                                 <i class="bi bi-person-plus"></i>
                                             </button>
+                                            <button v-if="canBuildAccount(channel)" 
+                                                    class="btn btn-outline-warning"
+                                                    @click="showBuildAccountModal(channel)"
+                                                    title="Build Account with Admin Keychain">
+                                                <i class="bi bi-hammer"></i>
+                                            </button>
+                                            <button v-if="canBuildWithACT(channel)" 
+                                                    class="btn btn-outline-primary"
+                                                    @click="showBuildAccountWithACTModal(channel)"
+                                                    title="Build Account with ACT">
+                                                <i class="bi bi-wallet2"></i>
+                                            </button>
+                                            <button v-if="canCancelChannel(channel)" 
+                                                    class="btn btn-outline-danger"
+                                                    @click="showCancelModal(channel)"
+                                                    title="Cancel Channel">
+                                                <i class="bi bi-trash"></i>
+                                            </button>
                                         </div>
                                     </td>
                                 </tr>
@@ -440,6 +458,178 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
                     </div>
                 </div>
             </div>
+
+            <!-- Cancel Channel Modal -->
+            <div class="modal fade" id="cancelChannelModal" tabindex="-1">
+                <div class="modal-dialog">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Cancel Payment Channel</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        </div>
+                        <div class="modal-body" v-if="selectedChannel">
+                            <div class="alert alert-warning">
+                                <i class="bi bi-exclamation-triangle"></i>
+                                <strong>Warning:</strong> This will permanently delete the payment channel record.
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label"><strong>Channel ID:</strong></label>
+                                <input type="text" class="form-control font-monospace" :value="selectedChannel.channel_id || selectedChannel.channelId" readonly>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label"><strong>Username:</strong></label>
+                                <input type="text" class="form-control" :value="selectedChannel.username" readonly>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label"><strong>Status:</strong></label>
+                                <span class="badge" :class="getStatusClass(selectedChannel.status)">
+                                    {{ selectedChannel.status }}
+                                </span>
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                            <button type="button" 
+                                    class="btn btn-danger" 
+                                    @click="executeCancelChannel"
+                                    :disabled="canceling">
+                                <span v-if="canceling">
+                                    <i class="bi bi-hourglass-split"></i>
+                                    Canceling...
+                                </span>
+                                <span v-else>
+                                    <i class="bi bi-trash"></i>
+                                    Delete Channel
+                                </span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Build Account Modal -->
+            <div class="modal fade" id="buildAccountModal" tabindex="-1">
+                <div class="modal-dialog">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Build Account with Admin Keychain</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        </div>
+                        <div class="modal-body" v-if="selectedChannel">
+                            <div class="alert alert-info">
+                                <i class="bi bi-info-circle"></i>
+                                This will use your admin keychain to create the HIVE account using 3 HIVE delegation.
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label"><strong>Target Username:</strong></label>
+                                <input type="text" class="form-control" :value="selectedChannel.username" readonly>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label"><strong>Creation Method:</strong></label>
+                                <span class="badge bg-warning">HIVE Delegation (3 HIVE)</span>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label"><strong>Public Keys Available:</strong></label>
+                                <div v-if="getPublicKeysObject(selectedChannel)">
+                                    <div v-for="(key, keyType) in getPublicKeysObject(selectedChannel)" :key="keyType" class="mb-2">
+                                        <small class="text-muted">{{ keyType }}:</small>
+                                        <div class="font-monospace small text-break">{{ key }}</div>
+                                    </div>
+                                </div>
+                                <div v-else class="text-muted">No keys available</div>
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                            <button type="button" 
+                                    class="btn btn-warning" 
+                                    @click="executeBuildAccount"
+                                    :disabled="buildingAccount">
+                                <span v-if="buildingAccount">
+                                    <i class="bi bi-hourglass-split"></i>
+                                    Building Account...
+                                </span>
+                                <span v-else>
+                                    <i class="bi bi-hammer"></i>
+                                    Build Account
+                                </span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Build Account with ACT Modal -->
+            <div class="modal fade" id="buildAccountACTModal" tabindex="-1">
+                <div class="modal-dialog">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Build Account with ACT</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        </div>
+                        <div class="modal-body" v-if="selectedChannel">
+                            <div class="alert alert-primary">
+                                <i class="bi bi-wallet2"></i>
+                                This will use your admin keychain to create the HIVE account using an Account Creation Token (ACT).
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label"><strong>Target Username:</strong></label>
+                                <input type="text" class="form-control" :value="selectedChannel.username" readonly>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label"><strong>Creation Method:</strong></label>
+                                <span class="badge bg-primary">Account Creation Token (ACT)</span>
+                            </div>
+
+                            <div class="mb-3" v-if="adminAccountInfo">
+                                <label class="form-label"><strong>Your ACT Balance:</strong></label>
+                                <div>
+                                    <span class="badge bg-info">{{ adminAccountInfo.actBalance || 0 }} ACT Available</span>
+                                    <span v-if="(adminAccountInfo.actBalance || 0) === 0" class="text-warning ms-2">
+                                        <i class="bi bi-exclamation-triangle"></i>
+                                        Will fallback to HIVE delegation
+                                    </span>
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label"><strong>Public Keys Available:</strong></label>
+                                <div v-if="getPublicKeysObject(selectedChannel)">
+                                    <div v-for="(key, keyType) in getPublicKeysObject(selectedChannel)" :key="keyType" class="mb-2">
+                                        <small class="text-muted">{{ keyType }}:</small>
+                                        <div class="font-monospace small text-break">{{ key }}</div>
+                                    </div>
+                                </div>
+                                <div v-else class="text-muted">No keys available</div>
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                            <button type="button" 
+                                    class="btn btn-primary" 
+                                    @click="executeBuildAccountWithACT"
+                                    :disabled="buildingAccountACT">
+                                <span v-if="buildingAccountACT">
+                                    <i class="bi bi-hourglass-split"></i>
+                                    Building Account...
+                                </span>
+                                <span v-else>
+                                    <i class="bi bi-wallet2"></i>
+                                    Build with ACT
+                                </span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     `,
 
@@ -473,7 +663,11 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
                 username: '',
                 channelId: '',
                 useACT: true
-            }
+            },
+            canceling: false,
+            buildingAccount: false,
+            buildingAccountACT: false,
+            adminAccountInfo: null
         };
     },
 
@@ -740,12 +934,24 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
         },
         
         showAlert(message, type = 'info', icon = 'info-circle') {
-            // This will be handled by the parent component or global alert system
-            console.log(`Alert [${type}]: ${message}`);
+            this.alert = {
+                message: message,
+                type: type,
+                icon: icon
+            };
+            
+            // Auto-clear after 5 seconds
+            setTimeout(() => {
+                this.clearAlert();
+            }, 5000);
         },
         
         clearAlert() {
-            // Clear any existing alerts
+            this.alert = {
+                message: '',
+                type: 'info',
+                icon: ''
+            };
         },
         
         getAverage(totalUsd, count) {
@@ -854,6 +1060,186 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
                 this.showAlert('Failed to create account: ' + error.message, 'danger', 'exclamation-triangle');
             } finally {
                 this.creatingAccount = false;
+            }
+        },
+
+        // New methods for the three new actions
+        canBuildAccount(channel) {
+            // Allow building accounts for confirmed channels with public keys that haven't been completed
+            return ['confirmed', 'failed'].includes(channel.status) && this.hasPublicKeys(channel);
+        },
+
+        async showBuildAccountModal(channel) {
+            this.selectedChannel = channel;
+            await this.loadAdminAccountInfo();
+            const modal = new bootstrap.Modal(document.getElementById('buildAccountModal'));
+            modal.show();
+        },
+
+        async executeBuildAccount() {
+            if (!this.selectedChannel) return;
+
+            this.buildingAccount = true;
+            
+            try {
+                const channelId = this.selectedChannel.channelId || this.selectedChannel.channel_id;
+                
+                // Get the operation from the backend
+                const response = await this.apiClient.post('/api/onboarding/admin/build-account', {
+                    channelId: channelId,
+                    useACT: false // Force HIVE delegation for this method
+                });
+
+                if (response.success) {
+                    // Use the keychainTransaction method from the parent app
+                    const result = await this.$parent.keychainTransaction([response.operation], 'active');
+                    
+                    if (result.success) {
+                        // Complete the account creation
+                        const completeResponse = await this.apiClient.post('/api/onboarding/admin/complete-account-creation', {
+                            channelId: channelId,
+                            txId: result.result.id,
+                            username: response.username,
+                            creationMethod: response.creationMethod
+                        });
+
+                        if (completeResponse.success) {
+                            this.showAlert(`Account @${response.username} created successfully with HIVE delegation!`, 'success', 'check-circle');
+                            
+                            // Close modal and refresh data
+                            bootstrap.Modal.getInstance(document.getElementById('buildAccountModal')).hide();
+                            await this.refreshData();
+                        } else {
+                            throw new Error(completeResponse.error || 'Failed to complete account creation');
+                        }
+                    } else {
+                        throw new Error(result.message || 'Keychain transaction failed');
+                    }
+                } else {
+                    throw new Error(response.error || 'Failed to prepare account creation');
+                }
+
+            } catch (error) {
+                console.error('Account creation failed:', error);
+                this.showAlert('Failed to create account: ' + error.message, 'danger', 'exclamation-triangle');
+            } finally {
+                this.buildingAccount = false;
+            }
+        },
+
+        canBuildWithACT(channel) {
+            // Same as canBuildAccount - we'll determine ACT availability in the modal
+            return ['confirmed', 'failed'].includes(channel.status) && this.hasPublicKeys(channel);
+        },
+
+        async showBuildAccountWithACTModal(channel) {
+            this.selectedChannel = channel;
+            await this.loadAdminAccountInfo();
+            const modal = new bootstrap.Modal(document.getElementById('buildAccountACTModal'));
+            modal.show();
+        },
+
+        async executeBuildAccountWithACT() {
+            if (!this.selectedChannel) return;
+
+            this.buildingAccountACT = true;
+            
+            try {
+                const channelId = this.selectedChannel.channelId || this.selectedChannel.channel_id;
+                
+                // Get the operation from the backend
+                const response = await this.apiClient.post('/api/onboarding/admin/build-account', {
+                    channelId: channelId,
+                    useACT: true // Try to use ACT if available
+                });
+
+                if (response.success) {
+                    // Use the keychainTransaction method from the parent app
+                    const result = await this.$parent.keychainTransaction([response.operation], 'active');
+                    
+                    if (result.success) {
+                        // Complete the account creation
+                        const completeResponse = await this.apiClient.post('/api/onboarding/admin/complete-account-creation', {
+                            channelId: channelId,
+                            txId: result.result.id,
+                            username: response.username,
+                            creationMethod: response.creationMethod
+                        });
+
+                        if (completeResponse.success) {
+                            const methodText = response.creationMethod === 'ACT' ? 'ACT' : 'HIVE delegation (fallback)';
+                            this.showAlert(`Account @${response.username} created successfully with ${methodText}!`, 'success', 'check-circle');
+                            
+                            // Close modal and refresh data
+                            bootstrap.Modal.getInstance(document.getElementById('buildAccountACTModal')).hide();
+                            await this.refreshData();
+                        } else {
+                            throw new Error(completeResponse.error || 'Failed to complete account creation');
+                        }
+                    } else {
+                        throw new Error(result.message || 'Keychain transaction failed');
+                    }
+                } else {
+                    throw new Error(response.error || 'Failed to prepare account creation');
+                }
+
+            } catch (error) {
+                console.error('Account creation with ACT failed:', error);
+                this.showAlert('Failed to create account: ' + error.message, 'danger', 'exclamation-triangle');
+            } finally {
+                this.buildingAccountACT = false;
+            }
+        },
+
+        canCancelChannel(channel) {
+            // Allow canceling any channel that isn't completed
+            return ['pending', 'confirmed', 'failed'].includes(channel.status);
+        },
+
+        showCancelModal(channel) {
+            this.selectedChannel = channel;
+            const modal = new bootstrap.Modal(document.getElementById('cancelChannelModal'));
+            modal.show();
+        },
+
+        async executeCancelChannel() {
+            if (!this.selectedChannel) return;
+
+            this.canceling = true;
+            
+            try {
+                const channelId = this.selectedChannel.channelId || this.selectedChannel.channel_id;
+                
+                const response = await this.apiClient.delete(`/api/onboarding/admin/channels/${channelId}`);
+
+                if (response.success) {
+                    this.showAlert('Payment channel canceled successfully!', 'success', 'check-circle');
+                    
+                    // Close modal and refresh data
+                    bootstrap.Modal.getInstance(document.getElementById('cancelChannelModal')).hide();
+                    await this.refreshData();
+                } else {
+                    throw new Error(response.error || 'Failed to cancel channel');
+                }
+
+            } catch (error) {
+                console.error('Channel cancellation failed:', error);
+                this.showAlert('Failed to cancel channel: ' + error.message, 'danger', 'exclamation-triangle');
+            } finally {
+                this.canceling = false;
+            }
+        },
+
+        async loadAdminAccountInfo() {
+            try {
+                const response = await this.apiClient.get('/api/onboarding/admin/account-info');
+                if (response.success) {
+                    this.adminAccountInfo = response.account;
+                } else {
+                    console.error('Failed to load admin account info:', response.error);
+                }
+            } catch (error) {
+                console.error('Error loading admin account info:', error);
             }
         }
     }

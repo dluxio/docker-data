@@ -89,11 +89,26 @@ const app = createApp({
             dashboardData: {
                 actBalance: 0,
                 rcAvailable: 0,
+                rcPercentage: 0,
                 pendingAccounts: 0,
                 activeChannels: 0,
                 recentAccounts: [],
                 blockchainMonitoring: null
             },
+
+            // Admin account info
+            adminAccountInfo: {
+                username: '',
+                actBalance: 0,
+                resourceCredits: null,
+                balance: {
+                    hive: 0,
+                    hbd: 0
+                }
+            },
+
+            // ACT claiming state
+            actClaiming: false,
 
             // Charts
             charts: {
@@ -177,6 +192,23 @@ const app = createApp({
             }
         },
 
+        async keychainTransaction(operations, key = 'active') {
+            return new Promise((resolve, reject) => {
+                try {
+                    window.hive_keychain.requestBroadcast(
+                      this.currentUser,
+                      operations,
+                      key,
+                      function (response) {
+                        resolve(response);
+                      }
+                    );
+                  } catch (e) {
+                    reject(e);
+                  }
+            })
+        },
+
         async handleKeychainSuccess(keychainResponse, challenge) {
             try {
                 const authData = {
@@ -218,6 +250,7 @@ const app = createApp({
             this.dashboardData = {
                 actBalance: 0,
                 rcAvailable: 0,
+                rcPercentage: 0,
                 pendingAccounts: 0,
                 activeChannels: 0,
                 recentAccounts: [],
@@ -243,10 +276,11 @@ const app = createApp({
             this.loading = true;
             try {
                 // Load multiple data sources in parallel
-                const [actStatusData, channelsData, blockchainStatusData] = await Promise.all([
+                const [actStatusData, channelsData, blockchainStatusData, adminAccountData] = await Promise.all([
                     this.apiClient.get('/api/onboarding/admin/act-status'),
                     this.apiClient.get('/api/onboarding/admin/channels?limit=10'),
-                    this.apiClient.get('/api/onboarding/status').catch(() => ({ success: false })) // Use public endpoint as fallback
+                    this.apiClient.get('/api/onboarding/status').catch(() => ({ success: false })), // Use public endpoint as fallback
+                    this.apiClient.get('/api/onboarding/admin/account-info').catch(() => ({ success: false }))
                 ]);
 
                 // Process ACT status data
@@ -254,11 +288,32 @@ const app = createApp({
                     const statusData = actStatusData.data?.actStatus || actStatusData.actStatus || {};
                     this.dashboardData.actBalance = statusData.currentACTBalance || 0;
                     this.dashboardData.rcAvailable = statusData.currentResourceCredits || 0;
+                    
+                    // Calculate RC percentage for backend account
+                    if (statusData.currentResourceCredits) {
+                        // Estimate max RC based on current RC and typical patterns
+                        // This is an approximation - for exact calculation we'd need the account's max_rc
+                        const estimatedMaxRC = statusData.currentResourceCredits * 10; // Conservative estimate
+                        this.dashboardData.rcPercentage = Math.min(100, (statusData.currentResourceCredits / estimatedMaxRC) * 100);
+                    } else {
+                        this.dashboardData.rcPercentage = 0;
+                    }
+                    
                     this.dashboardData.recentAccounts = actStatusData.data?.recentCreations || actStatusData.recentCreations || [];
                     
                     // Count pending accounts
                     const recentCreations = actStatusData.data?.recentCreations || actStatusData.recentCreations || [];
                     this.dashboardData.pendingAccounts = recentCreations.filter(acc => acc && acc.status === 'pending').length;
+                }
+
+                // Process admin account data
+                if (adminAccountData.success) {
+                    this.adminAccountInfo = adminAccountData.account;
+                    
+                    // Calculate RC percentage for admin account
+                    if (this.adminAccountInfo.resourceCredits) {
+                        this.adminAccountInfo.rcPercentage = this.adminAccountInfo.resourceCredits.percentage || 0;
+                    }
                 }
 
                 // Process channels data
@@ -554,6 +609,56 @@ const app = createApp({
                     alertEl.parentNode.removeChild(alertEl);
                 }
             }, 8000);
+        },
+
+        async claimACT() {
+            if (this.actClaiming) return;
+            
+            this.actClaiming = true;
+            
+            try {
+                // Get the claim operation from the backend
+                const response = await this.apiClient.post('/api/onboarding/admin/claim-act');
+                
+                if (response.success) {
+                    // Use keychain to execute the operation
+                    const result = await this.keychainTransaction([response.operation], 'active');
+                    
+                    if (result.success) {
+                        this.showSuccessMessage(`ACT claimed successfully! Transaction: ${result.result.id}`);
+                        
+                        // Refresh dashboard to show updated ACT balance
+                        await this.loadDashboard();
+                    } else {
+                        throw new Error(result.message || 'Keychain transaction failed');
+                    }
+                } else {
+                    throw new Error(response.error || 'Failed to prepare ACT claim');
+                }
+                
+            } catch (error) {
+                console.error('ACT claim failed:', error);
+                this.showErrorMessage('Failed to claim ACT: ' + error.message);
+            } finally {
+                this.actClaiming = false;
+            }
+        },
+
+        canClaimACT() {
+            // Check if admin has enough RC to claim an ACT
+            if (!this.adminAccountInfo.resourceCredits) return false;
+            
+            const rcPercentage = this.adminAccountInfo.resourceCredits.percentage || 0;
+            return rcPercentage > 20; // Require at least 20% RC to claim
+        },
+
+        getRCDisplayText() {
+            if (!this.adminAccountInfo.resourceCredits) return 'N/A';
+            
+            const current = this.adminAccountInfo.resourceCredits.current_mana;
+            const percentage = this.adminAccountInfo.resourceCredits.percentage;
+            
+            return `${this.formatNumber(current)} (${percentage.toFixed(1)}%)`;
         }
     }
 });
