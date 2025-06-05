@@ -8,6 +8,7 @@ const rateLimit = require('express-rate-limit');
 const { PaymentChannelMonitor } = require('./wsmonitor');
 const blockchainMonitor = require('./blockchain-monitor');
 const hiveTx = require('hive-tx');
+const { sha256 } = require("hive-tx/helpers/crypto.js")
 const config = require('../config');
 
 const router = express.Router();
