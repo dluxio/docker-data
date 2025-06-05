@@ -5972,11 +5972,7 @@ router.post('/api/onboarding/admin/build-account', rateLimits.admin, adminAuthMi
                             key_auths: [[publicKeys.posting, 1]]
                         },
                         memo_key: publicKeys.memo,
-                        json_metadata: JSON.stringify({
-                            created_by: 'dlux.io',
-                            creation_method: 'admin_keychain_with_act',
-                            admin_creator: adminUsername
-                        }),
+                        json_metadata: "",
                         extensions: []
                     }
                 ];
@@ -6004,11 +6000,7 @@ router.post('/api/onboarding/admin/build-account', rateLimits.admin, adminAuthMi
                             key_auths: [[publicKeys.posting, 1]]
                         },
                         memo_key: publicKeys.memo,
-                        json_metadata: JSON.stringify({
-                            created_by: 'dlux.io',
-                            creation_method: 'admin_keychain_with_hive',
-                            admin_creator: adminUsername
-                        })
+                        json_metadata: ""
                     }
                 ];
             }

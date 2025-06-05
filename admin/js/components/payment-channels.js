@@ -986,14 +986,7 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
         hasPublicKeys(channel) {
             const publicKeysData = channel.publicKeys || channel.public_keys;
             const result = publicKeysData && Object.keys(this.getPublicKeysObject(channel) || {}).length > 0;
-            console.log('hasPublicKeys check:', {
-                channel: channel,
-                publicKeys: channel.publicKeys,
-                public_keys: channel.public_keys,
-                publicKeysData: publicKeysData,
-                parsed: this.getPublicKeysObject(channel),
-                result: result
-            });
+
             return result;
         },
 
@@ -1076,11 +1069,7 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
         // New methods for the three new actions
         canBuildAccount(channel) {
             // Allow building accounts for confirmed channels with public keys that haven't been completed
-            console.log('canBuildAccount check:', {
-                status: channel.status,
-                hasKeys: this.hasPublicKeys(channel),
-                channel: channel
-            });
+
             return ['confirmed', 'failed', 'pending'].includes(channel.status) && this.hasPublicKeys(channel);
         },
 
@@ -1143,11 +1132,7 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
 
         canBuildWithACT(channel) {
             // Same as canBuildAccount - we'll determine ACT availability in the modal
-            console.log('canBuildWithACT check:', {
-                status: channel.status,
-                hasKeys: this.hasPublicKeys(channel),
-                channel: channel
-            });
+
             return ['confirmed', 'failed', 'pending'].includes(channel.status) && this.hasPublicKeys(channel);
         },
 
@@ -1211,10 +1196,7 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
 
         canCancelChannel(channel) {
             // Allow canceling any channel that isn't completed
-            console.log('canCancelChannel check:', {
-                status: channel.status,
-                channel: channel
-            });
+
             return ['pending', 'confirmed', 'failed'].includes(channel.status);
         },
 
