@@ -2165,22 +2165,14 @@ const getPaymentChannels = async (limit = 100, offset = 0, status = null, days =
 
 // HIVE-based authentication middleware
 class HiveAuth {
-    static async verifySignature(challenge, signature, publicKey) {
+    static async verifySignature(challenge, signature, key) {
         try {
-            // Use hive-tx to verify the signature
-            // For Hive Keychain, we need to verify the signature of the challenge string
-            const isValid = hiveTx.Signature.fromString(signature).verify(challenge, hiveTx.PublicKey.fromString(publicKey));
-            return isValid;
+                const publicKey = hiveTx.PublicKey.from(key);
+                const message = sha256(challenge);
+                return publicKey.verify(message, hiveTx.Signature.from(signature));
         } catch (error) {
             console.error('Signature verification error:', error);
-            // Try the alternative verification method
-            try {
-                const altValid = hiveTx.verify(challenge, signature, publicKey);
-                return altValid;
-            } catch (altError) {
-                console.error('Alternative signature verification error:', altError);
-                return false;
-            }
+            return false
         }
     }
 
