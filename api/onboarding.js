@@ -1792,7 +1792,7 @@ class HiveAccountService {
             const shouldClaim = shouldClaimMinimum || shouldClaimOptimal;
 
             if (shouldClaim) {
-                console.log(`✅ Should claim ACTs: Min check: ${shouldClaimMinimum}, Optimal check: ${shouldClaimOptimal}`);
+                console.log(`✅ Should claim ACTs: Min check: ${shouldClaimMinimum}`);
 
                 // Calculate how many we can safely claim
                 const rcAfterBuffer = this.resourceCredits - (claimCost.rc_needed * 2); // Keep 2x claim cost as safety buffer
