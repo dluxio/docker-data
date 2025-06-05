@@ -57,7 +57,7 @@ window.DLUX_COMPONENTS['admin-users-view'] = {
                                             <span v-if="admin.permissions?.super" class="badge bg-danger">Super Admin</span>
                                             <span v-for="(value, permKey) in (admin.permissions || {})" 
                                                   v-if="permKey !== 'admin' && permKey !== 'super' && value"
-                                                  :key="`perm-${permKey}`" 
+                                                  :key="'perm-' + permKey" 
                                                   class="badge bg-info">
                                                 {{ permKey }}
                                             </span>
@@ -229,11 +229,11 @@ window.DLUX_COMPONENTS['admin-users-view'] = {
                                     <div class="d-flex flex-wrap gap-2">
                                         <span v-if="selectedAdmin.permissions?.admin" class="badge bg-primary">Admin Access</span>
                                         <span v-if="selectedAdmin.permissions?.super" class="badge bg-danger">Super Admin</span>
-                                        <span v-for="(value, key) in (selectedAdmin.permissions || {})" 
-                                              v-if="key !== 'admin' && key !== 'super' && value"
-                                              :key="key" 
+                                        <span v-for="(value, permissionKey) in (selectedAdmin.permissions || {})" 
+                                              v-if="permissionKey !== 'admin' && permissionKey !== 'super' && value"
+                                              :key="'permission-' + permissionKey" 
                                               class="badge bg-info">
-                                            {{ key }}
+                                            {{ permissionKey }}
                                         </span>
                                     </div>
                                     

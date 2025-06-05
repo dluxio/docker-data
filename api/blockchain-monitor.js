@@ -214,19 +214,18 @@ class BlockchainMonitoringService {
         });
 
         try {
-            // Monitor each network
-            for (const [symbol, network] of this.networks) {
-                await this.startNetworkMonitoring(symbol, network);
-            }
+            // Start staggered monitoring to avoid rate limits
+            // Check each network every 25 seconds (5 networks * 5 seconds = 25 seconds total cycle)
+            await this.startStaggeredNetworkMonitoring();
 
-            // Global monitoring loop for payment channels
+            // Global monitoring loop for payment channels (reduced frequency)
             this.globalMonitoringInterval = setInterval(async () => {
                 try {
                     await this.monitorActiveChannels();
                 } catch (error) {
                     Logger.error('Error in global monitoring loop', { error: error.message });
                 }
-            }, 30000); // Check every 30 seconds
+            }, 60000); // Check every 60 seconds (reduced from 30)
 
             Logger.info('Blockchain monitoring service started successfully', {
                 activeNetworks: this.monitoringIntervals.size
@@ -251,6 +250,59 @@ class BlockchainMonitoringService {
         if (this.globalMonitoringInterval) {
             clearInterval(this.globalMonitoringInterval);
         }
+
+        if (this.staggeredMonitoringInterval) {
+            clearInterval(this.staggeredMonitoringInterval);
+        }
+
+        Logger.info('Blockchain monitoring service stopped');
+    }
+
+    // Start staggered monitoring to avoid rate limits
+    async startStaggeredNetworkMonitoring() {
+        const networks = Array.from(this.networks.entries());
+        let currentIndex = 0;
+
+        // Initialize last checked blocks for all networks
+        for (const [symbol, network] of networks) {
+            try {
+                const currentBlock = await this.getCurrentBlockHeight(symbol);
+                if (currentBlock) {
+                    this.lastBlockChecked.set(symbol, currentBlock);
+                }
+            } catch (error) {
+                Logger.error('Failed to get initial block height', { 
+                    network: symbol, 
+                    error: error.message 
+                });
+            }
+        }
+
+        // Staggered monitoring - check one network every 5 seconds
+        this.staggeredMonitoringInterval = setInterval(async () => {
+            if (networks.length === 0) return;
+            
+            const [symbol, network] = networks[currentIndex];
+            try {
+                await this.checkNetworkForPayments(symbol, network);
+            } catch (error) {
+                Logger.error('Error in staggered network monitoring', { 
+                    network: symbol, 
+                    error: error.message 
+                });
+            }
+            
+            // Move to next network
+            currentIndex = (currentIndex + 1) % networks.length;
+        }, 5000); // Check every 5 seconds, cycling through networks
+
+        this.monitoringIntervals.set('staggered', this.staggeredMonitoringInterval);
+        
+        Logger.info('Started staggered network monitoring', {
+            networks: networks.map(([symbol]) => symbol),
+            checkInterval: '5 seconds per network',
+            fullCycleTime: `${networks.length * 5} seconds`
+        });
     }
 
     // Start monitoring for a specific network
@@ -262,6 +314,8 @@ class BlockchainMonitoringService {
                 this.lastBlockChecked.set(symbol, currentBlock);
             }
 
+            // Use slower intervals to avoid rate limiting
+            const checkInterval = Math.max(network.block_time * 1000, 60000); // At least 60 seconds
             const interval = setInterval(async () => {
                 try {
                     await this.checkNetworkForPayments(symbol, network);
@@ -271,7 +325,7 @@ class BlockchainMonitoringService {
                         error: error.message 
                     });
                 }
-            }, network.block_time * 1000); // Check based on block time
+            }, checkInterval);
 
             this.monitoringIntervals.set(symbol, interval);
         } catch (error) {

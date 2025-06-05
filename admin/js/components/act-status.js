@@ -138,7 +138,7 @@ window.DLUX_COMPONENTS['act-status-view'] = {
                                         </span>
                                     </td>
                                     <td>{{ account.act_used || 0 }}</td>
-                                    <td>\${{ account.creation_fee || 'Free' }}</td>
+                                    <td>\\${{ account.creation_fee || 'Free' }}</td>
                                     <td>{{ formatDate(account.created_at) }}</td>
                                     <td>
                                         <div class="btn-group btn-group-sm">
@@ -176,7 +176,7 @@ window.DLUX_COMPONENTS['act-status-view'] = {
                                     <h4>{{ stat.count }}</h4>
                                     <small class="text-muted">
                                         ACTs: {{ stat.total_acts_used || 0 }} | 
-                                        Avg Fee: \${{ (stat.avg_fee || 0).toFixed(2) }}
+                                        Avg Fee: \\${{ (stat.avg_fee || 0).toFixed(2) }}
                                     </small>
                                 </div>
                             </div>
