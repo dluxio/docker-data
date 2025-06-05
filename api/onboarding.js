@@ -1351,7 +1351,13 @@ class HiveAccountService {
         }
         return 0;
     }
-
+    async broadcastTransaction(operations, key) {
+        const tx = new hiveTx.Transaction()
+        const stx = await tx.create(operations)
+        const privateKey = hiveTx.PrivateKey.from(key)
+        stx.sign(privateKey)
+        return await stx.broadcast()
+    }
     async claimAccountCreationTokens() {
         try {
             if (!this.creatorKey) {
@@ -2093,13 +2099,6 @@ class HiveAuth {
             console.error('Signature verification error:', error);
             return false
         }
-    }
-    static async broadcastTransaction(operations, key) {
-        const tx = new hiveTx.Transaction()
-        const stx = await tx.create(operations)
-        const privateKey = hiveTx.PrivateKey.from(key)
-        stx.sign(privateKey)
-        return await stx.broadcast()
     }
     static async getAccountKeys(username) {
         try {
