@@ -3256,6 +3256,117 @@ router.get('/api/onboarding/admin/blockchain-status', rateLimits.admin, adminAut
     }
 });
 
+// 3f. Admin endpoint - Verify pending accounts exist on blockchain
+router.post('/api/onboarding/admin/verify-accounts', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
+    try {
+        const { usernames } = req.body;
+        
+        if (!Array.isArray(usernames) || usernames.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'usernames array is required'
+            });
+        }
+
+        if (usernames.length > 50) {
+            return res.status(400).json({
+                success: false,
+                error: 'Maximum 50 usernames allowed per request'
+            });
+        }
+
+        const existingAccounts = [];
+        const nonExistentAccounts = [];
+
+        // Check each username on the Hive blockchain
+        for (const username of usernames) {
+            if (!username || typeof username !== 'string') {
+                continue;
+            }
+
+            try {
+                const account = await hiveAccountService.getHiveAccount(username);
+                if (account) {
+                    existingAccounts.push({
+                        username: username,
+                        created: account.created,
+                        id: account.id
+                    });
+                } else {
+                    nonExistentAccounts.push(username);
+                }
+            } catch (error) {
+                // Account doesn't exist or API error
+                nonExistentAccounts.push(username);
+            }
+        }
+
+        // Update payment channels for existing accounts
+        if (existingAccounts.length > 0) {
+            const client = await pool.connect();
+            try {
+                const existingUsernames = existingAccounts.map(acc => acc.username);
+                
+                // Update payment channels to completed status
+                const updateResult = await client.query(`
+                    UPDATE payment_channels 
+                    SET 
+                        status = 'completed',
+                        account_created_at = CURRENT_TIMESTAMP,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE username = ANY($1) 
+                    AND status = 'pending'
+                    RETURNING channel_id, username
+                `, [existingUsernames]);
+
+                console.log(`Updated ${updateResult.rowCount} payment channels to completed status`);
+
+                // Create notifications for users whose accounts were verified
+                for (const account of existingAccounts) {
+                    try {
+                        await createNotification(
+                            account.username,
+                            'account_verified',
+                            'Account Verified',
+                            `Your Hive account @${account.username} has been verified as existing on the blockchain.`,
+                            { accountId: account.id, created: account.created },
+                            'normal',
+                            24
+                        );
+                    } catch (notifError) {
+                        console.warn(`Failed to create notification for ${account.username}:`, notifError);
+                    }
+                }
+
+            } finally {
+                client.release();
+            }
+        }
+
+        res.json({
+            success: true,
+            data: {
+                existingAccounts,
+                nonExistentAccounts,
+                summary: {
+                    total: usernames.length,
+                    existing: existingAccounts.length,
+                    nonExistent: nonExistentAccounts.length,
+                    channelsUpdated: existingAccounts.length
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('Error verifying accounts:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to verify accounts',
+            details: error.message
+        });
+    }
+});
+
 // 4. Admin endpoint - Get payment channels (last 7 days)
 router.get('/api/onboarding/admin/channels', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
     try {

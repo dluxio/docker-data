@@ -247,23 +247,25 @@ const app = createApp({
                 ]);
 
                 // Process ACT status data
-                if (actStatusData.success) {
-                    this.dashboardData.actBalance = actStatusData.status.actBalance || 0;
-                    this.dashboardData.rcAvailable = actStatusData.status.resourceCredits || 0;
-                    this.dashboardData.recentAccounts = actStatusData.recentCreations || [];
+                if (actStatusData.success && actStatusData.data) {
+                    const statusData = actStatusData.data.status || actStatusData.status || {};
+                    this.dashboardData.actBalance = statusData.actBalance || 0;
+                    this.dashboardData.rcAvailable = statusData.resourceCredits || 0;
+                    this.dashboardData.recentAccounts = actStatusData.data.recentCreations || actStatusData.recentCreations || [];
                     
                     // Count pending accounts
-                    this.dashboardData.pendingAccounts = actStatusData.recentCreations
-                        ? actStatusData.recentCreations.filter(acc => acc.status === 'pending').length
-                        : 0;
+                    const recentCreations = actStatusData.data.recentCreations || actStatusData.recentCreations || [];
+                    this.dashboardData.pendingAccounts = recentCreations.filter(acc => acc && acc.status === 'pending').length;
                 }
 
                 // Process channels data
                 if (channelsData.success) {
-                    this.dashboardData.activeChannels = channelsData.summary
-                        ? channelsData.summary.filter(s => s.status === 'pending' || s.status === 'confirmed').length
-                        : 0;
+                    const summary = channelsData.data?.summary || channelsData.summary || [];
+                    this.dashboardData.activeChannels = summary.filter(s => s && (s.status === 'pending' || s.status === 'confirmed')).length;
                 }
+
+                // Verify pending channels
+                await this.verifyPendingChannels();
 
                 // Create charts
                 await this.$nextTick();
@@ -278,6 +280,45 @@ const app = createApp({
 
         async refreshDashboard() {
             await this.loadDashboard();
+        },
+
+        async verifyPendingChannels() {
+            try {
+                // Get pending payment channels
+                const channelsResponse = await this.apiClient.get('/api/onboarding/admin/channels?status=pending&limit=100');
+                
+                if (channelsResponse.success) {
+                    const pendingChannels = channelsResponse.data?.channels || channelsResponse.channels || [];
+                    
+                    if (pendingChannels.length > 0) {
+                        // Extract usernames from pending channels
+                        const usernames = pendingChannels
+                            .map(channel => channel.username)
+                            .filter(username => username) // Remove null/undefined
+                            .slice(0, 50); // Limit to 50 accounts per batch
+                        
+                        if (usernames.length > 0) {
+                            // Check which accounts exist on Hive blockchain
+                            const accountsResponse = await this.apiClient.post('/api/onboarding/admin/verify-accounts', {
+                                usernames: usernames
+                            });
+                            
+                            if (accountsResponse.success) {
+                                const existingAccounts = accountsResponse.data?.existingAccounts || accountsResponse.existingAccounts || [];
+                                console.log(`Found ${existingAccounts.length} existing accounts from ${usernames.length} pending channels`);
+                                
+                                // Optionally show notification to admin
+                                if (existingAccounts.length > 0) {
+                                    this.showSuccessMessage(`Verified ${existingAccounts.length} accounts that already exist on blockchain`);
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (error) {
+                console.warn('Error verifying pending channels:', error);
+                // Don't show error to user as this is background verification
+            }
         },
 
         createCharts() {
@@ -306,6 +347,7 @@ const app = createApp({
             // Count accounts per day
             const accountsPerDay = last7Days.map(day => {
                 return this.dashboardData.recentAccounts.filter(acc => {
+                    if (!acc || !acc.created_at) return false;
                     const accDate = new Date(acc.created_at).toLocaleDateString();
                     return accDate === day;
                 }).length;
@@ -356,8 +398,10 @@ const app = createApp({
             // Count payment methods
             const methodCounts = {};
             this.dashboardData.recentAccounts.forEach(acc => {
-                const method = acc.creation_method || 'Unknown';
-                methodCounts[method] = (methodCounts[method] || 0) + 1;
+                if (acc) {
+                    const method = acc.creation_method || 'Unknown';
+                    methodCounts[method] = (methodCounts[method] || 0) + 1;
+                }
             });
 
             const labels = Object.keys(methodCounts);
@@ -420,6 +464,27 @@ const app = createApp({
                 default:
                     return 'bg-secondary';
             }
+        },
+
+        showSuccessMessage(message) {
+            // Create temporary alert element
+            const alertEl = document.createElement('div');
+            alertEl.className = 'alert alert-success alert-dismissible fade show position-fixed top-0 end-0 m-3';
+            alertEl.style.zIndex = '9999';
+            alertEl.innerHTML = `
+                <i class="bi bi-check-circle"></i>
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            `;
+            
+            document.body.appendChild(alertEl);
+            
+            // Auto-remove after 5 seconds
+            setTimeout(() => {
+                if (alertEl.parentNode) {
+                    alertEl.parentNode.removeChild(alertEl);
+                }
+            }, 5000);
         }
     }
 });

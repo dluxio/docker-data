@@ -230,13 +230,14 @@ window.DLUX_COMPONENTS['act-status-view'] = {
                 const response = await this.apiClient.get('/api/onboarding/admin/act-status');
                 
                 if (response.success) {
+                    const statusData = response.data?.status || response.status || {};
                     this.data = {
-                        actBalance: response.status.actBalance || 0,
-                        resourceCredits: response.status.resourceCredits || 0,
-                        rcPercentage: response.status.rcPercentage || 0,
-                        pendingCount: response.pendingCount || 0,
-                        recentCreations: response.recentCreations || [],
-                        weeklyStats: response.weeklyStats || []
+                        actBalance: statusData.actBalance || 0,
+                        resourceCredits: statusData.resourceCredits || 0,
+                        rcPercentage: statusData.rcPercentage || 0,
+                        pendingCount: response.data?.pendingCount || response.pendingCount || 0,
+                        recentCreations: response.data?.recentCreations || response.recentCreations || [],
+                        weeklyStats: response.data?.weeklyStats || response.weeklyStats || []
                     };
 
                     // Create charts after data loads
@@ -341,10 +342,7 @@ window.DLUX_COMPONENTS['act-status-view'] = {
                 
                 // Count ACTs used on this day
                 const dayUsage = this.data.recentCreations
-                    .filter(acc => {
-                        const accDate = new Date(acc.created_at).toDateString();
-                        return accDate === date.toDateString();
-                    })
+                    .filter(acc => acc && acc.created_at && new Date(acc.created_at).toDateString() === date.toDateString())
                     .reduce((sum, acc) => sum + (acc.act_used || 0), 0);
                 
                 actData.push(dayUsage);
@@ -388,8 +386,10 @@ window.DLUX_COMPONENTS['act-status-view'] = {
             // Count creation methods
             const methodCounts = {};
             this.data.recentCreations.forEach(acc => {
-                const method = acc.creation_method || 'Unknown';
-                methodCounts[method] = (methodCounts[method] || 0) + 1;
+                if (acc) {
+                    const method = acc.creation_method || 'Unknown';
+                    methodCounts[method] = (methodCounts[method] || 0) + 1;
+                }
             });
 
             const labels = Object.keys(methodCounts);

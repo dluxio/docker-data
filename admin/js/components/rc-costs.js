@@ -259,13 +259,14 @@ window.DLUX_COMPONENTS['rc-costs-view'] = {
                 const response = await this.apiClient.get('/api/onboarding/admin/rc-costs');
                 
                 if (response.success) {
+                    const rcCosts = response.data?.rcCosts || response.rcCosts || {};
                     this.data = {
-                        lastUpdate: response.rcCosts.lastUpdate,
-                        currentCosts: response.rcCosts.currentCosts || {},
-                        keyOperations: response.rcCosts.keyOperations || {},
-                        historical: response.rcCosts.historical || {},
-                        trends: response.rcCosts.trends || {},
-                        summary: response.rcCosts.summary || this.data.summary
+                        lastUpdate: rcCosts.lastUpdate,
+                        currentCosts: rcCosts.currentCosts || {},
+                        keyOperations: rcCosts.keyOperations || {},
+                        historical: rcCosts.historical || {},
+                        trends: rcCosts.trends || {},
+                        summary: rcCosts.summary || this.data.summary
                     };
 
                     // Create chart after data loads
@@ -301,22 +302,37 @@ window.DLUX_COMPONENTS['rc-costs-view'] = {
             const colors = ['#e31337', '#28a745', '#ffc107'];
 
             operations.forEach((op, index) => {
-                if (this.data.historical[op] && this.data.historical[op].length > 0) {
-                    const data = this.data.historical[op].map(record => ({
-                        x: new Date(record.timestamp),
-                        y: record.rc_needed / 1e6 // Convert to millions for readability
-                    }));
+                if (this.data.historical[op] && Array.isArray(this.data.historical[op]) && this.data.historical[op].length > 0) {
+                    const data = this.data.historical[op]
+                        .filter(record => record && record.timestamp && record.rc_needed)
+                        .map(record => ({
+                            x: new Date(record.timestamp),
+                            y: record.rc_needed / 1e6 // Convert to millions for readability
+                        }));
 
-                    datasets.push({
-                        label: this.formatOperationName(op),
-                        data: data.reverse(), // Reverse to show chronological order
-                        borderColor: colors[index],
-                        backgroundColor: colors[index] + '20',
-                        tension: 0.1,
-                        fill: false
-                    });
+                    if (data.length > 0) {
+                        datasets.push({
+                            label: this.formatOperationName(op),
+                            data: data.reverse(), // Reverse to show chronological order
+                            borderColor: colors[index],
+                            backgroundColor: colors[index] + '20',
+                            tension: 0.1,
+                            fill: false
+                        });
+                    }
                 }
             });
+
+            if (datasets.length === 0) {
+                // Show empty state
+                ctx.getContext('2d').clearRect(0, 0, ctx.width, ctx.height);
+                const context = ctx.getContext('2d');
+                context.textAlign = 'center';
+                context.fillStyle = '#6c757d';
+                context.font = '16px Arial';
+                context.fillText('No historical data available', ctx.width / 2, ctx.height / 2);
+                return;
+            }
 
             this.chart = new Chart(ctx, {
                 type: 'line',

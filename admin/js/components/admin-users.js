@@ -352,8 +352,8 @@ window.DLUX_COMPONENTS['admin-users-view'] = {
                 
                 if (response.success) {
                     this.data = {
-                        admins: response.admins || [],
-                        requestedBy: response.requestedBy
+                        admins: response.data?.admins || response.admins || [],
+                        requestedBy: response.data?.requestedBy || response.requestedBy
                     };
                 } else {
                     this.showAlert('Failed to load admin users', 'danger', 'bi-exclamation-triangle');
@@ -468,12 +468,18 @@ window.DLUX_COMPONENTS['admin-users-view'] = {
 
         canRemoveAdmin(admin) {
             // Can't remove yourself, and only super admins can remove other admins
+            if (!admin || !admin.username || !this.data.requestedBy) {
+                return false;
+            }
             return admin.username !== this.data.requestedBy && 
                    this.currentUserIsSuperAdmin();
         },
 
         currentUserIsSuperAdmin() {
-            const currentUser = this.data.admins.find(admin => admin.username === this.data.requestedBy);
+            if (!this.data.admins || !this.data.requestedBy) {
+                return false;
+            }
+            const currentUser = this.data.admins.find(admin => admin && admin.username === this.data.requestedBy);
             return currentUser && currentUser.permissions && currentUser.permissions.super;
         },
 

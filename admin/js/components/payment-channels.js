@@ -214,55 +214,59 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
                                 <div class="col-md-6">
                                     <h6>Basic Information</h6>
                                     <table class="table table-sm">
-                                        <tr>
-                                            <td><strong>Channel ID:</strong></td>
-                                            <td><code>{{ selectedChannel.channel_id }}</code></td>
-                                        </tr>
-                                        <tr>
-                                            <td><strong>Username:</strong></td>
-                                            <td>@{{ selectedChannel.username }}</td>
-                                        </tr>
-                                        <tr>
-                                            <td><strong>Status:</strong></td>
-                                            <td>
-                                                <span class="badge" :class="getStatusClass(selectedChannel.status)">
-                                                    {{ selectedChannel.status }}
-                                                </span>
-                                            </td>
-                                        </tr>
-                                        <tr>
-                                            <td><strong>Created:</strong></td>
-                                            <td>{{ formatDate(selectedChannel.created_at) }}</td>
-                                        </tr>
-                                        <tr v-if="selectedChannel.confirmed_at">
-                                            <td><strong>Confirmed:</strong></td>
-                                            <td>{{ formatDate(selectedChannel.confirmed_at) }}</td>
-                                        </tr>
+                                        <tbody>
+                                            <tr>
+                                                <td><strong>Channel ID:</strong></td>
+                                                <td><code>{{ selectedChannel.channel_id || 'N/A' }}</code></td>
+                                            </tr>
+                                            <tr>
+                                                <td><strong>Username:</strong></td>
+                                                <td>@{{ selectedChannel.username || 'N/A' }}</td>
+                                            </tr>
+                                            <tr>
+                                                <td><strong>Status:</strong></td>
+                                                <td>
+                                                    <span class="badge" :class="getStatusClass(selectedChannel.status)">
+                                                        {{ selectedChannel.status || 'Unknown' }}
+                                                    </span>
+                                                </td>
+                                            </tr>
+                                            <tr>
+                                                <td><strong>Created:</strong></td>
+                                                <td>{{ formatDate(selectedChannel.created_at) }}</td>
+                                            </tr>
+                                            <tr v-if="selectedChannel.confirmed_at">
+                                                <td><strong>Confirmed:</strong></td>
+                                                <td>{{ formatDate(selectedChannel.confirmed_at) }}</td>
+                                            </tr>
+                                        </tbody>
                                     </table>
                                 </div>
                                 <div class="col-md-6">
                                     <h6>Payment Information</h6>
                                     <table class="table table-sm">
-                                        <tr>
-                                            <td><strong>Crypto Type:</strong></td>
-                                            <td><span class="badge bg-info">{{ selectedChannel.crypto_type }}</span></td>
-                                        </tr>
-                                        <tr>
-                                            <td><strong>Amount:</strong></td>
-                                            <td>{{ selectedChannel.amount_crypto }} {{ selectedChannel.crypto_type }}</td>
-                                        </tr>
-                                        <tr>
-                                            <td><strong>USD Value:</strong></td>
-                                            <td>\${{ (selectedChannel.amount_usd || 0).toFixed(2) }}</td>
-                                        </tr>
-                                        <tr>
-                                            <td><strong>Address:</strong></td>
-                                            <td><code>{{ selectedChannel.payment_address }}</code></td>
-                                        </tr>
-                                        <tr v-if="selectedChannel.memo">
-                                            <td><strong>Memo:</strong></td>
-                                            <td><code>{{ selectedChannel.memo }}</code></td>
-                                        </tr>
+                                        <tbody>
+                                            <tr>
+                                                <td><strong>Crypto Type:</strong></td>
+                                                <td><span class="badge bg-info">{{ selectedChannel.crypto_type || 'N/A' }}</span></td>
+                                            </tr>
+                                            <tr>
+                                                <td><strong>Amount:</strong></td>
+                                                <td>{{ selectedChannel.amount_crypto || 0 }} {{ selectedChannel.crypto_type || '' }}</td>
+                                            </tr>
+                                            <tr>
+                                                <td><strong>USD Value:</strong></td>
+                                                <td>\${{ (selectedChannel.amount_usd || 0).toFixed(2) }}</td>
+                                            </tr>
+                                            <tr>
+                                                <td><strong>Address:</strong></td>
+                                                <td><code>{{ selectedChannel.payment_address || 'N/A' }}</code></td>
+                                            </tr>
+                                            <tr v-if="selectedChannel.memo">
+                                                <td><strong>Memo:</strong></td>
+                                                <td><code>{{ selectedChannel.memo }}</code></td>
+                                            </tr>
+                                        </tbody>
                                     </table>
                                 </div>
                             </div>
@@ -356,9 +360,9 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
                 
                 if (response.success) {
                     this.data = {
-                        channels: response.channels || [],
-                        summary: response.summary || [],
-                        totalCount: response.totalCount || 0
+                        channels: response.data?.channels || response.channels || [],
+                        summary: response.data?.summary || response.summary || [],
+                        totalCount: response.data?.totalCount || response.totalCount || 0
                     };
 
                     // Create charts after data loads
@@ -416,8 +420,10 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
             // Count by crypto type
             const cryptoCounts = {};
             this.data.channels.forEach(channel => {
-                const crypto = channel.crypto_type;
-                cryptoCounts[crypto] = (cryptoCounts[crypto] || 0) + 1;
+                if (channel && channel.crypto_type) {
+                    const crypto = channel.crypto_type;
+                    cryptoCounts[crypto] = (cryptoCounts[crypto] || 0) + 1;
+                }
             });
 
             const labels = Object.keys(cryptoCounts);
@@ -459,7 +465,7 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
             };
 
             this.data.channels.forEach(channel => {
-                if (channel.processing_time_seconds) {
+                if (channel && channel.processing_time_seconds) {
                     const minutes = channel.processing_time_seconds / 60;
                     if (minutes < 1) buckets['< 1 min']++;
                     else if (minutes <= 5) buckets['1-5 min']++;
