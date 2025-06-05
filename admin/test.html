@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DLUX Admin - Component Test</title>
+    
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+    
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
+    
+    <!-- Vue.js 3 -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+</head>
+<body>
+    <div class="container mt-4">
+        <h1>DLUX Admin Component Test</h1>
+        <div id="test-results"></div>
+    </div>
+
+    <!-- Bootstrap 5 JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <!-- Hive Keychain -->
+    <script src="js/hivekeychain.js"></script>
+    
+    <!-- Custom JavaScript -->
+    <script src="js/app.js"></script>
+    <script src="js/components/act-status.js"></script>
+    <script src="js/components/rc-costs.js"></script>
+    <script src="js/components/blockchain-status.js"></script>
+    <script src="js/components/payment-channels.js"></script>
+    <script src="js/components/admin-users.js"></script>
+    
+    <script>
+        // Test script loading
+        const results = document.getElementById('test-results');
+        
+        function addResult(test, status, message) {
+            const div = document.createElement('div');
+            div.className = `alert alert-${status === 'success' ? 'success' : 'danger'}`;
+            div.innerHTML = `<strong>${test}:</strong> ${message}`;
+            results.appendChild(div);
+        }
+        
+        // Test if all required libraries are loaded
+        addResult('Vue.js', typeof Vue !== 'undefined' ? 'success' : 'error', 
+                 typeof Vue !== 'undefined' ? 'Loaded successfully' : 'Failed to load');
+        
+        addResult('Chart.js', typeof Chart !== 'undefined' ? 'success' : 'error', 
+                 typeof Chart !== 'undefined' ? 'Loaded successfully' : 'Failed to load');
+        
+        addResult('Hive Keychain', typeof window.hive_keychain !== 'undefined' ? 'success' : 'error', 
+                 typeof window.hive_keychain !== 'undefined' ? 'Loaded successfully (stub)' : 'Failed to load');
+        
+        addResult('DLUX Components', typeof window.DLUX_COMPONENTS !== 'undefined' ? 'success' : 'error', 
+                 typeof window.DLUX_COMPONENTS !== 'undefined' ? 'Components object created' : 'Components object missing');
+        
+        // Test component registration
+        if (typeof window.DLUX_COMPONENTS !== 'undefined') {
+            const componentNames = Object.keys(window.DLUX_COMPONENTS);
+            addResult('Component Count', componentNames.length > 0 ? 'success' : 'error', 
+                     `${componentNames.length} components registered: ${componentNames.join(', ')}`);
+        }
+        
+        // Test app mounting function
+        addResult('Mount Function', typeof window.mountDLUXApp === 'function' ? 'success' : 'error', 
+                 typeof window.mountDLUXApp === 'function' ? 'Mount function available' : 'Mount function missing');
+    </script>
+</body>
+</html> 

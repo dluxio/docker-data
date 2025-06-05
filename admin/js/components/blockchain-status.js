@@ -199,8 +199,8 @@ window.DLUX_COMPONENTS['blockchain-status-view'] = {
                                     <h6>{{ stat.cryptoType }} - {{ stat.status }}</h6>
                                     <h4>{{ stat.count }}</h4>
                                     <small class="text-muted">
-                                        Avg: ${{ (stat.avgAmount || 0).toFixed(2) }} | 
-                                        Total: ${{ (stat.totalUsd || 0).toFixed(2) }}
+                                        Avg: $\${'{{ (stat.avgAmount || 0).toFixed(2) }}'} | 
+                                        Total: $\${'{{ (stat.totalUsd || 0).toFixed(2) }}'}
                                     </small>
                                 </div>
                             </div>

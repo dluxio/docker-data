@@ -15,7 +15,7 @@ const router = express.Router();
 // Input validation schemas
 const validationSchemas = {
     username: Joi.string()
-        .pattern(/^[a-z0-9\-\.]{3,16}$/)
+        .pattern(/^(?=.{3,16}$)[a-z][a-z0-9-]{1,}[a-z0-9](\.[a-z][a-z0-9-]{1,}[a-z0-9])*$/)
         .required()
         .messages({
             'string.pattern.base': 'Username must be 3-16 characters, lowercase letters, numbers, hyphens, and dots only',
@@ -57,7 +57,7 @@ const validationSchemas = {
         }),
     
     channelId: Joi.string()
-        .pattern(/^CH_[a-fA-F0-9]{32}$/)
+        .pattern(/^[a-fA-F0-9]{32}$/)
         .required()
         .messages({
             'string.pattern.base': 'Invalid channel ID format'
@@ -2037,11 +2037,11 @@ const createNotification = async (username, type, title, message, data = null, p
 
 // Utility functions
 const generatePaymentId = () => {
-    return 'dlux_' + crypto.randomBytes(16).toString('hex');
+    return crypto.randomBytes(16).toString('hex');
 };
 
 const generateChannelId = () => {
-    return 'CH_' + crypto.randomBytes(16).toString('hex');
+    return crypto.randomBytes(16).toString('hex');
 };
 
 const generateMemo = (username, channelId) => {
