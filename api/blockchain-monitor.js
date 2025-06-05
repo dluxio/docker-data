@@ -535,23 +535,70 @@ class BlockchainMonitoringService {
         }
     }
 
-    // Monitor all active payment channels
+    // Monitor all active payment channels with smart network selection
     async monitorActiveChannels() {
         try {
             const client = await pool.connect();
             try {
-                // Get all pending and confirming channels
+                // Get all pending and confirming channels grouped by crypto type
                 const result = await client.query(`
-                    SELECT channel_id, crypto_type, payment_address, amount_crypto, memo, tx_hash, confirmations, created_at
+                    SELECT crypto_type, COUNT(*) as channel_count,
+                           array_agg(channel_id) as channel_ids
                     FROM payment_channels 
                     WHERE status IN ('pending', 'confirming') 
                     AND expires_at > NOW()
-                    ORDER BY created_at ASC
+                    GROUP BY crypto_type
+                    ORDER BY channel_count DESC
                 `);
 
-                for (const channel of result.rows) {
-                    await this.checkChannelPayment(channel);
+                const activeNetworks = new Set();
+                const networkChannelCounts = {};
+
+                // Process each network that has active channels
+                for (const row of result.rows) {
+                    const cryptoType = row.crypto_type;
+                    const channelCount = parseInt(row.channel_count);
+                    
+                    activeNetworks.add(cryptoType);
+                    networkChannelCounts[cryptoType] = channelCount;
+
+                    Logger.info(`Monitoring ${cryptoType} network`, {
+                        activeChannels: channelCount,
+                        channelIds: row.channel_ids
+                    });
+
+                    // Get specific channels for this network
+                    const channelResult = await client.query(`
+                        SELECT channel_id, crypto_type, payment_address, amount_crypto, memo, tx_hash, confirmations, created_at
+                        FROM payment_channels 
+                        WHERE crypto_type = $1
+                        AND status IN ('pending', 'confirming') 
+                        AND expires_at > NOW()
+                        ORDER BY created_at ASC
+                    `, [cryptoType]);
+
+                    // Check each channel for this network
+                    for (const channel of channelResult.rows) {
+                        await this.checkChannelPayment(channel);
+                    }
                 }
+
+                // Log smart monitoring status
+                const allNetworks = Array.from(this.networks.keys());
+                const monitoredNetworks = Array.from(activeNetworks);
+                const skippedNetworks = allNetworks.filter(net => !activeNetworks.has(net));
+
+                if (skippedNetworks.length > 0) {
+                    Logger.debug('Smart monitoring: skipping networks with no active channels', {
+                        skippedNetworks: skippedNetworks,
+                        monitoredNetworks: monitoredNetworks,
+                        channelCounts: networkChannelCounts
+                    });
+                }
+
+                // Update monitoring intervals based on active networks
+                await this.updateSmartMonitoring(activeNetworks);
+
             } finally {
                 client.release();
             }
@@ -561,6 +608,41 @@ class BlockchainMonitoringService {
                 `Failed to monitor active channels: ${error.message}`,
                 'MONITORING_FAILED'
             );
+        }
+    }
+
+    // Update monitoring to only watch networks with active channels
+    async updateSmartMonitoring(activeNetworks) {
+        const currentlyMonitored = new Set(this.monitoringIntervals.keys());
+        
+        // Stop monitoring networks that no longer have active channels
+        for (const network of currentlyMonitored) {
+            if (network !== 'staggered' && !activeNetworks.has(network)) {
+                if (this.monitoringIntervals.has(network)) {
+                    clearInterval(this.monitoringIntervals.get(network));
+                    this.monitoringIntervals.delete(network);
+                    Logger.info(`Stopped monitoring ${network} - no active channels`, {
+                        network: network
+                    });
+                }
+            }
+        }
+
+        // Start monitoring networks that now have active channels
+        for (const network of activeNetworks) {
+            if (!currentlyMonitored.has(network) && this.networks.has(network)) {
+                try {
+                    await this.startNetworkMonitoring(network, this.networks.get(network));
+                    Logger.info(`Started monitoring ${network} - active channels detected`, {
+                        network: network
+                    });
+                } catch (error) {
+                    Logger.error(`Failed to start monitoring for ${network}`, {
+                        network: network,
+                        error: error.message
+                    });
+                }
+            }
         }
     }
 

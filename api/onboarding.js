@@ -2889,24 +2889,52 @@ router.get('/api/onboarding/admin/act-status', rateLimits.admin, adminAuthMiddle
           ORDER BY creation_method, status
         `);
 
-            const actData = actResult.rows[0] || {
-                creator_account: config.username,
-                act_balance: hiveAccountService.actBalance,
-                resource_credits: hiveAccountService.resourceCredits
-            };
+                            // Get backend account RC data with percentage
+                let rcPercentage = 0;
+                let maxResourceCredits = 0;
+                try {
+                    const rcResponse = await fetch(config.clientURL, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            jsonrpc: '2.0',
+                            method: 'rc_api.find_rc_accounts',
+                            params: { accounts: [config.username] },
+                            id: 1
+                        })
+                    });
 
-            res.json({
-                success: true,
-                actStatus: {
-                    creatorAccount: config.username,
-                    currentACTBalance: hiveAccountService.actBalance,
-                    currentResourceCredits: hiveAccountService.resourceCredits,
-                    lastACTCheck: actData.updated_at,
-                    lastRCCheck: actData.last_rc_check,
-                    lastClaimTime: actData.last_claim_time,
-                    canClaimACT: hiveAccountService.resourceCredits >= 20000000,
-                    recommendClaimACT: hiveAccountService.actBalance < 3 && hiveAccountService.resourceCredits >= 20000000
-                },
+                    const rcResult = await rcResponse.json();
+                    if (rcResult.result && rcResult.result.rc_accounts && rcResult.result.rc_accounts.length > 0) {
+                        const rcAccount = rcResult.result.rc_accounts[0];
+                        const currentMana = parseInt(rcAccount.rc_manabar.current_mana);
+                        maxResourceCredits = parseInt(rcAccount.max_rc);
+                        rcPercentage = maxResourceCredits > 0 ? (currentMana / maxResourceCredits) * 100 : 0;
+                    }
+                } catch (rcError) {
+                    console.error('Error fetching backend RC percentage:', rcError);
+                }
+
+                const actData = actResult.rows[0] || {
+                    creator_account: config.username,
+                    act_balance: hiveAccountService.actBalance,
+                    resource_credits: hiveAccountService.resourceCredits
+                };
+
+                res.json({
+                    success: true,
+                    actStatus: {
+                        creatorAccount: config.username,
+                        currentACTBalance: hiveAccountService.actBalance,
+                        currentResourceCredits: hiveAccountService.resourceCredits,
+                        maxResourceCredits: maxResourceCredits,
+                        rcPercentage: rcPercentage,
+                        lastACTCheck: actData.updated_at,
+                        lastRCCheck: actData.last_rc_check,
+                        lastClaimTime: actData.last_claim_time,
+                        canClaimACT: hiveAccountService.resourceCredits >= 20000000,
+                        recommendClaimACT: hiveAccountService.actBalance < 3 && hiveAccountService.resourceCredits >= 20000000
+                    },
                 recentCreations: creationsResult.rows,
                 creationStats: statsResult.rows.reduce((acc, row) => {
                     const key = `${row.creation_method}_${row.status}`;

@@ -304,15 +304,8 @@ const app = createApp({
                     this.dashboardData.actBalance = statusData.currentACTBalance || 0;
                     this.dashboardData.rcAvailable = statusData.currentResourceCredits || 0;
                     
-                    // Calculate RC percentage for backend account
-                    if (statusData.currentResourceCredits) {
-                        // Estimate max RC based on current RC and typical patterns
-                        // This is an approximation - for exact calculation we'd need the account's max_rc
-                        const estimatedMaxRC = statusData.currentResourceCredits * 10; // Conservative estimate
-                        this.dashboardData.rcPercentage = Math.min(100, (statusData.currentResourceCredits / estimatedMaxRC) * 100);
-                    } else {
-                        this.dashboardData.rcPercentage = 0;
-                    }
+                    // Use RC percentage from the backend API
+                    this.dashboardData.rcPercentage = statusData.rcPercentage || 0;
                     
                     this.dashboardData.recentAccounts = actStatusData.data?.recentCreations || actStatusData.recentCreations || [];
                     
