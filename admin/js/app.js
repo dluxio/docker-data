@@ -91,7 +91,8 @@ const app = createApp({
                 rcAvailable: 0,
                 pendingAccounts: 0,
                 activeChannels: 0,
-                recentAccounts: []
+                recentAccounts: [],
+                blockchainMonitoring: null
             },
 
             // Charts
@@ -219,7 +220,8 @@ const app = createApp({
                 rcAvailable: 0,
                 pendingAccounts: 0,
                 activeChannels: 0,
-                recentAccounts: []
+                recentAccounts: [],
+                blockchainMonitoring: null
             };
             this.currentView = 'dashboard';
         },
@@ -241,9 +243,10 @@ const app = createApp({
             this.loading = true;
             try {
                 // Load multiple data sources in parallel
-                const [actStatusData, channelsData] = await Promise.all([
+                const [actStatusData, channelsData, blockchainStatusData] = await Promise.all([
                     this.apiClient.get('/api/onboarding/admin/act-status'),
-                    this.apiClient.get('/api/onboarding/admin/channels?limit=10')
+                    this.apiClient.get('/api/onboarding/admin/channels?limit=10'),
+                    this.apiClient.get('/api/onboarding/status').catch(() => ({ success: false })) // Use public endpoint as fallback
                 ]);
 
                 // Process ACT status data
@@ -272,6 +275,11 @@ const app = createApp({
                     } else {
                         this.dashboardData.activeChannels = 0;
                     }
+                }
+
+                // Process blockchain monitoring data
+                if (blockchainStatusData.success) {
+                    this.dashboardData.blockchainMonitoring = blockchainStatusData.services?.blockchainMonitor || null;
                 }
 
                 // Verify pending channels
@@ -456,6 +464,16 @@ const app = createApp({
         formatDate(dateString) {
             if (!dateString) return 'N/A';
             return new Date(dateString).toLocaleString();
+        },
+
+        formatUptime(uptime) {
+            if (!uptime) return '0m';
+            const hours = Math.floor(uptime / 3600000);
+            const minutes = Math.floor((uptime % 3600000) / 60000);
+            if (hours > 0) {
+                return `${hours}h ${minutes}m`;
+            }
+            return `${minutes}m`;
         },
 
         getStatusClass(status) {

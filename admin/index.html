@@ -291,6 +291,52 @@
                             </div>
                         </div>
 
+                        <!-- Blockchain Monitoring Status -->
+                        <div class="row mb-4">
+                            <div class="col-md-12">
+                                <div class="card">
+                                    <div class="card-header">
+                                        <h5>Blockchain Monitoring Status</h5>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="row">
+                                            <div class="col-md-3">
+                                                <div class="text-center">
+                                                    <h6>Active Monitoring</h6>
+                                                    <h4 :class="dashboardData.blockchainMonitoring?.isRunning ? 'text-success' : 'text-danger'">
+                                                        {{ dashboardData.blockchainMonitoring?.isRunning ? 'ON' : 'OFF' }}
+                                                    </h4>
+                                                </div>
+                                            </div>
+                                            <div class="col-md-3">
+                                                <div class="text-center">
+                                                    <h6>Networks</h6>
+                                                    <h4>{{ dashboardData.blockchainMonitoring?.networks?.length || 0 }}</h4>
+                                                </div>
+                                            </div>
+                                            <div class="col-md-3">
+                                                <div class="text-center">
+                                                    <h6>Uptime</h6>
+                                                    <h4>{{ formatUptime(dashboardData.blockchainMonitoring?.uptime) }}</h4>
+                                                </div>
+                                            </div>
+                                            <div class="col-md-3">
+                                                <div class="text-center">
+                                                    <h6>Configuration</h6>
+                                                    <h4 :class="dashboardData.blockchainMonitoring?.configuration?.isValid ? 'text-success' : 'text-warning'">
+                                                        {{ dashboardData.blockchainMonitoring?.configuration?.isValid ? 'Valid' : 'Issues' }}
+                                                    </h4>
+                                                    <small v-if="!dashboardData.blockchainMonitoring?.configuration?.isValid" class="text-muted">
+                                                        {{ dashboardData.blockchainMonitoring?.configuration?.message }}
+                                                    </small>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
                         <!-- Charts Row -->
                         <div class="row mb-4">
                             <div class="col-md-6">
