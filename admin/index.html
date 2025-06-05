@@ -373,20 +373,20 @@
                                             @loading="setLoading">
                     </blockchain-status-view>
 
-                    <PaymentChannelsView v-if="currentView === 'channels'" 
-                                         :api-client="apiClient" 
-                                         @loading="setLoading">
-                    </PaymentChannelsView>
+                    <payment-channels-view v-if="currentView === 'channels'" 
+                                           :api-client="apiClient" 
+                                           @loading="setLoading">
+                    </payment-channels-view>
 
                     <admin-users-view v-if="currentView === 'users'" 
                                       :api-client="apiClient" 
                                       @loading="setLoading">
                     </admin-users-view>
 
-                    <PostsView v-if="currentView === 'posts'" 
-                               :api-client="apiClient" 
-                               @loading="setLoading">
-                    </PostsView>
+                    <posts-view v-if="currentView === 'posts'" 
+                                :api-client="apiClient" 
+                                @loading="setLoading">
+                    </posts-view>
                 </main>
             </div>
         </div>

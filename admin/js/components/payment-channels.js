@@ -1,5 +1,5 @@
 // Payment Channels Component
-window.DLUX_COMPONENTS['PaymentChannelsView'] = {
+window.DLUX_COMPONENTS['payment-channels-view'] = {
     props: ['apiClient'],
     emits: ['loading'],
     

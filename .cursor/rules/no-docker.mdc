@@ -3,4 +3,5 @@ description:
 globs: 
 alwaysApply: true
 ---
-When troubleshooting and you want to see backend operations, do not attempt to CLI docker or docker compose or docker logs, docker exec etc, or anything docker related. Instead, add the api end point, and when prompting me to perform a curl to the endpoint, mention you've created an API to test your assumptions. Once you have tested the assumptions, clean the API from the code.
+When troubleshooting and you want to see backend operations, do not attempt to CLI docker or docker compose or docker logs, docker exec etc, or anything docker related. Instead, add the api end point, and when prompting me to perform a curl to the endpoint, mention you've created an API to test your assumptions. Once you have tested the assumptions, clean the API from the code. Do not try and start the server yourself... simply attempt to find the endpoint at https://data.dlux.io/api/etc
+

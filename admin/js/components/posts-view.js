@@ -1,5 +1,5 @@
 // Posts Management Component
-window.DLUX_COMPONENTS['PostsView'] = {
+window.DLUX_COMPONENTS['posts-view'] = {
     props: ['apiClient'],
     emits: ['loading'],
     
