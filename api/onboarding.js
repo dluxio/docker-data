@@ -5491,7 +5491,7 @@ router.patch('/api/posts/:author/:permlink/flags', rateLimits.admin, adminAuthMi
 router.delete('/api/posts/:author/:permlink', rateLimits.admin, adminAuthMiddleware, deletePost);
 
 // Community Flag Reporting Routes
-router.post('/api/flags/report', rateLimits.general, authenticateHiveUser, submitFlagReport);
+router.post('/api/flags/report', rateLimits.general, authMiddleware, submitFlagReport);
 router.get('/api/flags/pending', rateLimits.admin, adminAuthMiddleware, getPendingFlags);
 router.post('/api/flags/review/:reportId', rateLimits.admin, adminAuthMiddleware, reviewFlagReport);
 router.put('/api/flags/users/:username/permissions', rateLimits.admin, adminAuthMiddleware, updateUserFlagPermissions);
