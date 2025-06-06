@@ -23,6 +23,7 @@ const {
     waitForResponse,
     testDeviceConnection
 } = require('./api/device-connection');
+const { createAuthMiddleware } = require('./api/onboarding');
 
 // Trust proxy setting for rate limiting and real client IP detection
 // This is required when running behind Docker/nginx/load balancer
@@ -77,11 +78,12 @@ api.get("/img/render/:set/:uid", API.renderNFT);
 api.get("/hc/tickers", API.tickers);
 
 // Device connection endpoints
-api.post("/api/device/pair", createPairing);
+const deviceAuthMiddleware = createAuthMiddleware(false, false);
+api.post("/api/device/pair", deviceAuthMiddleware, createPairing);
 api.post("/api/device/connect", connectToDevice);
 api.post("/api/device/request", createSigningRequest);
-api.get("/api/device/requests", getPendingRequests);
-api.post("/api/device/respond", respondToRequest);
+api.get("/api/device/requests", deviceAuthMiddleware, getPendingRequests);
+api.post("/api/device/respond", deviceAuthMiddleware, respondToRequest);
 api.post("/api/device/disconnect", disconnectDevice);
 api.get("/api/device/status", getDeviceStatus);
 api.post("/api/device/wait-response", waitForResponse);

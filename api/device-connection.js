@@ -542,7 +542,7 @@ const createSigningRequest = async (req, res) => {
 };
 
 // GET /api/device/requests - Poll for pending requests (signing device)
-const getPendingRequests = authMiddleware(async (req, res) => {
+const getPendingRequests = async (req, res) => {
     try {
         const { sessionId } = req.query;
 
@@ -575,10 +575,10 @@ const getPendingRequests = authMiddleware(async (req, res) => {
             error: error.message
         });
     }
-});
+};
 
 // POST /api/device/respond - Send response to a transaction request
-const respondToRequest = authMiddleware(async (req, res) => {
+const respondToRequest = async (req, res) => {
     try {
         const { sessionId, requestId, response, error } = req.body;
 
@@ -610,7 +610,7 @@ const respondToRequest = authMiddleware(async (req, res) => {
             error: error.message
         });
     }
-});
+};
 
 // POST /api/device/disconnect - Disconnect device session
 const disconnectDevice = async (req, res) => {
