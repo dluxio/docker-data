@@ -3277,7 +3277,7 @@ router.post('/api/onboarding/admin/service-status', rateLimits.admin, adminAuthM
 });
 
 // 3f. Simple status check endpoint (no auth required for debugging)
-router.get('/api/onboarding/status', async (req, res) => {
+router.get('/api/onboarding/status', rateLimits.general, async (req, res) => {
     try {
         let blockchainStatus = null;
         if (typeof blockchainMonitor !== 'undefined' && blockchainMonitor.getStatus) {
@@ -3751,7 +3751,7 @@ router.get('/api/onboarding/payment/:paymentId/status', async (req, res) => {
 });
 
 // 4. Validate account request before sending (pre-flight check)
-router.post('/api/onboarding/request/validate', async (req, res) => {
+router.post('/api/onboarding/request/validate', rateLimits.general, async (req, res) => {
     try {
         const { requesterUsername, requestedFrom, publicKeys } = req.body;
 
@@ -4907,7 +4907,7 @@ const initializeWebSocketMonitor = (server) => {
 };
 
 // 9. Check if HIVE account exists (public endpoint)
-router.get('/api/onboarding/check-account/:username', async (req, res) => {
+router.get('/api/onboarding/check-account/:username', rateLimits.general, async (req, res) => {
     try {
         const { username } = req.params;
 

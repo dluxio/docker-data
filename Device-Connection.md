@@ -1,6 +1,6 @@
 # DLUX Device Connection System
 
-The DLUX Device Connection System enables secure wallet functionality across multiple devices, perfect for VR headsets, mobile phones, tablets, and desktop computers. This system allows one device to request transactions while another device with wallet access provides secure signing.
+The DLUX Device Connection System enables secure wallet functionality across multiple devices, perfect for VR headsets, mobile phones, tablets, and public computers. This system allows one device to request transactions while another device with wallet access provides secure signing.
 
 ## Overview
 
@@ -76,7 +76,7 @@ Send a transaction to the connected signing device for approval and signing.
 ```javascript
 // Example vote transaction
 const transaction = [
-    'username', // Will be ignored, signer's username used
+    'username',
     [
         [
             'vote',
@@ -247,6 +247,59 @@ dluxWallet.on('device-request-received', (data) => {
 
 The following endpoints are used by the client (implemented at data.dlux.io):
 
+### WebSocket Connection (Recommended)
+
+For real-time communication, connect to the WebSocket endpoint instead of polling:
+
+**WebSocket URL**: `wss://data.dlux.io/ws/payment-monitor`
+
+**Subscribe to device events**:
+```javascript
+// Connect to WebSocket
+const ws = new WebSocket('wss://data.dlux.io/ws/payment-monitor');
+
+// Subscribe to device session events
+ws.send(JSON.stringify({
+    type: 'device_subscribe',
+    sessionId: 'your-session-id',
+    userType: 'signer' // or 'requester'
+}));
+
+// Listen for device events
+ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    
+    switch (data.type) {
+        case 'device_pairing_created':
+            console.log('Pairing code:', data.pairCode);
+            break;
+        case 'device_connected':
+            console.log('Device connected:', data.signerInfo);
+            break;
+        case 'device_signing_request':
+            console.log('New signing request:', data.requestData);
+            break;
+        case 'device_signing_response':
+            console.log('Signing response:', data.response);
+            break;
+        case 'device_disconnected':
+            console.log('Device disconnected');
+            break;
+    }
+};
+```
+
+**WebSocket Events**:
+- `device_pairing_created` - Pairing code created
+- `device_connected` - Device successfully connected
+- `device_disconnected` - Device disconnected
+- `device_signing_request` - New signing request received (signer only)
+- `device_signing_response` - Signing request completed (requester only)
+- `device_session_expired` - Session expired
+- `device_request_timeout` - Request timed out
+
+### REST API Endpoints
+
 ### `POST /api/device/pair`
 
 Create a device pairing code.
@@ -319,7 +372,7 @@ Send a transaction request to the paired signing device.
 
 ### `GET /api/device/requests?sessionId=uuid`
 
-Poll for pending requests (signing device).
+Poll for pending requests (signing device). **Note: WebSocket subscription is recommended instead of polling.**
 
 **Response**:
 ```json
@@ -359,6 +412,20 @@ Disconnect device session.
 ```json
 {
     "sessionId": "session_uuid"
+}
+```
+
+### `GET /api/device/websocket-info`
+
+Get WebSocket connection information and supported events.
+
+**Response**:
+```json
+{
+    "success": true,
+    "websocketUrl": "/ws/payment-monitor",
+    "supportedEvents": [...],
+    "instructions": {...}
 }
 ```
 

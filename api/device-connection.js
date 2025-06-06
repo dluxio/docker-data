@@ -8,6 +8,12 @@ const pool = new Pool({
 });
 
 // Note: Authentication is handled in route definitions in index.js
+let deviceConnectionWS;
+
+// Initialize WebSocket integration (will be set by the websocket module)
+function setWebSocketInstance(wsInstance) {
+    deviceConnectionWS = wsInstance;
+}
 
 class DeviceConnectionService {
     constructor() {
@@ -75,11 +81,18 @@ class DeviceConnectionService {
             // Continue anyway, in-memory storage is primary
         }
 
-        return {
+        const result = {
             pairCode,
             sessionId,
             expiresIn: 300 // 5 minutes
         };
+
+        // Notify WebSocket clients
+        if (deviceConnectionWS) {
+            deviceConnectionWS.notifyPairingCreated(sessionId, pairCode, 300);
+        }
+
+        return result;
     }
 
     // Connect to a device using pairing code
@@ -121,13 +134,20 @@ class DeviceConnectionService {
             console.error('Error updating session in database:', error);
         }
 
-        return {
+        const result = {
             sessionId: sessionData.sessionId,
             signerInfo: {
                 username: sessionData.signerUsername,
                 deviceInfo: sessionData.signerDeviceInfo
             }
         };
+
+        // Notify WebSocket clients
+        if (deviceConnectionWS) {
+            deviceConnectionWS.notifyDeviceConnected(sessionData.sessionId, result.signerInfo);
+        }
+
+        return result;
     }
 
     // Send a signing request to the paired device
@@ -175,6 +195,17 @@ class DeviceConnectionService {
             ]);
         } catch (error) {
             console.error('Error storing request in database:', error);
+        }
+
+        // Notify WebSocket clients (signing device)
+        if (deviceConnectionWS) {
+            deviceConnectionWS.notifySigningRequestReceived(
+                sessionId, 
+                requestId, 
+                requestType, 
+                requestData, 
+                sessionData.requesterInfo
+            );
         }
 
         return requestId;
@@ -243,6 +274,11 @@ class DeviceConnectionService {
 
         // Update database
         await this.updateRequestInDB(requestId, request);
+
+        // Notify WebSocket clients (requesting device)
+        if (deviceConnectionWS) {
+            deviceConnectionWS.notifySigningResponse(sessionId, requestId, response, error);
+        }
 
         return true;
     }
@@ -316,6 +352,11 @@ class DeviceConnectionService {
             } catch (error) {
                 console.error('Error updating disconnection in database:', error);
             }
+
+            // Notify WebSocket clients
+            if (deviceConnectionWS) {
+                deviceConnectionWS.notifyDeviceDisconnected(sessionId);
+            }
         }
     }
 
@@ -346,6 +387,10 @@ class DeviceConnectionService {
         // Clean up expired sessions
         for (const [sessionId, sessionData] of this.activeSessions.entries()) {
             if (now > sessionData.expiresAt) {
+                // Notify WebSocket clients about session expiration
+                if (deviceConnectionWS) {
+                    deviceConnectionWS.notifySessionExpired(sessionId);
+                }
                 this.disconnectSession(sessionId);
             }
         }
@@ -363,6 +408,12 @@ class DeviceConnectionService {
                 request.status = 'expired';
                 request.error = 'Request timeout';
                 this.updateRequestInDB(requestId, request);
+                
+                // Notify WebSocket clients about timeout
+                if (deviceConnectionWS) {
+                    deviceConnectionWS.notifyRequestTimeout(request.sessionId, requestId);
+                }
+                
                 this.pendingRequests.delete(requestId);
             }
         }
@@ -697,7 +748,8 @@ const testDeviceConnection = async (req, res) => {
             timestamp: new Date().toISOString(),
             activeSessions: deviceService.activeSessions.size,
             pendingRequests: deviceService.pendingRequests.size,
-            pairCodes: deviceService.pairCodes.size
+            pairCodes: deviceService.pairCodes.size,
+            websocketSupport: true
         });
     } catch (error) {
         console.error('Error in device connection test:', error);
@@ -708,9 +760,42 @@ const testDeviceConnection = async (req, res) => {
     }
 };
 
+// GET /api/device/websocket-info - Get WebSocket connection info
+const getWebSocketInfo = async (req, res) => {
+    try {
+        res.json({
+            success: true,
+            websocketUrl: '/ws/payment-monitor', // Reusing existing WebSocket endpoint
+            supportedEvents: [
+                'device_subscribe',
+                'device_unsubscribe', 
+                'device_ping',
+                'device_pairing_created',
+                'device_connected',
+                'device_disconnected',
+                'device_signing_request',
+                'device_signing_response',
+                'device_session_expired',
+                'device_request_timeout'
+            ],
+            instructions: {
+                connect: 'Connect to WebSocket at /ws/payment-monitor',
+                subscribe: 'Send {"type": "device_subscribe", "sessionId": "your-session-id", "userType": "signer|requester"}',
+                notes: 'WebSocket replaces polling /api/device/requests for real-time notifications'
+            }
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+};
+
 module.exports = {
     deviceService,
     setupDeviceDatabase,
+    setWebSocketInstance,
     // API endpoints
     createPairing,
     connectToDevice,
@@ -720,5 +805,6 @@ module.exports = {
     disconnectDevice,
     getDeviceStatus,
     waitForResponse,
-    testDeviceConnection
+    testDeviceConnection,
+    getWebSocketInfo
 }; 

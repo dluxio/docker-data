@@ -1,5 +1,6 @@
 const WebSocket = require('ws');
 const { pool } = require('../index');
+const { deviceConnectionWS } = require('./device-connection-ws');
 
 // Helper function to explain WebSocket close codes
 function getCloseCodeMeaning(code) {
@@ -77,6 +78,11 @@ class PaymentChannelMonitor {
             ws.connectionStartTime = Date.now();
             ws.messageCount = 0;
             ws.lastPingTime = Date.now();
+            
+            // Initialize device connection WebSocket if not already done
+            if (!deviceConnectionWS.wss) {
+                deviceConnectionWS.initialize(this.wss);
+            }
 
             ws.on('message', async (message) => {
                 try {
@@ -102,11 +108,13 @@ class PaymentChannelMonitor {
 
             ws.on('close', (code, reason) => {
                 this.removeClient(ws);
+                deviceConnectionWS.removeClient(ws);
             });
 
             ws.on('error', (error) => {
                 console.error(`WebSocket error:`, error);
                 this.removeClient(ws);
+                deviceConnectionWS.removeClient(ws);
             });
 
             // Send initial connection confirmation
@@ -134,6 +142,13 @@ class PaymentChannelMonitor {
 
     async handleMessage(ws, data) {
         try {
+            // Try device connection messages first
+            const deviceHandled = await deviceConnectionWS.handleMessage(ws, data);
+            if (deviceHandled) {
+                return; // Message was handled by device connection system
+            }
+
+            // Handle payment monitoring messages
             switch (data.type) {
                 case 'subscribe':
                     await this.subscribeToChannel(ws, data.channelId);
