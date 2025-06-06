@@ -6120,7 +6120,9 @@ module.exports = {
     setupDatabase,
     PaymentChannelMonitor,
     hiveAccountService,
-    rcMonitoringService
+    rcMonitoringService,
+    HiveAuth,
+    createAuthMiddleware
 };
 
 // Auto-initialize if this file is run directly

@@ -11,6 +11,18 @@ exports.pool = pool;
 
 const API = require("./api/index");
 const { router: onboardingRouter, setupDatabase, initializeWebSocketMonitor, initializeOnboardingService } = require('./api/onboarding');
+const { 
+    setupDeviceDatabase, 
+    createPairing, 
+    connectToDevice, 
+    createSigningRequest, 
+    getPendingRequests, 
+    respondToRequest, 
+    disconnectDevice, 
+    getDeviceStatus, 
+    waitForResponse,
+    testDeviceConnection
+} = require('./api/device-connection');
 
 // Trust proxy setting for rate limiting and real client IP detection
 // This is required when running behind Docker/nginx/load balancer
@@ -22,7 +34,8 @@ async function initializeDatabase() {
     // Set up onboarding tables
     await setupDatabase();
     
-    // You can add other table setup here
+    // Set up device connection tables
+    await setupDeviceDatabase();
 
   } catch (error) {
     console.error('Failed to initialize database:', error);
@@ -62,6 +75,17 @@ api.get("/img/details/:set/:uid", API.detailsNFT);
 api.get("/render/:script/:uid", API.renderNFT);
 api.get("/img/render/:set/:uid", API.renderNFT);
 api.get("/hc/tickers", API.tickers);
+
+// Device connection endpoints
+api.post("/api/device/pair", createPairing);
+api.post("/api/device/connect", connectToDevice);
+api.post("/api/device/request", createSigningRequest);
+api.get("/api/device/requests", getPendingRequests);
+api.post("/api/device/respond", respondToRequest);
+api.post("/api/device/disconnect", disconnectDevice);
+api.get("/api/device/status", getDeviceStatus);
+api.post("/api/device/wait-response", waitForResponse);
+api.get("/api/device/test", testDeviceConnection);
 
 http.listen(config.port, async function () {
 
