@@ -150,6 +150,24 @@ const rateLimits = {
             // Skip rate limiting if user has valid auth headers (authenticated admin)
             return req.headers.authorization || req.headers['x-auth-signature'];
         }
+    }),
+    
+    // Rate limiter that skips rate limiting for any authenticated HIVE user
+    authenticatedUser: rateLimit({
+        windowMs: 15 * 60 * 1000, // 15 minutes
+        max: 1000, // Higher limit for authenticated users
+        message: {
+            success: false,
+            error: 'Rate limit exceeded. Please wait before making more requests.'
+        },
+        standardHeaders: true,
+        legacyHeaders: false,
+        keyGenerator: customKeyGenerator,
+        skip: (req) => {
+            // Skip rate limiting if user has valid HIVE authentication headers
+            return req.headers['x-account'] && req.headers['x-challenge'] && 
+                   req.headers['x-pubkey'] && req.headers['x-signature'];
+        }
     })
 };
 
@@ -193,8 +211,8 @@ router.use(cors({
     credentials: true
 }));
 
-// Apply general rate limiting to all routes
-router.use(rateLimits.general);
+// Note: Rate limiting is now applied per-route instead of globally
+// This allows for more granular control and bypassing for authenticated users
 
 // Middleware for JSON parsing with size limits
 router.use(express.json({ limit: '10mb' }));
@@ -6122,7 +6140,8 @@ module.exports = {
     hiveAccountService,
     rcMonitoringService,
     HiveAuth,
-    createAuthMiddleware
+    createAuthMiddleware,
+    rateLimits
 };
 
 // Auto-initialize if this file is run directly
