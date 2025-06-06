@@ -61,6 +61,18 @@ api.get('/admin/', (req, res) => {
   res.redirect('/admin/index.html');
 });
 
+// Device connection endpoints (must be before generic API route)
+const deviceAuthMiddleware = createAuthMiddleware(false, false);
+api.post("/api/device/pair", deviceAuthMiddleware, createPairing);
+api.post("/api/device/connect", connectToDevice);
+api.post("/api/device/request", createSigningRequest);
+api.get("/api/device/requests", deviceAuthMiddleware, getPendingRequests);
+api.post("/api/device/respond", deviceAuthMiddleware, respondToRequest);
+api.post("/api/device/disconnect", disconnectDevice);
+api.get("/api/device/status", getDeviceStatus);
+api.post("/api/device/wait-response", waitForResponse);
+api.get("/api/device/test", testDeviceConnection);
+
 api.get("/api/:api_type/:api_call", API.hive_api);
 api.get("/dapps/@:author/:permlink", API.getPostRoute);
 api.get("/dapps/@:author", API.getAuthorPosts);
@@ -76,18 +88,6 @@ api.get("/img/details/:set/:uid", API.detailsNFT);
 api.get("/render/:script/:uid", API.renderNFT);
 api.get("/img/render/:set/:uid", API.renderNFT);
 api.get("/hc/tickers", API.tickers);
-
-// Device connection endpoints
-const deviceAuthMiddleware = createAuthMiddleware(false, false);
-api.post("/api/device/pair", deviceAuthMiddleware, createPairing);
-api.post("/api/device/connect", connectToDevice);
-api.post("/api/device/request", createSigningRequest);
-api.get("/api/device/requests", deviceAuthMiddleware, getPendingRequests);
-api.post("/api/device/respond", deviceAuthMiddleware, respondToRequest);
-api.post("/api/device/disconnect", disconnectDevice);
-api.get("/api/device/status", getDeviceStatus);
-api.post("/api/device/wait-response", waitForResponse);
-api.get("/api/device/test", testDeviceConnection);
 
 http.listen(config.port, async function () {
 
