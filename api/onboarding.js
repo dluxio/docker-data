@@ -5477,13 +5477,25 @@ router.post('/api/onboarding/request/:requestId/create-account', authMiddleware,
 });
 
 // Posts Management Routes
-const { getPosts, getPostsStats, createPost, updatePost, deletePost } = require('./index');
+const { 
+  getPosts, getPostsStats, createPost, updatePost, deletePost, updatePostFlags, testFlags,
+  submitFlagReport, getPendingFlags, reviewFlagReport, updateUserFlagPermissions, getUserFlagStats
+} = require('./index');
 
 router.get('/api/posts', rateLimits.admin, adminAuthMiddleware, getPosts);
 router.get('/api/posts/stats', rateLimits.admin, adminAuthMiddleware, getPostsStats);
+router.get('/api/posts/test-flags', testFlags); // Test endpoint (no auth for testing)
 router.post('/api/posts', rateLimits.admin, adminAuthMiddleware, createPost);
 router.put('/api/posts/:author/:permlink', rateLimits.admin, adminAuthMiddleware, updatePost);
+router.patch('/api/posts/:author/:permlink/flags', rateLimits.admin, adminAuthMiddleware, updatePostFlags);
 router.delete('/api/posts/:author/:permlink', rateLimits.admin, adminAuthMiddleware, deletePost);
+
+// Community Flag Reporting Routes
+router.post('/api/flags/report', rateLimits.general, authenticateHiveUser, submitFlagReport);
+router.get('/api/flags/pending', rateLimits.admin, adminAuthMiddleware, getPendingFlags);
+router.post('/api/flags/review/:reportId', rateLimits.admin, adminAuthMiddleware, reviewFlagReport);
+router.put('/api/flags/users/:username/permissions', rateLimits.admin, adminAuthMiddleware, updateUserFlagPermissions);
+router.get('/api/flags/users/:username/stats', rateLimits.general, getUserFlagStats);
 
 // Manual Account Creation Route
 router.post('/api/onboarding/admin/manual-create-account', rateLimits.admin, adminAuthMiddleware, async (req, res) => {

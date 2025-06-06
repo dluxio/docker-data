@@ -1101,7 +1101,7 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
                         // Complete the account creation
                         const completeResponse = await this.apiClient.post('/api/onboarding/admin/complete-account-creation', {
                             channelId: channelId,
-                            txId: result.result.id,
+                            txId: result.result.tx_id,
                             username: response.username,
                             creationMethod: response.creationMethod
                         });

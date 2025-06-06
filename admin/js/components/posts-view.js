@@ -23,7 +23,7 @@ window.DLUX_COMPONENTS['posts-view'] = {
 
             <!-- Search and Filters -->
             <div class="row mb-4">
-                <div class="col-md-6">
+                <div class="col-md-4">
                     <div class="input-group">
                         <span class="input-group-text"><i class="bi bi-search"></i></span>
                         <input type="text" 
@@ -33,7 +33,7 @@ window.DLUX_COMPONENTS['posts-view'] = {
                                @input="debounceSearch">
                     </div>
                 </div>
-                <div class="col-md-3">
+                <div class="col-md-2">
                     <select class="form-select" v-model="filters.type" @change="refreshData">
                         <option value="">All Types</option>
                         <option value="VR">VR</option>
@@ -46,13 +46,28 @@ window.DLUX_COMPONENTS['posts-view'] = {
                         <option value="Video">Video</option>
                     </select>
                 </div>
-                <div class="col-md-3">
+                <div class="col-md-2">
+                    <select class="form-select" v-model="filters.contentFilter" @change="refreshData">
+                        <option value="">All Content</option>
+                        <option value="nsfw">NSFW Only</option>
+                        <option value="hidden">Hidden Only</option>
+                        <option value="featured">Featured Only</option>
+                        <option value="flagged">Flagged Only</option>
+                        <option value="clean">Clean Content</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
                     <select class="form-select" v-model="filters.limit" @change="refreshData">
                         <option value="25">25 per page</option>
                         <option value="50">50 per page</option>
                         <option value="100">100 per page</option>
                         <option value="200">200 per page</option>
                     </select>
+                </div>
+                <div class="col-md-2">
+                    <button class="btn btn-outline-secondary w-100" @click="showFlagsLegend">
+                        <i class="bi bi-info-circle"></i> Flag Info
+                    </button>
                 </div>
             </div>
 
@@ -134,6 +149,7 @@ window.DLUX_COMPONENTS['posts-view'] = {
                                     <th>Author</th>
                                     <th>Permlink</th>
                                     <th>Type</th>
+                                    <th>Flags</th>
                                     <th>Block</th>
                                     <th>Votes</th>
                                     <th>Vote Weight</th>
@@ -156,6 +172,17 @@ window.DLUX_COMPONENTS['posts-view'] = {
                                     <td>
                                         <span class="badge" :class="getTypeClass(post.type)">{{ post.type }}</span>
                                     </td>
+                                    <td>
+                                        <div class="d-flex flex-wrap gap-1">
+                                            <span v-if="post.nsfw" class="badge bg-danger" title="NSFW Content">NSFW</span>
+                                            <span v-if="post.sensitive" class="badge bg-warning text-dark" title="Sensitive Content">SENS</span>
+                                            <span v-if="post.hidden" class="badge bg-secondary" title="Hidden Content">HIDDEN</span>
+                                            <span v-if="post.featured" class="badge bg-success" title="Featured Content">FEAT</span>
+                                            <span v-if="post.flagged" class="badge bg-danger" title="Flagged Content">FLAG</span>
+                                            <span v-if="!post.nsfw && !post.sensitive && !post.hidden && !post.featured && !post.flagged" 
+                                                  class="badge bg-light text-dark" title="Clean Content">CLEAN</span>
+                                        </div>
+                                    </td>
                                     <td>{{ post.block || 'N/A' }}</td>
                                     <td>{{ post.votes || 0 }}</td>
                                     <td>{{ formatNumber(post.voteweight || 0) }}</td>
@@ -171,6 +198,11 @@ window.DLUX_COMPONENTS['posts-view'] = {
                                                     @click="viewPostDetails(post)"
                                                     title="View Details">
                                                 <i class="bi bi-eye"></i>
+                                            </button>
+                                            <button class="btn btn-outline-secondary" 
+                                                    @click="showFlagsModal(post)"
+                                                    title="Manage Flags">
+                                                <i class="bi bi-flag"></i>
                                             </button>
                                             <button class="btn btn-outline-warning" 
                                                     @click="editPost(post)"
@@ -284,6 +316,60 @@ window.DLUX_COMPONENTS['posts-view'] = {
                                         </label>
                                     </div>
                                 </div>
+                                
+                                <!-- Content Flags Section -->
+                                <div class="mb-3">
+                                    <label class="form-label"><strong>Content Flags</strong></label>
+                                    <div class="row">
+                                        <div class="col-md-6">
+                                            <div class="form-check">
+                                                <input class="form-check-input" type="checkbox" v-model="postForm.nsfw" id="nsfwCheck">
+                                                <label class="form-check-label" for="nsfwCheck">
+                                                    <span class="badge bg-danger me-1">NSFW</span> Not Safe For Work
+                                                </label>
+                                            </div>
+                                            <div class="form-check">
+                                                <input class="form-check-input" type="checkbox" v-model="postForm.sensitive" id="sensitiveCheck">
+                                                <label class="form-check-label" for="sensitiveCheck">
+                                                    <span class="badge bg-warning text-dark me-1">SENS</span> Sensitive Content
+                                                </label>
+                                            </div>
+                                            <div class="form-check">
+                                                <input class="form-check-input" type="checkbox" v-model="postForm.hidden" id="hiddenCheck">
+                                                <label class="form-check-label" for="hiddenCheck">
+                                                    <span class="badge bg-secondary me-1">HIDDEN</span> Hidden from public
+                                                </label>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <div class="form-check">
+                                                <input class="form-check-input" type="checkbox" v-model="postForm.featured" id="featuredCheck">
+                                                <label class="form-check-label" for="featuredCheck">
+                                                    <span class="badge bg-success me-1">FEAT</span> Featured Content
+                                                </label>
+                                            </div>
+                                            <div class="form-check">
+                                                <input class="form-check-input" type="checkbox" v-model="postForm.flagged" id="flaggedCheck">
+                                                <label class="form-check-label" for="flaggedCheck">
+                                                    <span class="badge bg-danger me-1">FLAG</span> Flagged Content
+                                                </label>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div class="mb-3" v-if="postForm.flagged">
+                                    <label class="form-label">Flag Reason</label>
+                                    <textarea class="form-control" v-model="postForm.flag_reason" 
+                                              placeholder="Explain why this content is flagged..." rows="2"></textarea>
+                                </div>
+                                
+                                <div class="mb-3" v-if="anyFlagSet">
+                                    <label class="form-label">Moderated By</label>
+                                    <input type="text" class="form-control" v-model="postForm.moderated_by" 
+                                           placeholder="Enter moderator username">
+                                    <div class="form-text">Required when setting any content flags</div>
+                                </div>
                             </form>
                         </div>
                         <div class="modal-footer">
@@ -355,6 +441,167 @@ window.DLUX_COMPONENTS['posts-view'] = {
                                                     </span>
                                                 </td>
                                             </tr>
+                                            <tr>
+                                                <td><strong>Content Flags:</strong></td>
+                                                <td>
+                                                    <div class="d-flex flex-wrap gap-1">
+                                                        <span v-if="selectedPost.nsfw" class="badge bg-danger">NSFW</span>
+                                                        <span v-if="selectedPost.sensitive" class="badge bg-warning text-dark">Sensitive</span>
+                                                        <span v-if="selectedPost.hidden" class="badge bg-secondary">Hidden</span>
+                                                        <span v-if="selectedPost.featured" class="badge bg-success">Featured</span>
+                                                        <span v-if="selectedPost.flagged" class="badge bg-danger">Flagged</span>
+                                                        <span v-if="!selectedPost.nsfw && !selectedPost.sensitive && !selectedPost.hidden && !selectedPost.featured && !selectedPost.flagged" 
+                                                              class="badge bg-light text-dark">Clean</span>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                            <tr v-if="selectedPost.flagged && selectedPost.flag_reason">
+                                                <td><strong>Flag Reason:</strong></td>
+                                                <td>{{ selectedPost.flag_reason }}</td>
+                                            </tr>
+                                            <tr v-if="selectedPost.moderated_by">
+                                                <td><strong>Moderated By:</strong></td>
+                                                <td>@{{ selectedPost.moderated_by }}</td>
+                                            </tr>
+                                            <tr v-if="selectedPost.moderated_at">
+                                                <td><strong>Moderated At:</strong></td>
+                                                <td>{{ formatDate(selectedPost.moderated_at) }}</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Flag Management Modal -->
+            <div class="modal fade" id="flagsModal" tabindex="-1">
+                <div class="modal-dialog">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Manage Content Flags</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        </div>
+                        <div class="modal-body" v-if="selectedPost">
+                            <div class="mb-3">
+                                <h6>Post: @{{ selectedPost.author }}/{{ selectedPost.permlink }}</h6>
+                                <p class="text-muted small">Use these flags to control content visibility and categorization</p>
+                            </div>
+                            
+                            <form @submit.prevent="saveFlags">
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <div class="form-check mb-2">
+                                            <input class="form-check-input" type="checkbox" v-model="flagForm.nsfw" id="flagNsfwCheck">
+                                            <label class="form-check-label" for="flagNsfwCheck">
+                                                <span class="badge bg-danger me-1">NSFW</span> Not Safe For Work
+                                            </label>
+                                        </div>
+                                        <div class="form-check mb-2">
+                                            <input class="form-check-input" type="checkbox" v-model="flagForm.sensitive" id="flagSensitiveCheck">
+                                            <label class="form-check-label" for="flagSensitiveCheck">
+                                                <span class="badge bg-warning text-dark me-1">SENS</span> Sensitive Content
+                                            </label>
+                                        </div>
+                                        <div class="form-check mb-2">
+                                            <input class="form-check-input" type="checkbox" v-model="flagForm.hidden" id="flagHiddenCheck">
+                                            <label class="form-check-label" for="flagHiddenCheck">
+                                                <span class="badge bg-secondary me-1">HIDDEN</span> Hidden from public
+                                            </label>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="form-check mb-2">
+                                            <input class="form-check-input" type="checkbox" v-model="flagForm.featured" id="flagFeaturedCheck">
+                                            <label class="form-check-label" for="flagFeaturedCheck">
+                                                <span class="badge bg-success me-1">FEAT</span> Featured Content
+                                            </label>
+                                        </div>
+                                        <div class="form-check mb-2">
+                                            <input class="form-check-input" type="checkbox" v-model="flagForm.flagged" id="flagFlaggedCheck">
+                                            <label class="form-check-label" for="flagFlaggedCheck">
+                                                <span class="badge bg-danger me-1">FLAG</span> Flagged Content
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div class="mb-3" v-if="flagForm.flagged">
+                                    <label class="form-label">Flag Reason</label>
+                                    <textarea class="form-control" v-model="flagForm.flag_reason" 
+                                              placeholder="Explain why this content is flagged..." rows="3"></textarea>
+                                </div>
+                                
+                                <div class="mb-3">
+                                    <label class="form-label">Moderated By <span class="text-danger">*</span></label>
+                                    <input type="text" class="form-control" v-model="flagForm.moderated_by" 
+                                           placeholder="Enter your username" required>
+                                    <div class="form-text">Required for flag operations</div>
+                                </div>
+                            </form>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                            <button type="button" class="btn btn-primary" @click="saveFlags" :disabled="!flagForm.moderated_by">
+                                Update Flags
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Flags Legend Modal -->
+            <div class="modal fade" id="flagsLegendModal" tabindex="-1">
+                <div class="modal-dialog">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Content Flags Information</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="row">
+                                <div class="col-12">
+                                    <table class="table table-sm">
+                                        <thead>
+                                            <tr>
+                                                <th>Flag</th>
+                                                <th>Description</th>
+                                                <th>Effect</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr>
+                                                <td><span class="badge bg-danger">NSFW</span></td>
+                                                <td>Not Safe For Work</td>
+                                                <td>Content requires age verification or warnings</td>
+                                            </tr>
+                                            <tr>
+                                                <td><span class="badge bg-warning text-dark">SENS</span></td>
+                                                <td>Sensitive Content</td>
+                                                <td>May contain sensitive themes or material</td>
+                                            </tr>
+                                            <tr>
+                                                <td><span class="badge bg-secondary">HIDDEN</span></td>
+                                                <td>Hidden Content</td>
+                                                <td>Not visible in public listings</td>
+                                            </tr>
+                                            <tr>
+                                                <td><span class="badge bg-success">FEAT</span></td>
+                                                <td>Featured Content</td>
+                                                <td>Highlighted in featured sections</td>
+                                            </tr>
+                                            <tr>
+                                                <td><span class="badge bg-danger">FLAG</span></td>
+                                                <td>Flagged Content</td>
+                                                <td>Reported content requiring review</td>
+                                            </tr>
+                                            <tr>
+                                                <td><span class="badge bg-light text-dark">CLEAN</span></td>
+                                                <td>Clean Content</td>
+                                                <td>No flags set, suitable for all audiences</td>
+                                            </tr>
                                         </tbody>
                                     </table>
                                 </div>
@@ -383,6 +630,7 @@ window.DLUX_COMPONENTS['posts-view'] = {
             },
             filters: {
                 type: '',
+                contentFilter: '',
                 limit: 100,
                 offset: 0
             },
@@ -396,7 +644,23 @@ window.DLUX_COMPONENTS['posts-view'] = {
                 votes: 0,
                 voteweight: 0,
                 promote: 0,
-                paid: false
+                paid: false,
+                nsfw: false,
+                sensitive: false,
+                hidden: false,
+                featured: false,
+                flagged: false,
+                flag_reason: '',
+                moderated_by: ''
+            },
+            flagForm: {
+                nsfw: false,
+                sensitive: false,
+                hidden: false,
+                featured: false,
+                flagged: false,
+                flag_reason: '',
+                moderated_by: ''
             }
         };
     },
@@ -423,6 +687,11 @@ window.DLUX_COMPONENTS['posts-view'] = {
         
         isFormValid() {
             return this.postForm.author && this.postForm.permlink && this.postForm.type;
+        },
+        
+        anyFlagSet() {
+            return this.postForm.nsfw || this.postForm.sensitive || this.postForm.hidden || 
+                   this.postForm.featured || this.postForm.flagged;
         }
     },
     
@@ -447,6 +716,30 @@ window.DLUX_COMPONENTS['posts-view'] = {
                 }
                 if (this.searchTerm) {
                     params.append('search', this.searchTerm);
+                }
+                
+                // Handle content filters
+                if (this.filters.contentFilter) {
+                    switch (this.filters.contentFilter) {
+                        case 'nsfw':
+                            params.append('nsfw', 'true');
+                            break;
+                        case 'hidden':
+                            params.append('hidden', 'true');
+                            break;
+                        case 'featured':
+                            params.append('featured', 'true');
+                            break;
+                        case 'flagged':
+                            params.append('flagged', 'true');
+                            break;
+                        case 'clean':
+                            params.append('nsfw', 'false');
+                            params.append('sensitive', 'false');
+                            params.append('hidden', 'false');
+                            params.append('flagged', 'false');
+                            break;
+                    }
                 }
                 
                 const response = await fetch(`${this.apiClient.baseURL}/api/posts?${params}`, {
@@ -518,7 +811,14 @@ window.DLUX_COMPONENTS['posts-view'] = {
                 votes: 0,
                 voteweight: 0,
                 promote: 0,
-                paid: false
+                paid: false,
+                nsfw: false,
+                sensitive: false,
+                hidden: false,
+                featured: false,
+                flagged: false,
+                flag_reason: '',
+                moderated_by: ''
             };
             const modal = new bootstrap.Modal(document.getElementById('postModal'));
             modal.show();
@@ -536,7 +836,14 @@ window.DLUX_COMPONENTS['posts-view'] = {
                 votes: post.votes || 0,
                 voteweight: post.voteweight || 0,
                 promote: post.promote || 0,
-                paid: post.paid || false
+                paid: post.paid || false,
+                nsfw: post.nsfw || false,
+                sensitive: post.sensitive || false,
+                hidden: post.hidden || false,
+                featured: post.featured || false,
+                flagged: post.flagged || false,
+                flag_reason: post.flag_reason || '',
+                moderated_by: post.moderated_by || ''
             };
             const modal = new bootstrap.Modal(document.getElementById('postModal'));
             modal.show();
@@ -566,7 +873,14 @@ window.DLUX_COMPONENTS['posts-view'] = {
                         votes: this.postForm.votes,
                         voteweight: this.postForm.voteweight,
                         promote: this.postForm.promote,
-                        paid: this.postForm.paid
+                        paid: this.postForm.paid,
+                        nsfw: this.postForm.nsfw,
+                        sensitive: this.postForm.sensitive,
+                        hidden: this.postForm.hidden,
+                        featured: this.postForm.featured,
+                        flagged: this.postForm.flagged,
+                        flag_reason: this.postForm.flag_reason,
+                        moderated_by: this.postForm.moderated_by
                     })
                 });
                 
@@ -635,6 +949,58 @@ window.DLUX_COMPONENTS['posts-view'] = {
         formatNumber(num) {
             if (!num || num === 0) return '0';
             return parseFloat(num).toLocaleString();
+        },
+        
+        formatDate(dateString) {
+            if (!dateString) return 'N/A';
+            return new Date(dateString).toLocaleString();
+        },
+        
+        showFlagsModal(post) {
+            this.selectedPost = post;
+            this.flagForm = {
+                nsfw: post.nsfw || false,
+                sensitive: post.sensitive || false,
+                hidden: post.hidden || false,
+                featured: post.featured || false,
+                flagged: post.flagged || false,
+                flag_reason: post.flag_reason || '',
+                moderated_by: ''
+            };
+            const modal = new bootstrap.Modal(document.getElementById('flagsModal'));
+            modal.show();
+        },
+        
+        showFlagsLegend() {
+            const modal = new bootstrap.Modal(document.getElementById('flagsLegendModal'));
+            modal.show();
+        },
+        
+        async saveFlags() {
+            if (!this.flagForm.moderated_by || !this.selectedPost) return;
+            
+            try {
+                const response = await fetch(`${this.apiClient.baseURL}/api/posts/${this.selectedPost.author}/${this.selectedPost.permlink}/flags`, {
+                    method: 'PATCH',
+                    headers: {
+                        ...this.apiClient.headers,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(this.flagForm)
+                });
+                
+                if (response.ok) {
+                    this.showAlert('Post flags updated successfully', 'success');
+                    bootstrap.Modal.getInstance(document.getElementById('flagsModal')).hide();
+                    await this.refreshData();
+                } else {
+                    const error = await response.json();
+                    this.showAlert(error.error || 'Failed to update flags', 'danger');
+                }
+            } catch (error) {
+                console.error('Error updating flags:', error);
+                this.showAlert('Error updating flags: ' + error.message, 'danger');
+            }
         },
         
         showAlert(message, type = 'info') {

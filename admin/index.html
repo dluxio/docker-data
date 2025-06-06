@@ -213,6 +213,13 @@
                                     Posts
                                 </a>
                             </li>
+                            <li class="nav-item">
+                                <a class="nav-link" :class="{ active: currentView === 'flags' }" 
+                                   @click="setView('flags')">
+                                    <i class="bi bi-flag"></i>
+                                    Flag Reports
+                                </a>
+                            </li>
                         </ul>
                     </div>
                 </nav>
@@ -508,6 +515,11 @@
                                 :api-client="apiClient" 
                                 @loading="setLoading">
                     </posts-view>
+
+                    <flags-view v-if="currentView === 'flags'" 
+                                :api-client="apiClient" 
+                                @loading="setLoading">
+                    </flags-view>
                 </main>
             </div>
         </div>
@@ -524,6 +536,7 @@
     <script src="js/components/payment-channels.js"></script>
     <script src="js/components/admin-users.js"></script>
     <script src="js/components/posts-view.js"></script>
+    <script src="js/components/flags-view.js"></script>
     <script>
         // Mount the app after all components are loaded
         if (window.mountDLUXApp) {
