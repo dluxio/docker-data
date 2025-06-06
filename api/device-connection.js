@@ -7,8 +7,7 @@ const pool = new Pool({
   connectionString: config.dbcs,
 });
 
-// Import the authentication utilities from onboarding
-const { HiveAuth, createAuthMiddleware } = require('./onboarding');
+// Note: Authentication is handled in route definitions in index.js
 
 class DeviceConnectionService {
     constructor() {
@@ -408,9 +407,6 @@ class DeviceConnectionService {
 // Create singleton service instance
 const deviceService = new DeviceConnectionService();
 
-// Create authentication middleware (any valid HIVE user can pair devices)
-const authMiddleware = createAuthMiddleware(false, false);
-
 // Database setup function
 async function setupDeviceDatabase() {
     try {
@@ -463,7 +459,7 @@ async function setupDeviceDatabase() {
 // API Endpoints
 
 // POST /api/device/pair - Create a device pairing code
-const createPairing = authMiddleware(async (req, res) => {
+const createPairing = async (req, res) => {
     try {
         const username = req.auth.account;
         const deviceInfo = req.body.deviceInfo || {};
@@ -483,7 +479,7 @@ const createPairing = authMiddleware(async (req, res) => {
             error: 'Failed to create pairing code'
         });
     }
-});
+};
 
 // POST /api/device/connect - Connect to a device using pairing code
 const connectToDevice = async (req, res) => {
