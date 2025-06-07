@@ -515,15 +515,6 @@ const setupDatabase = async () => {
     }
 };
 
-// Shared payment addresses (reused across all payments)
-const PAYMENT_ADDRESSES = {
-    BTC: process.env.BTC_PAYMENT_ADDRESS || '', // Example BTC address for development
-    SOL: process.env.SOL_PAYMENT_ADDRESS || '', // Example SOL address for development
-    ETH: process.env.ETH_PAYMENT_ADDRESS || '', // Example ETH address for development
-    MATIC: process.env.MATIC_PAYMENT_ADDRESS || '', // Example MATIC address for development
-    BNB: process.env.BNB_PAYMENT_ADDRESS || '' // Example BNB address for development
-};
-
 // Crypto configuration with network details and payment channel support
 const CRYPTO_CONFIG = {
     BTC: {
@@ -3286,7 +3277,6 @@ router.get('/api/onboarding/admin/blockchain-status', rateLimits.admin, adminAut
                 blockchainMonitoring: {
                     status: status,
                     supportedNetworks: Object.keys(CRYPTO_CONFIG),
-                    paymentAddresses: PAYMENT_ADDRESSES,
                     recentDetections: recentConfirmations.rows,
                     weeklyStats: stats.rows.map(row => ({
                         cryptoType: row.crypto_type,
@@ -5254,6 +5244,131 @@ router.get('/api/onboarding/transaction-info/:cryptoType/:address', rateLimits.g
         res.status(500).json({
             success: false,
             error: 'Failed to get transaction information',
+            details: error.message
+        });
+    }
+});
+
+// API Status and Debug Endpoint - Comprehensive system test
+router.get('/api/onboarding/debug/system-status', rateLimits.general, async (req, res) => {
+    try {
+        const results = {
+            timestamp: new Date().toISOString(),
+            api_version: "1.0.0",
+            database: { connected: false, tables: [] },
+            pricing: { service: false, rates: {} },
+            crypto_generator: { initialized: false, supported_cryptos: [] },
+            hive_service: { connected: false, rc_balance: null },
+            auth_middleware: { active: true },
+            rate_limits: { active: true },
+            endpoints_tested: {}
+        };
+
+        // Test database connection
+        try {
+            const client = await pool.connect();
+            results.database.connected = true;
+            
+            // Check if required tables exist
+            const tableQuery = await client.query(`
+                SELECT table_name 
+                FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name IN ('payment_channels', 'crypto_addresses', 'onboarding_payments', 'pricing_history')
+                ORDER BY table_name
+            `);
+            results.database.tables = tableQuery.rows.map(row => row.table_name);
+            
+            client.release();
+        } catch (dbError) {
+            results.database.error = dbError.message;
+        }
+
+        // Test pricing service
+        try {
+            const pricing = await pricingService.getLatestPricing();
+            results.pricing.service = true;
+            results.pricing.hive_price = pricing.hive_price_usd;
+            results.pricing.last_update = pricing.updated_at;
+            
+            // Parse crypto rates
+            if (typeof pricing.crypto_rates === 'string') {
+                results.pricing.rates = JSON.parse(pricing.crypto_rates);
+            } else {
+                results.pricing.rates = pricing.crypto_rates || {};
+            }
+        } catch (pricingError) {
+            results.pricing.error = pricingError.message;
+        }
+
+        // Test crypto generator 
+        try {
+            results.crypto_generator.supported_cryptos = Object.keys(CRYPTO_CONFIG);
+            results.crypto_generator.initialized = cryptoGenerator.masterSeed ? true : false;
+            
+            // Try to generate a test address for BTC
+            if (cryptoGenerator.masterSeed) {
+                const testChannel = generateChannelId();
+                const testAddr = await cryptoGenerator.generateChannelAddress('BTC', testChannel, 1);
+                results.crypto_generator.test_address_generated = testAddr.address;
+            }
+        } catch (cryptoError) {
+            results.crypto_generator.error = cryptoError.message;
+        }
+
+        // Test Hive service
+        try {
+            const hiveAccount = await hiveAccountService.getHiveAccount('dlux-io');
+            results.hive_service.connected = true;
+            results.hive_service.test_account_found = !!hiveAccount;
+        } catch (hiveError) {
+            results.hive_service.error = hiveError.message;
+        }
+
+        // Test RC monitoring
+        try {
+            const rcCosts = await rcMonitoringService.getLatestRCCosts();
+            results.rc_monitoring = {
+                active: true,
+                last_update: rcCosts.updated_at,
+                account_creation_cost: rcCosts.account_creation_cost_rc
+            };
+        } catch (rcError) {
+            results.rc_monitoring = { error: rcError.message };
+        }
+
+        // Test each endpoint category
+        results.endpoints_tested = {
+            pricing: results.pricing.service,
+            payment_initiation: results.crypto_generator.initialized && results.database.connected,
+            admin_endpoints: results.database.connected,
+            transaction_verification: results.crypto_generator.initialized,
+            hive_account_creation: results.hive_service.connected && results.database.connected
+        };
+
+        // Overall health check
+        const healthy = results.database.connected && 
+                       results.pricing.service && 
+                       results.crypto_generator.initialized &&
+                       results.hive_service.connected;
+
+        res.json({
+            success: true,
+            healthy,
+            system_status: results,
+            recommendations: healthy ? [] : [
+                !results.database.connected ? "Database connection failed - check PostgreSQL" : null,
+                !results.pricing.service ? "Pricing service failed - check CoinGecko API" : null,
+                !results.crypto_generator.initialized ? "Crypto generator not initialized - check CRYPTO_MASTER_SEED env var" : null,
+                !results.hive_service.connected ? "Hive service failed - check HIVE_RPC connection" : null
+            ].filter(Boolean)
+        });
+
+    } catch (error) {
+        console.error('System status check failed:', error);
+        res.status(500).json({
+            success: false,
+            error: 'System status check failed',
             details: error.message
         });
     }
