@@ -203,6 +203,42 @@ GET /api/onboarding/test-address-generation/{cryptoType}
 
 Test endpoint to verify address generation is working for each supported cryptocurrency.
 
+### 7. Payment Simulation (Testing)
+
+```http
+POST /api/onboarding/test/simulate-payment
+Content-Type: application/json
+
+{
+  "username": "testuser123",
+  "cryptoType": "SOL"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "simulation": true,
+  "payment": {
+    "channelId": "21036b15abe1753c611ccf4ee776e748",
+    "username": "testuser123",
+    "cryptoType": "SOL",
+    "amount": 0.007050,
+    "amountUSD": 1.057,
+    "address": "SOL_simulated_e776e748",
+    "simulatedTxHash": "tx_81d36346b3e44d8b93f4aa257649a0fc",
+    "instructions": [
+      "[SIMULATION] Send exactly 0.007050 SOL to the address above",
+      "Payment will be automatically 'confirmed' in 2 seconds"
+    ],
+    "note": "This is a test simulation. No real cryptocurrency payment is required."
+  }
+}
+```
+
+This endpoint creates a simulated payment that automatically confirms after 2 seconds, allowing you to test the complete payment flow without real cryptocurrency.
+
 ## 🔐 Admin Endpoints
 
 All admin endpoints require Hive authentication headers:
@@ -281,6 +317,12 @@ The system includes comprehensive monitoring:
 
 ## 🐛 Troubleshooting
 
+### Current Known Issues
+
+1. **Circular Dependency**: The crypto address generator has a circular dependency with the main onboarding module, preventing real address generation. Use the simulation endpoint for testing.
+
+2. **Address Generation**: Real crypto address generation currently fails due to database connection issues in the crypto generator module.
+
 ### Common Issues
 
 1. **Payment not detected**: Check transaction hash and confirmations
@@ -294,6 +336,25 @@ Use `/debug/system-status` to check all system components:
 
 ```bash
 curl https://your-domain.com/api/onboarding/debug/system-status
+```
+
+### Testing the API
+
+While the real crypto address generation has issues, you can test the complete payment flow using the simulation endpoint:
+
+```bash
+# Test SOL payment (low fees)
+curl -X POST "https://data.dlux.io/api/onboarding/test/simulate-payment" \
+  -H "Content-Type: application/json" \
+  -d '{"username": "testuser123", "cryptoType": "SOL"}'
+
+# Test BTC payment (high fees)  
+curl -X POST "https://data.dlux.io/api/onboarding/test/simulate-payment" \
+  -H "Content-Type: application/json" \
+  -d '{"username": "btcuser123", "cryptoType": "BTC"}'
+
+# Check payment status
+curl "https://data.dlux.io/api/onboarding/payment/status/{channelId}"
 ```
 
 ## 🔄 Dependencies
@@ -336,6 +397,36 @@ See LICENSE file for details.
 5. Submit a pull request
 
 ---
+
+## 📋 Summary
+
+This Hive Onboarding API provides a comprehensive cryptocurrency payment system for creating Hive blockchain accounts. Key highlights:
+
+### ✅ What's Working
+- **Real-time pricing** for 7 cryptocurrencies via CoinGecko
+- **Database operations** and payment channel management
+- **System monitoring** and health checks
+- **Admin interfaces** for payment management
+- **Rate limiting** and security features
+- **Payment simulation** for testing
+
+### ⚠️ Current Limitations
+- **Address generation** has circular dependency issues
+- **Real payments** cannot be processed until crypto generator is fixed
+- **Account creation** flow needs testing after address generation fix
+
+### 💡 Recommended Next Steps
+1. Fix the circular dependency in `crypto-account-generator.js`
+2. Test real address generation for each cryptocurrency
+3. Implement proper private key encryption
+4. Add comprehensive transaction monitoring
+5. Set up automated account creation after payment confirmation
+
+### 🧪 Testing
+Use the simulation endpoints to test the complete payment flow:
+- Pricing: `GET /api/onboarding/pricing`
+- System Status: `GET /api/onboarding/debug/system-status`
+- Payment Simulation: `POST /api/onboarding/test/simulate-payment`
 
 For issues or questions, please check the system status endpoint first, then review the logs for specific error messages.
 

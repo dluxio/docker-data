@@ -4,7 +4,7 @@ const { ethers } = require('ethers');
 const BIP32Factory = require('bip32');
 const ecc = require('tiny-secp256k1');
 const { generateMnemonic, mnemonicToSeedSync } = require('bip39');
-const { pool } = require('./onboarding');
+const { pool } = require('../index');
 
 // Initialize BIP32 with secp256k1
 const bip32 = BIP32Factory.default(ecc);
