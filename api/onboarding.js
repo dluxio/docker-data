@@ -5422,7 +5422,7 @@ router.post('/api/onboarding/test/simulate-payment', rateLimits.general, async (
         try {
             await client.query(`
                 INSERT INTO payment_channels 
-                (channel_id, username, crypto_type, amount_crypto, amount_usd, address, status, created_at, expires_at)
+                (channel_id, username, crypto_type, amount_crypto, amount_usd, payment_address, status, created_at, expires_at)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW() + INTERVAL '24 hours')
             `, [
                 channelId,
