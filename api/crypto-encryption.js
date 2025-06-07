@@ -35,7 +35,7 @@ class CryptoEncryption {
             const cipher = crypto.createCipherGCM(this.algorithm, this.encryptionKey, iv);
             cipher.setAAD(Buffer.from('private_key')); // Additional authenticated data
             
-            let encrypted = cipher.update(privateKey, 'hex');
+            let encrypted = cipher.update(privateKey, 'utf8');
             encrypted = Buffer.concat([encrypted, cipher.final()]);
             
             const authTag = cipher.getAuthTag();
@@ -74,7 +74,7 @@ class CryptoEncryption {
             let decrypted = decipher.update(encrypted);
             decrypted = Buffer.concat([decrypted, decipher.final()]);
             
-            return decrypted.toString('hex');
+            return decrypted.toString('utf8');
         } catch (error) {
             console.error('Error decrypting private key:', error);
             throw new Error('Failed to decrypt private key');
