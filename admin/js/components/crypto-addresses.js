@@ -271,7 +271,7 @@ const CryptoAddressesView = {
                                                 <td>
                                                     <div v-if="address.amount_crypto">
                                                         {{ address.amount_crypto }} {{ address.crypto_type }}<br>
-                                                        <small class="text-muted">${{ address.amount_usd }}</small>
+                                                        <small class="text-muted">&#36;{{ address.amount_usd }}</small>
                                                     </div>
                                                     <span v-else class="text-muted">-</span>
                                                 </td>
