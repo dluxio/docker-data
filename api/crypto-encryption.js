@@ -4,7 +4,7 @@ class CryptoEncryption {
     constructor() {
         // Get encryption key from environment or generate one
         this.encryptionKey = this.getOrGenerateEncryptionKey();
-        this.algorithm = 'aes-256-gcm';
+        this.algorithm = 'aes-256-cbc';
     }
 
     getOrGenerateEncryptionKey() {
@@ -27,21 +27,18 @@ class CryptoEncryption {
     /**
      * Encrypt a private key
      * @param {string} privateKey - The private key to encrypt (hex string)
-     * @returns {Buffer} Encrypted data with IV and auth tag
+     * @returns {Buffer} Encrypted data with IV and encrypted data
      */
     encryptPrivateKey(privateKey) {
         try {
-            const iv = crypto.randomBytes(16); // 128-bit IV for GCM
-            const cipher = crypto.createCipherGCM(this.algorithm, this.encryptionKey, iv);
-            cipher.setAAD(Buffer.from('private_key')); // Additional authenticated data
+            const iv = crypto.randomBytes(16); // 128-bit IV for CBC
+            const cipher = crypto.createCipher(this.algorithm, this.encryptionKey, iv);
             
             let encrypted = cipher.update(privateKey, 'utf8');
             encrypted = Buffer.concat([encrypted, cipher.final()]);
             
-            const authTag = cipher.getAuthTag();
-            
-            // Combine IV + authTag + encrypted data
-            return Buffer.concat([iv, authTag, encrypted]);
+            // Combine IV + encrypted data
+            return Buffer.concat([iv, encrypted]);
         } catch (error) {
             console.error('Error encrypting private key:', error);
             throw new Error('Failed to encrypt private key');
@@ -50,7 +47,7 @@ class CryptoEncryption {
 
     /**
      * Decrypt a private key
-     * @param {Buffer} encryptedData - The encrypted data with IV and auth tag
+     * @param {Buffer} encryptedData - The encrypted data with IV and encrypted data
      * @returns {string} Decrypted private key (hex string)
      */
     decryptPrivateKey(encryptedData) {
@@ -59,17 +56,14 @@ class CryptoEncryption {
                 throw new Error('Encrypted data must be a Buffer');
             }
 
-            if (encryptedData.length < 32) { // IV(16) + authTag(16) minimum
+            if (encryptedData.length < 16) { // IV(16) minimum
                 throw new Error('Invalid encrypted data length');
             }
 
             const iv = encryptedData.slice(0, 16);
-            const authTag = encryptedData.slice(16, 32);
-            const encrypted = encryptedData.slice(32);
+            const encrypted = encryptedData.slice(16);
             
-            const decipher = crypto.createDecipherGCM(this.algorithm, this.encryptionKey, iv);
-            decipher.setAAD(Buffer.from('private_key'));
-            decipher.setAuthTag(authTag);
+            const decipher = crypto.createDecipher(this.algorithm, this.encryptionKey, iv);
             
             let decrypted = decipher.update(encrypted);
             decrypted = Buffer.concat([decrypted, decipher.final()]);
