@@ -5145,6 +5145,32 @@ router.get('/api/onboarding/transaction-info/:cryptoType/:address', async (req, 
 });
 
 // API Status and Debug Endpoint - Comprehensive system test
+// Test endpoint for blockchain monitoring status
+router.get('/api/onboarding/test/blockchain-monitoring', async (req, res) => {
+    try {
+        const status = blockchainMonitor.getStatus();
+        
+        res.json({
+            success: true,
+            blockchain_monitoring: {
+                active: status.isRunning,
+                configuration: status.configuration,
+                supported_networks: status.supportedNetworks,
+                monitoring_intervals: status.monitoringIntervals,
+                last_check: status.lastCheck,
+                processed_transactions: status.processedTransactions
+            }
+        });
+    } catch (error) {
+        console.error('Blockchain monitoring test error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Blockchain monitoring test failed',
+            details: error.message
+        });
+    }
+});
+
 // Test endpoint for encryption functionality
 router.get('/api/onboarding/test/encryption', async (req, res) => {
     try {
