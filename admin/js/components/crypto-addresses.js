@@ -23,7 +23,9 @@ const CryptoAddressesView = {
                 destinationAddress: '',
                 priority: 'medium',
                 info: null,
-                transaction: null
+                preparationData: null,
+                executed: false,
+                executionResult: null
             },
             supportedCryptos: ['BTC', 'ETH', 'SOL', 'MATIC', 'BNB']
         };
@@ -149,51 +151,112 @@ const CryptoAddressesView = {
                                     <i class="fas fa-info-circle"></i> Get Info
                                 </button>
                                 <button 
-                                    @click="generateConsolidationTx" 
-                                    :disabled="!consolidation.selectedCrypto || !consolidation.destinationAddress || consolidation.loading"
+                                    @click="prepareConsolidation" 
+                                    :disabled="!consolidation.selectedCrypto || !consolidation.destinationAddress || consolidation.loading || !consolidation.info || consolidation.info.addressCount === 0"
                                     class="btn btn-warning"
                                 >
-                                    <i class="fas fa-cogs"></i> Generate Transaction
+                                    <i class="fas fa-cogs"></i> Prepare Consolidation
+                                </button>
+                                <button 
+                                    @click="resetConsolidation" 
+                                    :disabled="consolidation.loading"
+                                    class="btn btn-secondary"
+                                >
+                                    <i class="fas fa-redo"></i> Reset
                                 </button>
                             </div>
 
                             <!-- Consolidation Info Display -->
-                            <div v-if="consolidation.info" class="mt-3 p-3 border rounded">
+                            <div v-if="consolidation.info && consolidation.info.addressCount > 0" class="mt-3 p-3 border rounded">
                                 <h6>Consolidation Information for {{ consolidation.info.cryptoType }}</h6>
                                 <div class="row">
-                                    <div class="col-md-6">
-                                        <strong>Addresses to consolidate:</strong> {{ consolidation.info.addressCount }}<br>
-                                        <strong>Fee estimate ({{ consolidation.priority }}):</strong> 
-                                        {{ consolidation.info.feeEstimate[consolidation.priority] }} 
-                                        {{ consolidation.info.feeEstimate.currency }}
+                                    <div class="col-md-4">
+                                        <strong>Addresses:</strong> {{ consolidation.info.addressCount }}<br>
+                                        <strong>Total Balance:</strong> {{ consolidation.info.totalBalance && consolidation.info.totalBalance.toFixed(8) }} {{ consolidation.info.cryptoType }}<br>
+                                        <strong>USD Value:</strong> ${{ consolidation.info.totalBalanceUSD.toFixed(2) }}
                                     </div>
-                                    <div class="col-md-6">
-                                        <strong>Method:</strong> {{ consolidation.info.instructions.method }}<br>
-                                        <strong>Tool:</strong> {{ consolidation.info.instructions.tool_recommendation }}
+                                    <div class="col-md-4">
+                                        <strong>Est. Fee ({{ consolidation.priority }}):</strong><br>
+                                        {{ consolidation.info.feeEstimate[consolidation.priority].fee.toFixed(8) }} {{ consolidation.info.cryptoType }}<br>
+                                        <span class="text-muted">(${{ consolidation.info.feeEstimate[consolidation.priority].feeUSD.toFixed(2) }})</span>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <strong>Net Amount:</strong><br>
+                                        {{ consolidation.info.netAmount[consolidation.priority].toFixed(8) }} {{ consolidation.info.cryptoType }}<br>
+                                        <span class="text-muted">After fees</span>
                                     </div>
                                 </div>
                                 
                                 <div class="mt-2">
-                                    <strong>Recent addresses:</strong>
+                                    <strong>Addresses with funds:</strong>
                                     <div class="max-height-200 overflow-auto">
-                                        <div v-for="addr in consolidation.info.addresses.slice(0, 10)" :key="addr.address" class="small">
-                                            {{ addr.address }} ({{ addr.channelId }})
+                                        <div v-for="addr in consolidation.info.addresses.slice(0, 10)" :key="addr.address" class="small d-flex justify-content-between">
+                                            <span>{{ addr.address.substring(0, 20) }}...</span>
+                                            <span>{{ addr.balance.toFixed(8) }} {{ consolidation.info.cryptoType }}</span>
                                         </div>
                                         <div v-if="consolidation.info.addresses.length > 10" class="small text-muted">
-                                            ... and {{ consolidation.info.addresses.length - 10 }} more
+                                            ... and {{ consolidation.info.addresses.length - 10 }} more addresses
                                         </div>
                                     </div>
                                 </div>
+                                
+                                <div class="alert alert-info mt-2">
+                                    <i class="fas fa-info-circle"></i>
+                                    {{ consolidation.info.instructions.note }}
+                                </div>
                             </div>
 
-                            <!-- Generated Transaction Display -->
-                            <div v-if="consolidation.transaction" class="mt-3 p-3 border rounded bg-light">
-                                <h6>Generated Consolidation Transaction</h6>
-                                <pre class="small">{{ JSON.stringify(consolidation.transaction, null, 2) }}</pre>
-                                <div class="alert alert-warning mt-2">
-                                    <i class="fas fa-exclamation-triangle"></i>
-                                    <strong>Important:</strong> This transaction data is for external wallet software. 
-                                    Copy the information and use appropriate tools to execute the consolidation.
+                            <!-- No funds message -->
+                            <div v-if="consolidation.info && consolidation.info.addressCount === 0" class="mt-3 p-3 border rounded bg-light">
+                                <div class="text-center text-muted">
+                                    <i class="fas fa-info-circle"></i>
+                                    {{ consolidation.info.message }}
+                                </div>
+                            </div>
+
+                            <!-- Preparation Summary -->
+                            <div v-if="consolidation.preparationData && !consolidation.executed" class="mt-3 p-3 border rounded bg-warning">
+                                <h6><i class="fas fa-exclamation-triangle"></i> Consolidation Ready for Execution</h6>
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <strong>Transaction ID:</strong> {{ consolidation.preparationData.txId }}<br>
+                                        <strong>Addresses:</strong> {{ consolidation.preparationData.addressCount }}<br>
+                                        <strong>Total Amount:</strong> {{ consolidation.preparationData.totalBalance.toFixed(8) }} {{ consolidation.preparationData.cryptoType }}
+                                    </div>
+                                    <div class="col-md-6">
+                                        <strong>Estimated Fee:</strong> {{ consolidation.preparationData.estimatedFee.toFixed(8) }} {{ consolidation.preparationData.cryptoType }}<br>
+                                        <strong>Fee USD:</strong> ${{ consolidation.preparationData.estimatedFeeUSD.toFixed(2) }}<br>
+                                        <strong>Net Amount:</strong> {{ consolidation.preparationData.netAmount.toFixed(8) }} {{ consolidation.preparationData.cryptoType }}
+                                    </div>
+                                </div>
+                                <div class="mt-3">
+                                    <strong>Destination:</strong> {{ consolidation.preparationData.destinationAddress }}
+                                </div>
+                                <div class="mt-3">
+                                    <button 
+                                        @click="executeConsolidation" 
+                                        :disabled="consolidation.loading"
+                                        class="btn btn-danger btn-lg"
+                                    >
+                                        <i class="fas fa-paper-plane"></i> Confirm & Execute Consolidation
+                                    </button>
+                                    <small class="form-text text-muted">This action cannot be undone!</small>
+                                </div>
+                            </div>
+
+                            <!-- Execution Result -->
+                            <div v-if="consolidation.executed && consolidation.executionResult" class="mt-3 p-3 border rounded bg-success text-white">
+                                <h6><i class="fas fa-check-circle"></i> Consolidation Completed</h6>
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <strong>Transaction Hash:</strong><br>
+                                        <code class="text-white">{{ consolidation.executionResult.blockchainTxHash }}</code>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <strong>Consolidated:</strong> {{ consolidation.executionResult.totalAmount.toFixed(8) }} {{ consolidation.executionResult.cryptoType }}<br>
+                                        <strong>Addresses:</strong> {{ consolidation.executionResult.addressesConsolidated }}<br>
+                                        <strong>Completed:</strong> {{ new Date(consolidation.executionResult.completedAt).toLocaleString() }}
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -400,6 +463,8 @@ const CryptoAddressesView = {
             if (!this.consolidation.selectedCrypto) return;
             
             this.consolidation.loading = true;
+            this.consolidation.preparationData = null;
+            this.consolidation.executed = false;
             try {
                 const response = await fetch(`/api/onboarding/admin/consolidation-info/${this.consolidation.selectedCrypto}`, {
                     headers: this.getAuthHeaders()
@@ -411,7 +476,12 @@ const CryptoAddressesView = {
                 
                 const data = await response.json();
                 this.consolidation.info = data;
-                this.success = `Found ${data.addressCount} addresses for ${data.cryptoType} consolidation`;
+                
+                if (data.addressCount === 0) {
+                    this.success = `No addresses with funds found for ${data.cryptoType}`;
+                } else {
+                    this.success = `Found ${data.addressCount} addresses with ${data.totalBalance.toFixed(8)} ${data.cryptoType} (${data.totalBalanceUSD.toFixed(2)} USD) available for consolidation`;
+                }
             } catch (error) {
                 this.error = `Failed to get consolidation info: ${error.message}`;
                 console.error('Error getting consolidation info:', error);
@@ -420,12 +490,12 @@ const CryptoAddressesView = {
             }
         },
 
-        async generateConsolidationTx() {
+        async prepareConsolidation() {
             if (!this.consolidation.selectedCrypto || !this.consolidation.destinationAddress) return;
             
             this.consolidation.loading = true;
             try {
-                const response = await fetch('/api/onboarding/admin/generate-consolidation-tx', {
+                const response = await fetch('/api/onboarding/admin/prepare-consolidation', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -443,14 +513,60 @@ const CryptoAddressesView = {
                 }
                 
                 const data = await response.json();
-                this.consolidation.transaction = data.consolidationTransaction;
-                this.success = 'Consolidation transaction generated successfully';
+                this.consolidation.preparationData = data.consolidationSummary;
+                this.success = 'Consolidation prepared. Review details and confirm to execute.';
             } catch (error) {
-                this.error = `Failed to generate consolidation transaction: ${error.message}`;
-                console.error('Error generating consolidation transaction:', error);
+                this.error = `Failed to prepare consolidation: ${error.message}`;
+                console.error('Error preparing consolidation:', error);
             } finally {
                 this.consolidation.loading = false;
             }
+        },
+
+        async executeConsolidation() {
+            if (!this.consolidation.preparationData) return;
+            
+            this.consolidation.loading = true;
+            try {
+                const response = await fetch('/api/onboarding/admin/execute-consolidation', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...this.getAuthHeaders()
+                    },
+                    body: JSON.stringify({
+                        txId: this.consolidation.preparationData.txId,
+                        cryptoType: this.consolidation.preparationData.cryptoType,
+                        destinationAddress: this.consolidation.preparationData.destinationAddress,
+                        priority: this.consolidation.preparationData.priority
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                this.consolidation.executed = true;
+                this.consolidation.executionResult = data.result;
+                this.success = `Consolidation completed! Transaction hash: ${data.result.blockchainTxHash}`;
+                
+                // Reload addresses to reflect changes
+                this.loadAddresses();
+                this.loadStatistics();
+            } catch (error) {
+                this.error = `Failed to execute consolidation: ${error.message}`;
+                console.error('Error executing consolidation:', error);
+            } finally {
+                this.consolidation.loading = false;
+            }
+        },
+
+        resetConsolidation() {
+            this.consolidation.preparationData = null;
+            this.consolidation.executed = false;
+            this.consolidation.executionResult = null;
+            this.consolidation.destinationAddress = '';
         },
 
         getStatusBadgeClass(status) {

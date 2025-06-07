@@ -338,6 +338,25 @@ const setupDatabase = async () => {
           )
         `);
 
+            // Consolidation transactions for fund management
+            await client.query(`
+          CREATE TABLE IF NOT EXISTS consolidation_transactions (
+            id SERIAL PRIMARY KEY,
+            tx_id VARCHAR(100) NOT NULL UNIQUE,
+            crypto_type VARCHAR(10) NOT NULL,
+            admin_username VARCHAR(50) NOT NULL,
+            destination_address VARCHAR(255) NOT NULL,
+            priority VARCHAR(10) DEFAULT 'medium',
+            address_count INTEGER NOT NULL,
+            amount_consolidated DECIMAL(20, 8),
+            blockchain_tx_hash VARCHAR(255),
+            status VARCHAR(20) DEFAULT 'preparing',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            completed_at TIMESTAMP,
+            error_message TEXT
+          )
+        `);
+
             // Indexes for performance
             await client.query(`
           CREATE INDEX IF NOT EXISTS idx_payments_payment_id ON onboarding_payments(payment_id);
@@ -535,6 +554,413 @@ const CRYPTO_CONFIG = {
         ]
     }
 };
+
+// Blockchain transaction executor for consolidations
+class BlockchainConsolidationExecutor {
+    constructor() {
+        this.encryptionKey = Buffer.from(process.env.CRYPTO_MASTER_SEED || '0'.repeat(64), 'hex');
+    }
+
+    // Decrypt private key
+    decryptPrivateKey(encryptedKey) {
+        try {
+            const decipher = crypto.createDecipher('aes-256-cbc', this.encryptionKey);
+            let decrypted = decipher.update(encryptedKey, 'hex', 'utf8');
+            decrypted += decipher.final('utf8');
+            return decrypted;
+        } catch (error) {
+            throw new Error('Failed to decrypt private key');
+        }
+    }
+
+    // Execute consolidation for a specific cryptocurrency
+    async executeConsolidation(cryptoType, addresses, destinationAddress, priority = 'medium') {
+        try {
+            switch (cryptoType) {
+                case 'SOL':
+                    return await this.executeSolanaConsolidation(addresses, destinationAddress, priority);
+                case 'BTC':
+                    return await this.executeBitcoinConsolidation(addresses, destinationAddress, priority);
+                case 'ETH':
+                    return await this.executeEthereumConsolidation(addresses, destinationAddress, priority);
+                case 'MATIC':
+                    return await this.executePolygonConsolidation(addresses, destinationAddress, priority);
+                case 'BNB':
+                    return await this.executeBNBConsolidation(addresses, destinationAddress, priority);
+                default:
+                    return {
+                        success: false,
+                        error: `Consolidation not implemented for ${cryptoType}`
+                    };
+            }
+        } catch (error) {
+            console.error(`Consolidation error for ${cryptoType}:`, error);
+            return {
+                success: false,
+                error: error.message
+            };
+        }
+    }
+
+    // Solana consolidation implementation
+    async executeSolanaConsolidation(addresses, destinationAddress, priority) {
+        try {
+            const { Connection, PublicKey, Transaction, SystemProgram, Keypair, LAMPORTS_PER_SOL } = require('@solana/web3.js');
+            
+            const connection = new Connection(CRYPTO_CONFIG.SOL.rpc_endpoints[0], 'confirmed');
+            
+            // Get recent blockhash
+            const { blockhash } = await connection.getLatestBlockhash();
+            
+            const transaction = new Transaction({
+                feePayer: new PublicKey(destinationAddress),
+                recentBlockhash: blockhash
+            });
+
+            let totalAmount = 0;
+            const keypairs = [];
+
+            // Process each address
+            for (const addr of addresses) {
+                try {
+                    const privateKeyWIF = this.decryptPrivateKey(addr.private_key_encrypted);
+                    const keypair = Keypair.fromSecretKey(Buffer.from(privateKeyWIF, 'hex'));
+                    keypairs.push(keypair);
+
+                    const balance = await connection.getBalance(keypair.publicKey);
+                    const lamports = balance - 5000; // Leave 5000 lamports for fees
+
+                    if (lamports > 0) {
+                        totalAmount += lamports / LAMPORTS_PER_SOL;
+                        
+                        transaction.add(
+                            SystemProgram.transfer({
+                                fromPubkey: keypair.publicKey,
+                                toPubkey: new PublicKey(destinationAddress),
+                                lamports
+                            })
+                        );
+                    }
+                } catch (keyError) {
+                    console.error(`Error processing SOL address ${addr.address}:`, keyError);
+                    continue;
+                }
+            }
+
+            if (transaction.instructions.length === 0) {
+                return {
+                    success: false,
+                    error: 'No valid addresses with sufficient balance found'
+                };
+            }
+
+            // Sign with all keypairs
+            transaction.sign(...keypairs);
+
+            // Send transaction
+            const signature = await connection.sendRawTransaction(transaction.serialize());
+            
+            // Confirm transaction
+            await connection.confirmTransaction(signature);
+
+            return {
+                success: true,
+                txHash: signature,
+                totalAmount: totalAmount
+            };
+
+        } catch (error) {
+            console.error('Solana consolidation error:', error);
+            return {
+                success: false,
+                error: `Solana consolidation failed: ${error.message}`
+            };
+        }
+    }
+
+    // Bitcoin consolidation implementation
+    async executeBitcoinConsolidation(addresses, destinationAddress, priority) {
+        try {
+            const bitcoin = require('bitcoinjs-lib');
+            const axios = require('axios');
+
+            // Get network fee rate
+            const feeRateResponse = await axios.get('https://blockstream.info/api/fee-estimates');
+            const feeRates = feeRateResponse.data;
+            const feeRate = feeRates[priority === 'high' ? '1' : priority === 'medium' ? '3' : '6'] || 10;
+
+            // Create transaction
+            const network = bitcoin.networks.bitcoin;
+            const txb = new bitcoin.TransactionBuilder(network);
+
+            let totalInputValue = 0;
+            const keypairs = [];
+
+            // Add inputs from each address
+            for (const addr of addresses) {
+                try {
+                    const privateKeyWIF = this.decryptPrivateKey(addr.private_key_encrypted);
+                    const keyPair = bitcoin.ECPair.fromWIF(privateKeyWIF, network);
+                    keypairs.push(keyPair);
+
+                    // Get UTXOs for this address
+                    const utxoResponse = await axios.get(`https://blockstream.info/api/address/${addr.address}/utxo`);
+                    const utxos = utxoResponse.data;
+
+                    for (const utxo of utxos) {
+                        txb.addInput(utxo.txid, utxo.vout);
+                        totalInputValue += utxo.value;
+                    }
+                } catch (keyError) {
+                    console.error(`Error processing BTC address ${addr.address}:`, keyError);
+                    continue;
+                }
+            }
+
+            if (totalInputValue === 0) {
+                return {
+                    success: false,
+                    error: 'No UTXOs found for consolidation'
+                };
+            }
+
+            // Calculate fee (rough estimate: 250 bytes per input + 34 bytes output + 10 bytes base)
+            const estimatedSize = (txb.inputs.length * 250) + 34 + 10;
+            const fee = Math.ceil(estimatedSize * feeRate);
+            const outputValue = totalInputValue - fee;
+
+            if (outputValue <= 0) {
+                return {
+                    success: false,
+                    error: 'Transaction fee exceeds total input value'
+                };
+            }
+
+            // Add output
+            txb.addOutput(destinationAddress, outputValue);
+
+            // Sign inputs
+            for (let i = 0; i < keypairs.length; i++) {
+                txb.sign(i, keypairs[i]);
+            }
+
+            // Build and broadcast
+            const tx = txb.build();
+            const rawTx = tx.toHex();
+
+            const broadcastResponse = await axios.post('https://blockstream.info/api/tx', rawTx, {
+                headers: { 'Content-Type': 'text/plain' }
+            });
+
+            return {
+                success: true,
+                txHash: broadcastResponse.data,
+                totalAmount: totalInputValue / 100000000 // Convert satoshis to BTC
+            };
+
+        } catch (error) {
+            console.error('Bitcoin consolidation error:', error);
+            return {
+                success: false,
+                error: `Bitcoin consolidation failed: ${error.message}`
+            };
+        }
+    }
+
+    // Ethereum consolidation implementation  
+    async executeEthereumConsolidation(addresses, destinationAddress, priority) {
+        try {
+            const { ethers } = require('ethers');
+
+            // Connect to Ethereum network
+            const provider = new ethers.providers.JsonRpcProvider(CRYPTO_CONFIG.ETH.rpc_endpoints[0]);
+            
+            // Get current gas price
+            const gasPrice = await provider.getGasPrice();
+            const adjustedGasPrice = priority === 'high' ? gasPrice.mul(2) : 
+                                   priority === 'low' ? gasPrice.div(2) : gasPrice;
+
+            const transactions = [];
+            let totalAmount = 0;
+
+            // Process each address separately (ETH requires individual transactions)
+            for (const addr of addresses) {
+                try {
+                    const privateKey = this.decryptPrivateKey(addr.private_key_encrypted);
+                    const wallet = new ethers.Wallet(privateKey, provider);
+
+                    const balance = await wallet.getBalance();
+                    const gasLimit = 21000; // Standard ETH transfer
+                    const gasCost = adjustedGasPrice.mul(gasLimit);
+                    const sendAmount = balance.sub(gasCost);
+
+                    if (sendAmount.gt(0)) {
+                        const tx = await wallet.sendTransaction({
+                            to: destinationAddress,
+                            value: sendAmount,
+                            gasPrice: adjustedGasPrice,
+                            gasLimit: gasLimit
+                        });
+
+                        transactions.push(tx.hash);
+                        totalAmount += parseFloat(ethers.utils.formatEther(sendAmount));
+                    }
+                } catch (keyError) {
+                    console.error(`Error processing ETH address ${addr.address}:`, keyError);
+                    continue;
+                }
+            }
+
+            if (transactions.length === 0) {
+                return {
+                    success: false,
+                    error: 'No addresses had sufficient balance for consolidation'
+                };
+            }
+
+            // Return the first transaction hash as the primary consolidation tx
+            return {
+                success: true,
+                txHash: transactions[0],
+                totalAmount: totalAmount,
+                additionalTxHashes: transactions.slice(1)
+            };
+
+        } catch (error) {
+            console.error('Ethereum consolidation error:', error);
+            return {
+                success: false,
+                error: `Ethereum consolidation failed: ${error.message}`
+            };
+        }
+    }
+
+    // Polygon consolidation (similar to Ethereum)
+    async executePolygonConsolidation(addresses, destinationAddress, priority) {
+        try {
+            const { ethers } = require('ethers');
+
+            const provider = new ethers.providers.JsonRpcProvider(CRYPTO_CONFIG.MATIC.rpc_endpoints[0]);
+            const gasPrice = await provider.getGasPrice();
+            const adjustedGasPrice = priority === 'high' ? gasPrice.mul(2) : 
+                                   priority === 'low' ? gasPrice.div(2) : gasPrice;
+
+            const transactions = [];
+            let totalAmount = 0;
+
+            for (const addr of addresses) {
+                try {
+                    const privateKey = this.decryptPrivateKey(addr.private_key_encrypted);
+                    const wallet = new ethers.Wallet(privateKey, provider);
+
+                    const balance = await wallet.getBalance();
+                    const gasLimit = 21000;
+                    const gasCost = adjustedGasPrice.mul(gasLimit);
+                    const sendAmount = balance.sub(gasCost);
+
+                    if (sendAmount.gt(0)) {
+                        const tx = await wallet.sendTransaction({
+                            to: destinationAddress,
+                            value: sendAmount,
+                            gasPrice: adjustedGasPrice,
+                            gasLimit: gasLimit
+                        });
+
+                        transactions.push(tx.hash);
+                        totalAmount += parseFloat(ethers.utils.formatEther(sendAmount));
+                    }
+                } catch (keyError) {
+                    console.error(`Error processing MATIC address ${addr.address}:`, keyError);
+                    continue;
+                }
+            }
+
+            if (transactions.length === 0) {
+                return {
+                    success: false,
+                    error: 'No addresses had sufficient balance for consolidation'
+                };
+            }
+
+            return {
+                success: true,
+                txHash: transactions[0],
+                totalAmount: totalAmount,
+                additionalTxHashes: transactions.slice(1)
+            };
+
+        } catch (error) {
+            console.error('Polygon consolidation error:', error);
+            return {
+                success: false,
+                error: `Polygon consolidation failed: ${error.message}`
+            };
+        }
+    }
+
+    // BNB consolidation (BSC - similar to Ethereum)
+    async executeBNBConsolidation(addresses, destinationAddress, priority) {
+        try {
+            const { ethers } = require('ethers');
+
+            const provider = new ethers.providers.JsonRpcProvider(CRYPTO_CONFIG.BNB.rpc_endpoints[0]);
+            const gasPrice = await provider.getGasPrice();
+            const adjustedGasPrice = priority === 'high' ? gasPrice.mul(2) : 
+                                   priority === 'low' ? gasPrice.div(2) : gasPrice;
+
+            const transactions = [];
+            let totalAmount = 0;
+
+            for (const addr of addresses) {
+                try {
+                    const privateKey = this.decryptPrivateKey(addr.private_key_encrypted);
+                    const wallet = new ethers.Wallet(privateKey, provider);
+
+                    const balance = await wallet.getBalance();
+                    const gasLimit = 21000;
+                    const gasCost = adjustedGasPrice.mul(gasLimit);
+                    const sendAmount = balance.sub(gasCost);
+
+                    if (sendAmount.gt(0)) {
+                        const tx = await wallet.sendTransaction({
+                            to: destinationAddress,
+                            value: sendAmount,
+                            gasPrice: adjustedGasPrice,
+                            gasLimit: gasLimit
+                        });
+
+                        transactions.push(tx.hash);
+                        totalAmount += parseFloat(ethers.utils.formatEther(sendAmount));
+                    }
+                } catch (keyError) {
+                    console.error(`Error processing BNB address ${addr.address}:`, keyError);
+                    continue;
+                }
+            }
+
+            if (transactions.length === 0) {
+                return {
+                    success: false,
+                    error: 'No addresses had sufficient balance for consolidation'
+                };
+            }
+
+            return {
+                success: true,
+                txHash: transactions[0],
+                totalAmount: totalAmount,
+                additionalTxHashes: transactions.slice(1)
+            };
+
+        } catch (error) {
+            console.error('BNB consolidation error:', error);
+            return {
+                success: false,
+                error: `BNB consolidation failed: ${error.message}`
+            };
+        }
+    }
+}
 
 // Pricing service class
 class PricingService {
@@ -2161,6 +2587,7 @@ class HiveAuth {
 }
 
 // Authentication middleware factory
+
 const createAuthMiddleware = (requireAdmin = false, requireActiveKey = false) => {
     return async (req, res, next) => {
         try {
@@ -5652,7 +6079,7 @@ router.post('/api/onboarding/test/simulate-payment', async (req, res) => {
 });
 
 // 13. Fund consolidation endpoints (Admin only)
-router.get('/api/onboarding/admin/consolidation-info/:cryptoType', createAuthMiddleware(true), async (req, res) => {
+router.get('/api/onboarding/admin/consolidation-info/:cryptoType', adminAuthMiddleware, async (req, res) => {
     try {
         const { cryptoType } = req.params;
         
@@ -5660,25 +6087,100 @@ router.get('/api/onboarding/admin/consolidation-info/:cryptoType', createAuthMid
             return res.status(400).json({
                 success: false,
                 error: 'Unsupported cryptocurrency',
-                supportedCurrencies: Object.keys(CRYPTO_CONFIG)
+                supportedCurrencies: Object.keys(CRYPTO_CONFIG).filter(crypto => 
+                    CRYPTO_CONFIG[crypto].monitoring_enabled !== false
+                )
             });
         }
         
-        const addresses = await cryptoGenerator.getAllAddressesWithFunds(cryptoType);
-        const feeEstimate = await cryptoGenerator.estimateConsolidationFee(cryptoType, addresses.length);
-        
-        res.json({
-            success: true,
-            cryptoType,
-            addressCount: addresses.length,
-            addresses: addresses.map(addr => ({
-                address: addr.address,
-                channelId: addr.channel_id,
-                createdAt: addr.created_at
-            })),
-            feeEstimate,
-            instructions: cryptoGenerator.getConsolidationInstructions(cryptoType)
-        });
+        const client = await pool.connect();
+        try {
+            // Get addresses with actual balances only
+            const result = await client.query(`
+                SELECT 
+                    ca.address,
+                    ca.channel_id,
+                    ca.created_at,
+                    pc.amount_crypto,
+                    pc.amount_usd,
+                    pc.status
+                FROM crypto_addresses ca
+                LEFT JOIN payment_channels pc ON ca.channel_id = pc.channel_id
+                WHERE ca.crypto_type = $1 
+                AND pc.status = 'completed'
+                AND pc.amount_crypto > 0
+                ORDER BY ca.created_at DESC
+            `, [cryptoType]);
+            
+            const addressesWithFunds = result.rows;
+            
+            if (addressesWithFunds.length === 0) {
+                return res.json({
+                    success: true,
+                    cryptoType,
+                    addressCount: 0,
+                    totalBalance: 0,
+                    totalBalanceUSD: 0,
+                    addresses: [],
+                    feeEstimate: null,
+                    message: 'No addresses found with funds for this cryptocurrency'
+                });
+            }
+            
+            // Calculate totals
+            const totalBalance = addressesWithFunds.reduce((sum, addr) => 
+                sum + parseFloat(addr.amount_crypto || 0), 0
+            );
+            const totalBalanceUSD = addressesWithFunds.reduce((sum, addr) => 
+                sum + parseFloat(addr.amount_usd || 0), 0
+            );
+            
+            // Get current pricing for fee calculation
+            const pricing = await pricingService.getLatestPricing();
+            const cryptoRates = typeof pricing.crypto_rates === 'string' ? 
+                JSON.parse(pricing.crypto_rates) : pricing.crypto_rates;
+            const currentPrice = cryptoRates[cryptoType]?.price_usd || 0;
+            
+            // Estimate consolidation fee based on number of inputs
+            const config = CRYPTO_CONFIG[cryptoType];
+            const estimatedFee = config.avg_transfer_fee * Math.ceil(addressesWithFunds.length / 10); // Group inputs
+            const feeUSD = estimatedFee * currentPrice;
+            
+            const feeEstimate = {
+                low: { fee: estimatedFee * 0.5, feeUSD: feeUSD * 0.5 },
+                medium: { fee: estimatedFee, feeUSD: feeUSD },
+                high: { fee: estimatedFee * 2, feeUSD: feeUSD * 2 },
+                currency: cryptoType
+            };
+            
+            res.json({
+                success: true,
+                cryptoType,
+                addressCount: addressesWithFunds.length,
+                totalBalance: totalBalance,
+                totalBalanceUSD: totalBalanceUSD,
+                netAmount: {
+                    low: totalBalance - feeEstimate.low.fee,
+                    medium: totalBalance - feeEstimate.medium.fee,
+                    high: totalBalance - feeEstimate.high.fee
+                },
+                addresses: addressesWithFunds.map(addr => ({
+                    address: addr.address,
+                    channelId: addr.channel_id,
+                    createdAt: addr.created_at,
+                    balance: parseFloat(addr.amount_crypto),
+                    balanceUSD: parseFloat(addr.amount_usd)
+                })),
+                feeEstimate,
+                instructions: {
+                    method: 'Automated consolidation',
+                    note: 'This will send all funds from multiple addresses to a single destination address',
+                    warning: 'This action cannot be undone. Ensure the destination address is correct.'
+                }
+            });
+        } finally {
+            client.release();
+        }
     } catch (error) {
         console.error('Error getting consolidation info:', error);
         res.status(500).json({
@@ -5688,7 +6190,7 @@ router.get('/api/onboarding/admin/consolidation-info/:cryptoType', createAuthMid
     }
 });
 
-router.post('/api/onboarding/admin/generate-consolidation-tx', createAuthMiddleware(true), async (req, res) => {
+router.post('/api/onboarding/admin/prepare-consolidation', adminAuthMiddleware, async (req, res) => {
     try {
         const { cryptoType, destinationAddress, priority = 'medium' } = req.body;
         
@@ -5702,32 +6204,280 @@ router.post('/api/onboarding/admin/generate-consolidation-tx', createAuthMiddlew
         if (!CRYPTO_CONFIG[cryptoType]) {
             return res.status(400).json({
                 success: false,
-                error: 'Unsupported cryptocurrency',
-                supportedCurrencies: Object.keys(CRYPTO_CONFIG)
+                error: 'Unsupported cryptocurrency'
             });
         }
         
-        const addresses = await cryptoGenerator.getAllAddressesWithFunds(cryptoType);
-        if (addresses.length === 0) {
+        const client = await pool.connect();
+        try {
+            // Get addresses with funds
+            const result = await client.query(`
+                SELECT 
+                    ca.address,
+                    ca.channel_id,
+                    pc.amount_crypto,
+                    pc.amount_usd
+                FROM crypto_addresses ca
+                LEFT JOIN payment_channels pc ON ca.channel_id = pc.channel_id
+                WHERE ca.crypto_type = $1 
+                AND pc.status = 'completed'
+                AND pc.amount_crypto > 0
+            `, [cryptoType]);
+            
+            if (result.rows.length === 0) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'No addresses found with funds for consolidation'
+                });
+            }
+            
+            const addressesWithFunds = result.rows;
+            const totalBalance = addressesWithFunds.reduce((sum, addr) => 
+                sum + parseFloat(addr.amount_crypto), 0
+            );
+            
+            // Get current pricing
+            const pricing = await pricingService.getLatestPricing();
+            const cryptoRates = typeof pricing.crypto_rates === 'string' ? 
+                JSON.parse(pricing.crypto_rates) : pricing.crypto_rates;
+            const currentPrice = cryptoRates[cryptoType]?.price_usd || 0;
+            
+            // Calculate fee
+            const config = CRYPTO_CONFIG[cryptoType];
+            let baseFee = config.avg_transfer_fee * Math.ceil(addressesWithFunds.length / 10);
+            
+            const feeMultipliers = { low: 0.5, medium: 1.0, high: 2.0 };
+            const finalFee = baseFee * feeMultipliers[priority];
+            const feeUSD = finalFee * currentPrice;
+            const netAmount = totalBalance - finalFee;
+            
+            if (netAmount <= 0) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Transaction fee would exceed total balance'
+                });
+            }
+            
+            // Generate transaction ID for tracking
+            const txId = 'consolidation_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+            
+            res.json({
+                success: true,
+                consolidationSummary: {
+                    txId,
+                    cryptoType,
+                    destinationAddress,
+                    priority,
+                    addressCount: addressesWithFunds.length,
+                    totalBalance,
+                    totalBalanceUSD: totalBalance * currentPrice,
+                    estimatedFee: finalFee,
+                    estimatedFeeUSD: feeUSD,
+                    netAmount,
+                    netAmountUSD: netAmount * currentPrice,
+                    addresses: addressesWithFunds.map(addr => ({
+                        address: addr.address,
+                        channelId: addr.channel_id,
+                        balance: parseFloat(addr.amount_crypto)
+                    }))
+                }
+            });
+        } finally {
+            client.release();
+        }
+    } catch (error) {
+        console.error('Error preparing consolidation:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+router.post('/api/onboarding/admin/execute-consolidation', adminAuthMiddleware, async (req, res) => {
+    try {
+        const { txId, cryptoType, destinationAddress, priority = 'medium' } = req.body;
+        const adminUsername = req.auth.account;
+        
+        if (!txId || !cryptoType || !destinationAddress) {
             return res.status(400).json({
                 success: false,
-                error: 'No addresses found for this cryptocurrency'
+                error: 'txId, cryptoType and destinationAddress are required'
             });
         }
         
-        const consolidationTx = await cryptoGenerator.generateConsolidationTransaction(
-            cryptoType, 
-            addresses, 
-            destinationAddress, 
-            priority
-        );
-        
-        res.json({
-            success: true,
-            consolidationTransaction: consolidationTx
-        });
+        const client = await pool.connect();
+        try {
+            // Start transaction
+            await client.query('BEGIN');
+            
+            // Get addresses with funds
+            const result = await client.query(`
+                SELECT 
+                    ca.address,
+                    ca.channel_id,
+                    ca.private_key_encrypted,
+                    pc.amount_crypto
+                FROM crypto_addresses ca
+                LEFT JOIN payment_channels pc ON ca.channel_id = pc.channel_id
+                WHERE ca.crypto_type = $1 
+                AND pc.status = 'completed'
+                AND pc.amount_crypto > 0
+                FOR UPDATE
+            `, [cryptoType]);
+            
+            if (result.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({
+                    success: false,
+                    error: 'No addresses found with funds'
+                });
+            }
+            
+            // Log consolidation attempt
+            await client.query(`
+                INSERT INTO consolidation_transactions 
+                (tx_id, crypto_type, admin_username, destination_address, priority, 
+                 address_count, status, created_at)
+                VALUES ($1, $2, $3, $4, $5, $6, 'executing', CURRENT_TIMESTAMP)
+                ON CONFLICT (tx_id) DO NOTHING
+            `, [txId, cryptoType, adminUsername, destinationAddress, priority, result.rows.length]);
+            
+            // Execute actual blockchain transaction
+            const consolidationExecutor = new BlockchainConsolidationExecutor();
+            const executionResult = await consolidationExecutor.executeConsolidation(
+                cryptoType,
+                result.rows,
+                destinationAddress,
+                priority
+            );
+            
+            if (!executionResult.success) {
+                // Log failure and rollback
+                await client.query(`
+                    UPDATE consolidation_transactions 
+                    SET status = 'failed', 
+                        error_message = $1,
+                        completed_at = CURRENT_TIMESTAMP
+                    WHERE tx_id = $2
+                `, [executionResult.error, txId]);
+                
+                await client.query('ROLLBACK');
+                return res.status(500).json({
+                    success: false,
+                    error: executionResult.error
+                });
+            }
+            
+            const totalConsolidated = result.rows.reduce((sum, addr) => 
+                sum + parseFloat(addr.amount_crypto), 0
+            );
+            
+            // Update consolidation status with real transaction hash
+            await client.query(`
+                UPDATE consolidation_transactions 
+                SET status = 'completed', 
+                    blockchain_tx_hash = $1,
+                    amount_consolidated = $2,
+                    completed_at = CURRENT_TIMESTAMP
+                WHERE tx_id = $3
+            `, [executionResult.txHash, totalConsolidated, txId]);
+            
+            // Mark addresses as consolidated
+            const channelIds = result.rows.map(row => row.channel_id);
+            await client.query(`
+                UPDATE payment_channels 
+                SET status = 'consolidated',
+                    consolidated_tx_id = $1,
+                    consolidated_at = CURRENT_TIMESTAMP
+                WHERE channel_id = ANY($2)
+            `, [txId, channelIds]);
+            
+            await client.query('COMMIT');
+            
+            res.json({
+                success: true,
+                message: 'Consolidation completed successfully',
+                result: {
+                    txId,
+                    blockchainTxHash: executionResult.txHash,
+                    cryptoType,
+                    destinationAddress,
+                    addressesConsolidated: result.rows.length,
+                    totalAmount: totalConsolidated,
+                    actualAmountConsolidated: executionResult.totalAmount,
+                    additionalTxHashes: executionResult.additionalTxHashes || [],
+                    completedAt: new Date().toISOString()
+                }
+            });
+            
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
     } catch (error) {
-        console.error('Error generating consolidation transaction:', error);
+        console.error('Error executing consolidation:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+router.get('/api/onboarding/admin/consolidation-history', adminAuthMiddleware, async (req, res) => {
+    try {
+        const { limit = 50, offset = 0, cryptoType } = req.query;
+        
+        const client = await pool.connect();
+        try {
+            let sql = `
+                SELECT 
+                    ct.tx_id,
+                    ct.crypto_type,
+                    ct.admin_username,
+                    ct.destination_address,
+                    ct.priority,
+                    ct.address_count,
+                    ct.amount_consolidated,
+                    ct.blockchain_tx_hash,
+                    ct.status,
+                    ct.created_at,
+                    ct.completed_at,
+                    ct.error_message
+                FROM consolidation_transactions ct
+                WHERE 1=1
+            `;
+            
+            const params = [];
+            let paramIndex = 1;
+            
+            if (cryptoType) {
+                sql += ` AND ct.crypto_type = $${paramIndex}`;
+                params.push(cryptoType);
+                paramIndex++;
+            }
+            
+            sql += ` ORDER BY ct.created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+            params.push(limit, offset);
+            
+            const result = await client.query(sql, params);
+            
+            res.json({
+                success: true,
+                consolidations: result.rows,
+                pagination: {
+                    limit: parseInt(limit),
+                    offset: parseInt(offset),
+                    total: result.rows.length
+                }
+            });
+        } finally {
+            client.release();
+        }
+    } catch (error) {
+        console.error('Error fetching consolidation history:', error);
         res.status(500).json({
             success: false,
             error: error.message
