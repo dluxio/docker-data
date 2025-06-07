@@ -6950,6 +6950,64 @@ if (require.main === module) {
     });
 } 
 
+// Admin endpoint to fix database constraint
+router.post('/api/onboarding/admin/fix-database-constraint', adminAuthMiddleware, async (req, res) => {
+    try {
+        const client = await pool.connect();
+        try {
+            // First, check if constraint already exists
+            const constraintCheck = await client.query(`
+                SELECT constraint_name 
+                FROM information_schema.table_constraints 
+                WHERE table_name = 'payment_confirmations' 
+                AND constraint_type = 'UNIQUE'
+                AND constraint_name LIKE '%channel_id%'
+            `);
+
+            if (constraintCheck.rows.length > 0) {
+                return res.json({
+                    success: true,
+                    message: 'Constraint already exists',
+                    constraint: constraintCheck.rows[0].constraint_name
+                });
+            }
+
+            // Add the unique constraint
+            await client.query(`
+                ALTER TABLE payment_confirmations 
+                ADD CONSTRAINT payment_confirmations_channel_tx_unique 
+                UNIQUE (channel_id, tx_hash)
+            `);
+
+            res.json({
+                success: true,
+                message: 'Database constraint added successfully',
+                constraint: 'payment_confirmations_channel_tx_unique'
+            });
+
+        } finally {
+            client.release();
+        }
+    } catch (error) {
+        console.error('Error fixing database constraint:', error);
+        
+        // If constraint already exists in a different way, that's okay
+        if (error.message.includes('already exists')) {
+            return res.json({
+                success: true,
+                message: 'Constraint already exists (different name)',
+                note: 'The constraint may exist with a different name'
+            });
+        }
+        
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fix database constraint',
+            details: error.message
+        });
+    }
+});
+
 // Test endpoint to validate database and monitoring fixes
 router.get('/api/onboarding/test/fixes-validation', async (req, res) => {
     try {
