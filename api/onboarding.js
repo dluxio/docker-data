@@ -39,7 +39,7 @@ const validationSchemas = {
     }).required(),
     
     cryptoType: Joi.string()
-        .valid('BTC', 'SOL', 'ETH', 'MATIC', 'BNB', 'XMR', 'DASH')
+        .valid('BTC', 'SOL', 'ETH', 'MATIC', 'BNB')
         .required(),
     
     message: Joi.string()
@@ -230,7 +230,8 @@ const setupDatabase = async () => {
             confirmations INTEGER DEFAULT 0,
             amount_received DECIMAL(20,8),
             detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            processed_at TIMESTAMP
+            processed_at TIMESTAMP,
+            UNIQUE(channel_id, tx_hash)
           )
         `);
 
@@ -509,6 +510,7 @@ const CRYPTO_CONFIG = {
         memo_support: false, // Using unique addresses instead
         memo_type: null,
         memo_max_length: 0,
+        monitoring_enabled: false, // Disabled - not supported by ethscan API
         rpc_endpoints: [
             'https://xmr-node.cakewallet.com:18081',
             'https://node.community.rino.io:18081'
@@ -526,6 +528,7 @@ const CRYPTO_CONFIG = {
         memo_support: false, // Using unique addresses instead
         memo_type: null,
         memo_max_length: 0,
+        monitoring_enabled: false, // Disabled - not supported by ethscan API
         rpc_endpoints: [
             'https://dashgoldrpc.com',
             'https://electrum.dash.org:51002'
@@ -2656,7 +2659,9 @@ router.get('/api/onboarding/pricing', async (req, res) => {
                 base_cost_usd: baseCost,
                 crypto_rates: cryptoRates, // Each crypto now has its own final_cost_usd
                 transfer_costs: transferCosts,
-                supported_currencies: Object.keys(CRYPTO_CONFIG)
+                supported_currencies: Object.keys(CRYPTO_CONFIG).filter(crypto => 
+                    CRYPTO_CONFIG[crypto].monitoring_enabled !== false
+                )
             }
         });
     } catch (error) {
@@ -2681,7 +2686,9 @@ router.get('/api/onboarding/pricing', async (req, res) => {
                     MATIC: { avg_fee_crypto: 0.01, avg_fee_usd: 0.008, network_congestion: 'normal' },
                     BNB: { avg_fee_crypto: 0.0005, avg_fee_usd: 0.15, network_congestion: 'normal' }
                 },
-                supported_currencies: Object.keys(CRYPTO_CONFIG)
+                supported_currencies: Object.keys(CRYPTO_CONFIG).filter(crypto => 
+                    CRYPTO_CONFIG[crypto].monitoring_enabled !== false
+                )
             }
         });
     }
@@ -5263,6 +5270,82 @@ router.get('/api/onboarding/test/system-integration', async (req, res) => {
     }
 });
 
+// Test endpoint to manually check SOL payment detection
+router.get('/api/onboarding/test/check-sol-payment/:channelId', async (req, res) => {
+    try {
+        const { channelId } = req.params;
+        
+        const client = await pool.connect();
+        try {
+            // Get channel details
+            const result = await client.query(
+                'SELECT * FROM payment_channels WHERE channel_id = $1',
+                [channelId]
+            );
+
+            if (result.rows.length === 0) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Payment channel not found'
+                });
+            }
+
+            const channel = result.rows[0];
+            
+            if (channel.crypto_type !== 'SOL') {
+                return res.status(400).json({
+                    success: false,
+                    error: 'This endpoint is only for SOL payments'
+                });
+            }
+
+            // Check for transactions manually
+            const transactions = await blockchainMonitor.getAddressTransactions(
+                'SOL',
+                channel.payment_address,
+                channel.created_at
+            );
+
+            console.log(`Manual SOL check for channel ${channelId}: found ${transactions.length} transactions`);
+
+            // If transactions found, process them
+            let processedTx = null;
+            for (const tx of transactions) {
+                const network = blockchainMonitor.networks.get('SOL');
+                const isMatch = await blockchainMonitor.verifyTransactionMatch(channel, tx, network);
+                
+                if (isMatch) {
+                    await blockchainMonitor.processPaymentFound(channel, tx);
+                    processedTx = tx;
+                    break;
+                }
+            }
+
+            res.json({
+                success: true,
+                channelId,
+                address: channel.payment_address,
+                expected_amount: channel.amount_crypto,
+                transactions_found: transactions.length,
+                transactions: transactions,
+                processed_payment: processedTx,
+                message: processedTx ? 'Payment found and processed!' : 'No matching payment found'
+            });
+
+        } finally {
+            client.release();
+        }
+
+    } catch (error) {
+        console.error('Error checking SOL payment:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to check SOL payment',
+            details: error.message
+        });
+    }
+});
+
 // Test endpoint for blockchain monitoring status
 router.get('/api/onboarding/test/blockchain-monitoring', async (req, res) => {
     try {
@@ -6866,3 +6949,104 @@ if (require.main === module) {
         }, 10 * 60 * 1000); // Every 10 minutes
     });
 } 
+
+// Test endpoint to validate database and monitoring fixes
+router.get('/api/onboarding/test/fixes-validation', async (req, res) => {
+    try {
+        const results = {
+            timestamp: new Date().toISOString(),
+            fixes: {
+                database_constraint: null,
+                monitoring_config: null,
+                supported_currencies: null
+            }
+        };
+
+        // 1. Test database constraint fix
+        try {
+            const client = await pool.connect();
+            try {
+                // Try to insert a test record to see if constraint exists
+                const testChannelId = 'test_constraint_' + Date.now();
+                const testTxHash = 'test_tx_' + Date.now();
+                
+                await client.query(`
+                    INSERT INTO payment_confirmations 
+                    (channel_id, tx_hash, block_height, confirmations, amount_received, detected_at)
+                    VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+                    ON CONFLICT (channel_id, tx_hash) DO UPDATE SET
+                    confirmations = EXCLUDED.confirmations,
+                    processed_at = CURRENT_TIMESTAMP
+                `, [testChannelId, testTxHash, 1000, 1, 0.001]);
+                
+                // Clean up test record
+                await client.query(`DELETE FROM payment_confirmations WHERE channel_id = $1`, [testChannelId]);
+                
+                results.fixes.database_constraint = {
+                    status: 'fixed',
+                    message: 'Database constraint exists and ON CONFLICT works properly'
+                };
+            } finally {
+                client.release();
+            }
+        } catch (error) {
+            results.fixes.database_constraint = {
+                status: 'error',
+                message: `Database constraint issue: ${error.message}`
+            };
+        }
+
+        // 2. Test monitoring configuration
+        try {
+            const enabledCryptos = Object.keys(CRYPTO_CONFIG).filter(crypto => 
+                CRYPTO_CONFIG[crypto].monitoring_enabled !== false
+            );
+            const disabledCryptos = Object.keys(CRYPTO_CONFIG).filter(crypto => 
+                CRYPTO_CONFIG[crypto].monitoring_enabled === false
+            );
+            
+            results.fixes.monitoring_config = {
+                status: 'configured',
+                enabled_networks: enabledCryptos,
+                disabled_networks: disabledCryptos,
+                message: `DASH and XMR monitoring disabled as requested`
+            };
+        } catch (error) {
+            results.fixes.monitoring_config = {
+                status: 'error',
+                message: `Monitoring config error: ${error.message}`
+            };
+        }
+
+        // 3. Test supported currencies filter
+        try {
+            const supportedCurrencies = Object.keys(CRYPTO_CONFIG).filter(crypto => 
+                CRYPTO_CONFIG[crypto].monitoring_enabled !== false
+            );
+            
+            results.fixes.supported_currencies = {
+                status: 'updated',
+                currencies: supportedCurrencies,
+                message: `Only monitoring-enabled currencies are returned to users`
+            };
+        } catch (error) {
+            results.fixes.supported_currencies = {
+                status: 'error',
+                message: `Supported currencies error: ${error.message}`
+            };
+        }
+
+        res.json({
+            success: true,
+            validation: results
+        });
+
+    } catch (error) {
+        console.error('Error in fixes validation:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to validate fixes',
+            details: error.message
+        });
+    }
+}); 

@@ -201,7 +201,7 @@ class BlockchainMonitoringService {
             decimals: 8,
             min_amount: 0.00001, // Minimum amount to consider (in DASH)
             supports_memo: false, // Using unique addresses instead
-            monitoring_enabled: true // Now enabled with Insight API
+            monitoring_enabled: false // Disabled - not supported by ethscan API
         });
 
         this.networks.set('XMR', {
@@ -217,7 +217,7 @@ class BlockchainMonitoringService {
             decimals: 12,
             min_amount: 0.0001, // Minimum amount to consider (in XMR)
             supports_memo: false, // Using unique addresses instead
-            monitoring_enabled: true // Now enabled with limited public API support
+            monitoring_enabled: false // Disabled - not supported by ethscan API
         });
 
         // Network configurations initialized
@@ -241,8 +241,15 @@ class BlockchainMonitoringService {
 
         this.isRunning = true;
         this.startTime = Date.now(); // Track start time for uptime calculation
+        
+        // Filter enabled networks only
+        const enabledNetworks = Array.from(this.networks.entries())
+            .filter(([symbol, network]) => network.monitoring_enabled !== false)
+            .map(([symbol, network]) => symbol);
+            
         Logger.info('Starting blockchain monitoring service', {
-            networks: Array.from(this.networks.keys())
+            networks: enabledNetworks,
+            disabled_networks: Array.from(this.networks.keys()).filter(s => !enabledNetworks.includes(s))
         });
 
         try {
@@ -292,10 +299,17 @@ class BlockchainMonitoringService {
 
     // Start staggered monitoring to avoid rate limits
     async startStaggeredNetworkMonitoring() {
-        const networks = Array.from(this.networks.entries());
+        // Only include enabled networks
+        const networks = Array.from(this.networks.entries())
+            .filter(([symbol, network]) => network.monitoring_enabled !== false);
         let currentIndex = 0;
 
-        // Initialize last checked blocks for all networks
+        if (networks.length === 0) {
+            Logger.warn('No enabled networks for monitoring');
+            return;
+        }
+
+        // Initialize last checked blocks for enabled networks only
         for (const [symbol, network] of networks) {
             try {
                 const currentBlock = await this.getCurrentBlockHeight(symbol);

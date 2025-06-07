@@ -444,12 +444,9 @@ This Hive Onboarding API provides a comprehensive cryptocurrency payment system 
 
 
 ### 💡 Recommended Next Steps
-1. ✅ ~~Fix the circular dependency in `crypto-account-generator.js`~~ **COMPLETED**
-2. ✅ ~~Test real address generation for each cryptocurrency~~ **COMPLETED**
-3. ✅ ~~Implement proper private key encryption for production use~~ **COMPLETED**
-4. ✅ ~~Set up blockchain monitoring for automatic payment detection~~ **COMPLETED**
-5. ✅ ~~Complete automated account creation after payment confirmation~~ **COMPLETED**
-6. ✅ ~~Add WebSocket notifications for real-time payment status~~ **COMPLETED**
+1. Ammend the test suite to fix testing problems(duplicate account names in tests, etc)
+2. Work to get all supported payment channels correctly integrated
+
 
 ### 🧪 Testing
 
