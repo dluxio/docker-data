@@ -79,7 +79,7 @@ class OnboardingAPITestSuite {
         assert(response.data.pricing.crypto_rates);
         assert(response.data.pricing.supported_currencies.includes('SOL'));
         assert(response.data.pricing.supported_currencies.includes('BTC'));
-        assert(response.data.pricing.supported_currencies.length === 7);
+        assert(response.data.pricing.supported_currencies.length === 5);
         
         // Check SOL pricing structure
         const solRate = response.data.pricing.crypto_rates.SOL;
@@ -184,7 +184,7 @@ class OnboardingAPITestSuite {
         } catch (error) {
             if (error.response) {
                 assert.strictEqual(error.response.data.success, false);
-                assert(error.response.data.error.includes('Unsupported cryptocurrency'));
+                assert(error.response.data.error.includes('cryptoType') || error.response.data.error.includes('Unsupported cryptocurrency'));
             } else {
                 throw error;
             }

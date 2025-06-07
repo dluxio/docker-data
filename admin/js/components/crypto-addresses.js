@@ -25,7 +25,7 @@ const CryptoAddressesView = {
                 info: null,
                 transaction: null
             },
-            supportedCryptos: ['BTC', 'ETH', 'SOL', 'MATIC', 'BNB', 'DASH', 'XMR']
+            supportedCryptos: ['BTC', 'ETH', 'SOL', 'MATIC', 'BNB']
         };
     },
 
@@ -208,7 +208,7 @@ const CryptoAddressesView = {
                         <div class="card-header d-flex justify-content-between align-items-center">
                             <h5><i class="fas fa-list"></i> Generated Addresses</h5>
                             <div class="d-flex align-items-center">
-                                <select v-model="filters.cryptoType" @change="loadAddresses" class="form-control mr-2" style="width: auto;">
+                                <select v-model="filters.cryptoType" @change="loadAddresses" class="form-select me-2" style="width: auto;">
                                     <option value="">All Cryptocurrencies</option>
                                     <option v-for="crypto in supportedCryptos" :key="crypto" :value="crypto">
                                         {{ crypto }}
@@ -245,12 +245,12 @@ const CryptoAddressesView = {
                                         <tbody>
                                             <tr v-for="address in addresses" :key="address.address">
                                                 <td>
-                                                    <span class="badge badge-primary">{{ address.crypto_type }}</span>
+                                                    <span class="badge bg-primary text-white">{{ address.crypto_type }}</span>
                                                 </td>
                                                 <td>
                                                     <code class="small">{{ address.address }}</code>
                                                     <button 
-                                                        class="btn btn-sm btn-outline-secondary ml-1" 
+                                                        class="btn btn-sm btn-outline-secondary ms-1" 
                                                         @click="copyToClipboard(address.address)"
                                                         title="Copy address"
                                                     >
@@ -283,7 +283,7 @@ const CryptoAddressesView = {
                                                         {{ formatDate(address.reusable_after) }}
                                                         <span 
                                                             v-if="new Date(address.reusable_after) <= new Date()"
-                                                            class="badge badge-success ml-1"
+                                                            class="badge bg-success text-white ms-1"
                                                         >
                                                             Reusable
                                                         </span>
@@ -303,7 +303,7 @@ const CryptoAddressesView = {
                                     </div>
                                     <div>
                                         <button 
-                                            class="btn btn-sm btn-outline-secondary mr-2" 
+                                            class="btn btn-sm btn-outline-secondary me-2" 
                                             @click="previousPage"
                                             :disabled="pagination.offset === 0"
                                         >
@@ -455,11 +455,11 @@ const CryptoAddressesView = {
 
         getStatusBadgeClass(status) {
             switch (status) {
-                case 'completed': return 'badge-success';
-                case 'pending': return 'badge-warning';
-                case 'expired': return 'badge-danger';
-                case 'cancelled': return 'badge-secondary';
-                default: return 'badge-light';
+                case 'completed': return 'bg-success text-white';
+                case 'pending': return 'bg-warning text-dark';
+                case 'expired': return 'bg-danger text-white';
+                case 'cancelled': return 'bg-secondary text-white';
+                default: return 'bg-light text-dark';
             }
         },
 

@@ -291,7 +291,7 @@ const setupDatabase = async () => {
             await client.query(`
           CREATE TABLE IF NOT EXISTS hive_account_creations (
             id SERIAL PRIMARY KEY,
-            channel_id VARCHAR(100) REFERENCES payment_channels(channel_id),
+            channel_id VARCHAR(100) REFERENCES payment_channels(channel_id) ON DELETE CASCADE,
             username VARCHAR(50) NOT NULL,
             creation_method VARCHAR(20) NOT NULL, -- 'ACT' or 'DELEGATION'
             act_used INTEGER DEFAULT 0,
@@ -323,7 +323,7 @@ const setupDatabase = async () => {
             await client.query(`
           CREATE TABLE IF NOT EXISTS crypto_addresses (
             id SERIAL PRIMARY KEY,
-            channel_id VARCHAR(100) NOT NULL,
+            channel_id VARCHAR(100) REFERENCES payment_channels(channel_id) ON DELETE CASCADE,
             crypto_type VARCHAR(10) NOT NULL,
             address VARCHAR(255) NOT NULL,
             public_key TEXT,
@@ -6950,59 +6950,111 @@ if (require.main === module) {
     });
 } 
 
-// Admin endpoint to fix database constraint
-router.post('/api/onboarding/admin/fix-database-constraint', adminAuthMiddleware, async (req, res) => {
+// Admin endpoint to fix database constraints
+router.post('/api/onboarding/admin/fix-database-constraints', adminAuthMiddleware, async (req, res) => {
     try {
         const client = await pool.connect();
+        const results = {
+            payment_confirmations_unique: null,
+            hive_account_creations_cascade: null,
+            crypto_addresses_cascade: null
+        };
+        
         try {
-            // First, check if constraint already exists
-            const constraintCheck = await client.query(`
-                SELECT constraint_name 
-                FROM information_schema.table_constraints 
-                WHERE table_name = 'payment_confirmations' 
-                AND constraint_type = 'UNIQUE'
-                AND constraint_name LIKE '%channel_id%'
-            `);
+            // 1. Fix payment_confirmations unique constraint
+            try {
+                const constraintCheck = await client.query(`
+                    SELECT constraint_name 
+                    FROM information_schema.table_constraints 
+                    WHERE table_name = 'payment_confirmations' 
+                    AND constraint_type = 'UNIQUE'
+                    AND constraint_name LIKE '%channel_id%'
+                `);
 
-            if (constraintCheck.rows.length > 0) {
-                return res.json({
-                    success: true,
-                    message: 'Constraint already exists',
-                    constraint: constraintCheck.rows[0].constraint_name
-                });
+                if (constraintCheck.rows.length === 0) {
+                    await client.query(`
+                        ALTER TABLE payment_confirmations 
+                        ADD CONSTRAINT payment_confirmations_channel_tx_unique 
+                        UNIQUE (channel_id, tx_hash)
+                    `);
+                    results.payment_confirmations_unique = 'Added unique constraint';
+                } else {
+                    results.payment_confirmations_unique = 'Constraint already exists';
+                }
+            } catch (error) {
+                results.payment_confirmations_unique = `Error: ${error.message}`;
             }
 
-            // Add the unique constraint
-            await client.query(`
-                ALTER TABLE payment_confirmations 
-                ADD CONSTRAINT payment_confirmations_channel_tx_unique 
-                UNIQUE (channel_id, tx_hash)
-            `);
+            // 2. Fix hive_account_creations foreign key to CASCADE
+            try {
+                // Drop existing constraint
+                await client.query(`
+                    ALTER TABLE hive_account_creations 
+                    DROP CONSTRAINT IF EXISTS hive_account_creations_channel_id_fkey
+                `);
+                
+                // Add new constraint with CASCADE
+                await client.query(`
+                    ALTER TABLE hive_account_creations 
+                    ADD CONSTRAINT hive_account_creations_channel_id_fkey 
+                    FOREIGN KEY (channel_id) REFERENCES payment_channels(channel_id) ON DELETE CASCADE
+                `);
+                results.hive_account_creations_cascade = 'Fixed CASCADE constraint';
+            } catch (error) {
+                results.hive_account_creations_cascade = `Error: ${error.message}`;
+            }
+
+            // 3. Fix crypto_addresses foreign key to CASCADE  
+            try {
+                // Check if foreign key constraint exists
+                const fkCheck = await client.query(`
+                    SELECT constraint_name 
+                    FROM information_schema.table_constraints 
+                    WHERE table_name = 'crypto_addresses' 
+                    AND constraint_type = 'FOREIGN KEY'
+                    AND constraint_name LIKE '%channel_id%'
+                `);
+
+                if (fkCheck.rows.length === 0) {
+                    // Add foreign key constraint with CASCADE
+                    await client.query(`
+                        ALTER TABLE crypto_addresses 
+                        ADD CONSTRAINT crypto_addresses_channel_id_fkey 
+                        FOREIGN KEY (channel_id) REFERENCES payment_channels(channel_id) ON DELETE CASCADE
+                    `);
+                    results.crypto_addresses_cascade = 'Added CASCADE constraint';
+                } else {
+                    // Drop and recreate with CASCADE
+                    await client.query(`
+                        ALTER TABLE crypto_addresses 
+                        DROP CONSTRAINT ${fkCheck.rows[0].constraint_name}
+                    `);
+                    
+                    await client.query(`
+                        ALTER TABLE crypto_addresses 
+                        ADD CONSTRAINT crypto_addresses_channel_id_fkey 
+                        FOREIGN KEY (channel_id) REFERENCES payment_channels(channel_id) ON DELETE CASCADE
+                    `);
+                    results.crypto_addresses_cascade = 'Updated to CASCADE constraint';
+                }
+            } catch (error) {
+                results.crypto_addresses_cascade = `Error: ${error.message}`;
+            }
 
             res.json({
                 success: true,
-                message: 'Database constraint added successfully',
-                constraint: 'payment_confirmations_channel_tx_unique'
+                message: 'Database constraints migration completed',
+                results: results
             });
 
         } finally {
             client.release();
         }
     } catch (error) {
-        console.error('Error fixing database constraint:', error);
-        
-        // If constraint already exists in a different way, that's okay
-        if (error.message.includes('already exists')) {
-            return res.json({
-                success: true,
-                message: 'Constraint already exists (different name)',
-                note: 'The constraint may exist with a different name'
-            });
-        }
-        
+        console.error('Error fixing database constraints:', error);
         res.status(500).json({
             success: false,
-            error: 'Failed to fix database constraint',
+            error: 'Failed to fix database constraints',
             details: error.message
         });
     }
@@ -7020,29 +7072,54 @@ router.get('/api/onboarding/test/fixes-validation', async (req, res) => {
             }
         };
 
-        // 1. Test database constraint fix
+        // 1. Test database constraints
         try {
             const client = await pool.connect();
             try {
-                // Try to insert a test record to see if constraint exists
-                const testChannelId = 'test_constraint_' + Date.now();
-                const testTxHash = 'test_tx_' + Date.now();
+                const constraintChecks = {};
                 
-                await client.query(`
-                    INSERT INTO payment_confirmations 
-                    (channel_id, tx_hash, block_height, confirmations, amount_received, detected_at)
-                    VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
-                    ON CONFLICT (channel_id, tx_hash) DO UPDATE SET
-                    confirmations = EXCLUDED.confirmations,
-                    processed_at = CURRENT_TIMESTAMP
-                `, [testChannelId, testTxHash, 1000, 1, 0.001]);
+                // Check payment_confirmations unique constraint
+                const pcUnique = await client.query(`
+                    SELECT constraint_name 
+                    FROM information_schema.table_constraints 
+                    WHERE table_name = 'payment_confirmations' 
+                    AND constraint_type = 'UNIQUE'
+                    AND constraint_name LIKE '%channel_id%'
+                `);
+                constraintChecks.payment_confirmations_unique = pcUnique.rows.length > 0;
                 
-                // Clean up test record
-                await client.query(`DELETE FROM payment_confirmations WHERE channel_id = $1`, [testChannelId]);
+                // Check hive_account_creations CASCADE constraint
+                const hacCascade = await client.query(`
+                    SELECT tc.constraint_name, rc.delete_rule
+                    FROM information_schema.table_constraints tc
+                    JOIN information_schema.referential_constraints rc 
+                        ON tc.constraint_name = rc.constraint_name
+                    WHERE tc.table_name = 'hive_account_creations' 
+                    AND tc.constraint_type = 'FOREIGN KEY'
+                    AND tc.constraint_name LIKE '%channel_id%'
+                `);
+                constraintChecks.hive_account_creations_cascade = 
+                    hacCascade.rows.length > 0 && hacCascade.rows[0].delete_rule === 'CASCADE';
+                
+                // Check crypto_addresses CASCADE constraint
+                const caCascade = await client.query(`
+                    SELECT tc.constraint_name, rc.delete_rule
+                    FROM information_schema.table_constraints tc
+                    JOIN information_schema.referential_constraints rc 
+                        ON tc.constraint_name = rc.constraint_name
+                    WHERE tc.table_name = 'crypto_addresses' 
+                    AND tc.constraint_type = 'FOREIGN KEY'
+                    AND tc.constraint_name LIKE '%channel_id%'
+                `);
+                constraintChecks.crypto_addresses_cascade = 
+                    caCascade.rows.length > 0 && caCascade.rows[0].delete_rule === 'CASCADE';
+                
+                const allFixed = Object.values(constraintChecks).every(check => check === true);
                 
                 results.fixes.database_constraint = {
-                    status: 'fixed',
-                    message: 'Database constraint exists and ON CONFLICT works properly'
+                    status: allFixed ? 'fixed' : 'needs_migration',
+                    message: allFixed ? 'All database constraints properly configured' : 'Some constraints need migration',
+                    details: constraintChecks
                 };
             } finally {
                 client.release();
@@ -7050,7 +7127,7 @@ router.get('/api/onboarding/test/fixes-validation', async (req, res) => {
         } catch (error) {
             results.fixes.database_constraint = {
                 status: 'error',
-                message: `Database constraint issue: ${error.message}`
+                message: `Database constraint check failed: ${error.message}`
             };
         }
 
@@ -7104,6 +7181,86 @@ router.get('/api/onboarding/test/fixes-validation', async (req, res) => {
         res.status(500).json({
             success: false,
             error: 'Failed to validate fixes',
+            details: error.message
+        });
+    }
+}); 
+
+// Admin endpoint to check current database constraint status
+router.get('/api/onboarding/admin/constraint-status', adminAuthMiddleware, async (req, res) => {
+    try {
+        const client = await pool.connect();
+        try {
+            const status = {};
+            
+            // Check payment_confirmations unique constraint
+            const pcUnique = await client.query(`
+                SELECT constraint_name 
+                FROM information_schema.table_constraints 
+                WHERE table_name = 'payment_confirmations' 
+                AND constraint_type = 'UNIQUE'
+                AND constraint_name LIKE '%channel_id%'
+            `);
+            status.payment_confirmations_unique = {
+                exists: pcUnique.rows.length > 0,
+                constraint_name: pcUnique.rows[0]?.constraint_name || null
+            };
+            
+            // Check hive_account_creations foreign key and CASCADE status
+            const hacFk = await client.query(`
+                SELECT tc.constraint_name, rc.delete_rule
+                FROM information_schema.table_constraints tc
+                LEFT JOIN information_schema.referential_constraints rc 
+                    ON tc.constraint_name = rc.constraint_name
+                WHERE tc.table_name = 'hive_account_creations' 
+                AND tc.constraint_type = 'FOREIGN KEY'
+                AND tc.constraint_name LIKE '%channel_id%'
+            `);
+            status.hive_account_creations_fk = {
+                exists: hacFk.rows.length > 0,
+                constraint_name: hacFk.rows[0]?.constraint_name || null,
+                delete_rule: hacFk.rows[0]?.delete_rule || null,
+                has_cascade: hacFk.rows[0]?.delete_rule === 'CASCADE'
+            };
+            
+            // Check crypto_addresses foreign key and CASCADE status  
+            const caFk = await client.query(`
+                SELECT tc.constraint_name, rc.delete_rule
+                FROM information_schema.table_constraints tc
+                LEFT JOIN information_schema.referential_constraints rc 
+                    ON tc.constraint_name = rc.constraint_name
+                WHERE tc.table_name = 'crypto_addresses' 
+                AND tc.constraint_type = 'FOREIGN KEY'
+                AND tc.constraint_name LIKE '%channel_id%'
+            `);
+            status.crypto_addresses_fk = {
+                exists: caFk.rows.length > 0,
+                constraint_name: caFk.rows[0]?.constraint_name || null,
+                delete_rule: caFk.rows[0]?.delete_rule || null,
+                has_cascade: caFk.rows[0]?.delete_rule === 'CASCADE'
+            };
+            
+            res.json({
+                success: true,
+                constraint_status: status,
+                summary: {
+                    payment_confirmations_ready: status.payment_confirmations_unique.exists,
+                    hive_account_creations_ready: status.hive_account_creations_fk.has_cascade,
+                    crypto_addresses_ready: status.crypto_addresses_fk.has_cascade,
+                    all_constraints_ready: status.payment_confirmations_unique.exists && 
+                                         status.hive_account_creations_fk.has_cascade && 
+                                         status.crypto_addresses_fk.has_cascade
+                }
+            });
+
+        } finally {
+            client.release();
+        }
+    } catch (error) {
+        console.error('Error checking constraint status:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to check constraint status',
             details: error.message
         });
     }

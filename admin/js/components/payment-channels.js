@@ -199,8 +199,8 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
                                             </button>
                                             <button v-if="canCancelChannel(channel)" 
                                                     class="btn btn-outline-danger"
-                                                    @click="showCancelModal(channel)"
-                                                    title="Cancel Channel">
+                                                                                        @click="showCancelModal(channel)"
+                                    title="Delete Channel">
                                                 <i class="bi bi-trash"></i>
                                             </button>
                                         </div>
@@ -464,7 +464,7 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
                 <div class="modal-dialog">
                     <div class="modal-content">
                         <div class="modal-header">
-                            <h5 class="modal-title">Cancel Payment Channel</h5>
+                            <h5 class="modal-title">Delete Payment Channel</h5>
                             <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                         </div>
                         <div class="modal-body" v-if="selectedChannel">
@@ -1195,9 +1195,8 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
         },
 
         canCancelChannel(channel) {
-            // Allow canceling any channel that isn't completed
-
-            return ['pending', 'confirmed', 'failed'].includes(channel.status);
+            // Allow deleting any channel (including completed ones) except currently processing ones
+            return ['pending', 'confirmed', 'failed', 'completed', 'expired', 'cancelled'].includes(channel.status);
         },
 
         showCancelModal(channel) {
@@ -1217,7 +1216,7 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
                 const response = await this.apiClient.delete(`/api/onboarding/admin/channels/${channelId}`);
 
                 if (response.success) {
-                    this.showAlert('Payment channel canceled successfully!', 'success', 'check-circle');
+                    this.showAlert('Payment channel deleted successfully!', 'success', 'check-circle');
                     
                     // Close modal and refresh data
                     bootstrap.Modal.getInstance(document.getElementById('cancelChannelModal')).hide();
@@ -1228,7 +1227,7 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
 
             } catch (error) {
                 console.error('Channel cancellation failed:', error);
-                this.showAlert('Failed to cancel channel: ' + error.message, 'danger', 'exclamation-triangle');
+                this.showAlert('Failed to delete channel: ' + error.message, 'danger', 'exclamation-triangle');
             } finally {
                 this.canceling = false;
             }
