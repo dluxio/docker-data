@@ -13,6 +13,17 @@ const testWebSocketIntegration = async (req, res) => {
         // Test WebSocket notification (if any clients connected)
         if (wsStats.totalClients > 0) {
             deviceConnectionWS.notifyPairingCreated(testSession.sessionId, testSession.pairCode, 300);
+            
+            // Test critical message with ACK
+            setTimeout(() => {
+                deviceConnectionWS.notifySigningRequestReceived(
+                    testSession.sessionId,
+                    'test-request-123',
+                    'sign-transaction',
+                    { test: 'data' },
+                    { deviceName: 'Test Requester' }
+                );
+            }, 1000);
         }
         
         res.json({
@@ -27,7 +38,8 @@ const testWebSocketIntegration = async (req, res) => {
             instructions: {
                 connect: 'Connect to WebSocket at wss://data.dlux.io/ws/payment-monitor',
                 subscribe: `Send: {"type": "device_subscribe", "sessionId": "${testSession.sessionId}", "userType": "signer"}`,
-                testNotification: wsStats.totalClients > 0 ? 'Notification sent to connected clients' : 'No clients connected to receive notification'
+                testNotification: wsStats.totalClients > 0 ? 'Notifications sent to connected clients (including ACK test)' : 'No clients connected to receive notification',
+                acknowledgments: 'Critical messages require ACK response: {"type": "device_ack", "messageId": "received-message-id"}'
             }
         });
     } catch (error) {

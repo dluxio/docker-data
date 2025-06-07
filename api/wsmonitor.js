@@ -531,6 +531,11 @@ class PaymentChannelMonitor {
         });
         this.monitoringIntervals.clear();
 
+        // Shutdown device connection WebSocket
+        if (deviceConnectionWS) {
+            deviceConnectionWS.shutdown();
+        }
+
         if (this.wss) {
             this.wss.close();
         }

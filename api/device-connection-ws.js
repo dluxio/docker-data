@@ -5,6 +5,10 @@ class DeviceConnectionWebSocket {
     constructor() {
         this.clients = new Map(); // sessionId -> Set of WebSocket connections
         this.userSessions = new Map(); // username -> Set of sessionIds
+        this.pendingAcks = new Map(); // messageId -> {sessionId, userType, message, retries, timestamp}
+        this.maxRetries = 3;
+        this.ackTimeout = 5000; // 5 seconds
+        this.retryInterval = 2000; // 2 seconds
     }
 
     initialize(wss) {
@@ -12,6 +16,9 @@ class DeviceConnectionWebSocket {
         
         // Connect back to the device service for notifications
         setWebSocketInstance(this);
+        
+        // Start acknowledgment timeout checker
+        this.startAckTimeoutChecker();
         
         console.log('Device Connection WebSocket service initialized');
     }
@@ -32,6 +39,9 @@ class DeviceConnectionWebSocket {
                         sessionId: data.sessionId,
                         timestamp: new Date().toISOString()
                     }));
+                    break;
+                case 'device_ack':
+                    this.handleAcknowledgment(data.messageId);
                     break;
                 default:
                     return false; // Not a device connection message
@@ -166,6 +176,96 @@ class DeviceConnectionWebSocket {
         }
     }
 
+    // Send message with acknowledgment requirement
+    sendWithAck(sessionId, userType, message, requiresAck = false) {
+        if (!requiresAck) {
+            // For non-critical messages, use regular broadcast
+            if (userType) {
+                this.broadcastToSessionUserType(sessionId, userType, message);
+            } else {
+                this.broadcastToSession(sessionId, message);
+            }
+            return;
+        }
+
+        // For critical messages, add message ID and track for acknowledgment
+        const messageId = this.generateMessageId();
+        const messageWithId = {
+            ...message,
+            messageId,
+            requiresAck: true
+        };
+
+        // Store for retry logic
+        this.pendingAcks.set(messageId, {
+            sessionId,
+            userType,
+            message: messageWithId,
+            retries: 0,
+            timestamp: Date.now()
+        });
+
+        // Send initial message
+        if (userType) {
+            this.broadcastToSessionUserType(sessionId, userType, messageWithId);
+        } else {
+            this.broadcastToSession(sessionId, messageWithId);
+        }
+
+        console.log(`Sent message ${messageId} to session ${sessionId} (${userType || 'all'}) with ACK required`);
+    }
+
+    // Generate unique message ID
+    generateMessageId() {
+        return `msg_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    }
+
+    // Handle acknowledgment received
+    handleAcknowledgment(messageId) {
+        if (this.pendingAcks.has(messageId)) {
+            console.log(`Received ACK for message ${messageId}`);
+            this.pendingAcks.delete(messageId);
+        }
+    }
+
+    // Start acknowledgment timeout checker
+    startAckTimeoutChecker() {
+        this.ackChecker = setInterval(() => {
+            const now = Date.now();
+            
+            for (const [messageId, ackData] of this.pendingAcks.entries()) {
+                const timeElapsed = now - ackData.timestamp;
+                
+                if (timeElapsed > this.ackTimeout) {
+                    if (ackData.retries < this.maxRetries) {
+                        // Retry sending
+                        ackData.retries++;
+                        ackData.timestamp = now;
+                        
+                        console.log(`Retrying message ${messageId} (attempt ${ackData.retries}/${this.maxRetries})`);
+                        
+                        if (ackData.userType) {
+                            this.broadcastToSessionUserType(ackData.sessionId, ackData.userType, ackData.message);
+                        } else {
+                            this.broadcastToSession(ackData.sessionId, ackData.message);
+                        }
+                    } else {
+                        // Max retries exceeded
+                        console.error(`Message ${messageId} delivery failed after ${this.maxRetries} attempts`);
+                        this.pendingAcks.delete(messageId);
+                        
+                        // Notify about delivery failure
+                        this.broadcastToSession(ackData.sessionId, {
+                            type: 'device_delivery_failed',
+                            originalMessage: ackData.message,
+                            reason: 'Maximum retry attempts exceeded'
+                        });
+                    }
+                }
+            }
+        }, this.retryInterval);
+    }
+
     // Device connection event handlers
     notifyPairingCreated(sessionId, pairCode, expiresIn) {
         this.broadcastToSession(sessionId, {
@@ -195,8 +295,8 @@ class DeviceConnectionWebSocket {
     }
 
     notifySigningRequestReceived(sessionId, requestId, requestType, requestData, deviceInfo) {
-        // Notify signing device about new request
-        this.broadcastToSessionUserType(sessionId, 'signer', {
+        // Notify signing device about new request - CRITICAL MESSAGE, requires ACK
+        this.sendWithAck(sessionId, 'signer', {
             type: 'device_signing_request',
             sessionId,
             requestId,
@@ -204,12 +304,14 @@ class DeviceConnectionWebSocket {
             requestData,
             deviceInfo,
             message: `New signing request: ${requestType}`
-        });
+        }, true); // Requires acknowledgment
+        
+        console.log(`Sent signing request ${requestId} to signer in session ${sessionId}`);
     }
 
     notifySigningResponse(sessionId, requestId, response, error = null) {
-        // Notify requesting device about response
-        this.broadcastToSessionUserType(sessionId, 'requester', {
+        // Notify requesting device about response - CRITICAL MESSAGE, requires ACK
+        this.sendWithAck(sessionId, 'requester', {
             type: 'device_signing_response',
             sessionId,
             requestId,
@@ -217,7 +319,9 @@ class DeviceConnectionWebSocket {
             error,
             success: !error,
             message: error ? 'Signing request failed' : 'Signing request completed'
-        });
+        }, true); // Requires acknowledgment
+        
+        console.log(`Sent signing response for ${requestId} to requester in session ${sessionId}`);
     }
 
     notifySessionExpired(sessionId) {
@@ -229,12 +333,26 @@ class DeviceConnectionWebSocket {
     }
 
     notifyRequestTimeout(sessionId, requestId) {
-        this.broadcastToSession(sessionId, {
+        // Send timeout notification to BOTH signer and requester
+        // Signer should know the request expired
+        this.broadcastToSessionUserType(sessionId, 'signer', {
             type: 'device_request_timeout',
             sessionId,
             requestId,
-            message: 'Signing request timed out'
+            message: 'Signing request timed out - no longer accepting responses',
+            userType: 'signer'
         });
+        
+        // Requester should know they won't get a response
+        this.broadcastToSessionUserType(sessionId, 'requester', {
+            type: 'device_request_timeout',
+            sessionId,
+            requestId,
+            message: 'Signing request timed out - no response received',
+            userType: 'requester'
+        });
+        
+        console.log(`Sent timeout notifications for request ${requestId} in session ${sessionId}`);
     }
 
     // Get connected clients info for debugging
@@ -242,6 +360,7 @@ class DeviceConnectionWebSocket {
         const stats = {
             totalSessions: this.clients.size,
             totalClients: 0,
+            pendingAcks: this.pendingAcks.size,
             sessions: {}
         };
 
@@ -254,6 +373,16 @@ class DeviceConnectionWebSocket {
         });
 
         return stats;
+    }
+
+    // Cleanup method
+    shutdown() {
+        if (this.ackChecker) {
+            clearInterval(this.ackChecker);
+            this.ackChecker = null;
+        }
+        this.pendingAcks.clear();
+        console.log('Device Connection WebSocket service shut down');
     }
 }
 

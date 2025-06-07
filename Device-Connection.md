@@ -269,6 +269,14 @@ ws.send(JSON.stringify({
 ws.onmessage = (event) => {
     const data = JSON.parse(event.data);
     
+    // Send acknowledgment for critical messages
+    if (data.requiresAck && data.messageId) {
+        ws.send(JSON.stringify({
+            type: 'device_ack',
+            messageId: data.messageId
+        }));
+    }
+    
     switch (data.type) {
         case 'device_pairing_created':
             console.log('Pairing code:', data.pairCode);
@@ -278,12 +286,20 @@ ws.onmessage = (event) => {
             break;
         case 'device_signing_request':
             console.log('New signing request:', data.requestData);
+            // This is a critical message that requires acknowledgment
             break;
         case 'device_signing_response':
             console.log('Signing response:', data.response);
+            // This is a critical message that requires acknowledgment
             break;
         case 'device_disconnected':
             console.log('Device disconnected');
+            break;
+        case 'device_request_timeout':
+            console.log('Request timed out:', data.requestId);
+            break;
+        case 'device_delivery_failed':
+            console.error('Message delivery failed:', data.originalMessage);
             break;
     }
 };
@@ -293,10 +309,22 @@ ws.onmessage = (event) => {
 - `device_pairing_created` - Pairing code created
 - `device_connected` - Device successfully connected
 - `device_disconnected` - Device disconnected
-- `device_signing_request` - New signing request received (signer only)
-- `device_signing_response` - Signing request completed (requester only)
+- `device_signing_request` - New signing request received (signer only) **[REQUIRES ACK]**
+- `device_signing_response` - Signing request completed (requester only) **[REQUIRES ACK]**
 - `device_session_expired` - Session expired
 - `device_request_timeout` - Request timed out
+- `device_delivery_failed` - Message delivery failed after retries
+
+**Message Acknowledgment**:
+Critical messages (signing requests and responses) require acknowledgment to ensure delivery. When you receive a message with `requiresAck: true`, you must send:
+```javascript
+ws.send(JSON.stringify({
+    type: 'device_ack',
+    messageId: data.messageId
+}));
+```
+
+If no acknowledgment is received within 5 seconds, the system will retry up to 3 times before giving up.
 
 ### REST API Endpoints
 
