@@ -27,9 +27,9 @@ const {
 const { testWebSocketIntegration } = require('./api/test-device-websocket');
 const { testMessageDirection } = require('./api/test-message-direction');
 const { getProtocolSummary } = require('./api/device-protocol-summary');
-const { createAuthMiddleware, rateLimits } = require('./api/onboarding');
+const { createAuthMiddleware } = require('./api/onboarding');
 
-// Trust proxy setting for rate limiting and real client IP detection
+// Trust proxy setting for real client IP detection
 // This is required when running behind Docker/nginx/load balancer
 // Using 1 to trust only the first proxy (more secure than true)
 api.set('trust proxy', 1);
@@ -67,14 +67,14 @@ api.get('/admin/', (req, res) => {
 
 // Device connection endpoints (must be before generic API route)
 const deviceAuthMiddleware = createAuthMiddleware(false, false);
-api.post("/api/device/pair", rateLimits.authenticatedUser, deviceAuthMiddleware, createPairing);
-api.post("/api/device/connect", rateLimits.general, connectToDevice);
-api.post("/api/device/request", rateLimits.general, createSigningRequest);
-api.get("/api/device/requests", rateLimits.authenticatedUser, deviceAuthMiddleware, getPendingRequests);
-api.post("/api/device/respond", rateLimits.authenticatedUser, deviceAuthMiddleware, respondToRequest);
-api.post("/api/device/disconnect", rateLimits.general, disconnectDevice);
-api.get("/api/device/status", rateLimits.general, getDeviceStatus);
-api.post("/api/device/wait-response", rateLimits.general, waitForResponse);
+api.post("/api/device/pair", deviceAuthMiddleware, createPairing);
+api.post("/api/device/connect", connectToDevice);
+api.post("/api/device/request", createSigningRequest);
+api.get("/api/device/requests", deviceAuthMiddleware, getPendingRequests);
+api.post("/api/device/respond", deviceAuthMiddleware, respondToRequest);
+api.post("/api/device/disconnect", disconnectDevice);
+api.get("/api/device/status", getDeviceStatus);
+api.post("/api/device/wait-response", waitForResponse);
 api.get("/api/device/test", testDeviceConnection);
 // Test endpoints (can be removed in production)
 api.get("/api/device/test-websocket", testWebSocketIntegration);

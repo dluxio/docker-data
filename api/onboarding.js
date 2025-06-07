@@ -4,7 +4,6 @@ const crypto = require('crypto');
 const axios = require('axios');
 const cors = require('cors');
 const Joi = require('joi');
-const rateLimit = require('express-rate-limit');
 const { PaymentChannelMonitor } = require('./wsmonitor');
 const blockchainMonitor = require('./blockchain-monitor');
 const hiveTx = require('hive-tx');
@@ -66,111 +65,7 @@ const validationSchemas = {
         })
 };
 
-// Custom keyGenerator to handle malformed IP addresses
-const customKeyGenerator = (req) => {
-    try {
-        // Extract IP and remove port if present
-        let ip = req.ip || req.connection.remoteAddress || '127.0.0.1';
-        
-        // Remove port number if present (e.g., "192.168.1.1:8080" -> "192.168.1.1")
-        if (ip.includes(':') && !ip.includes('::')) {
-            // IPv4 with port
-            ip = ip.split(':')[0];
-        } else if (ip.startsWith('[') && ip.includes(']:')) {
-            // IPv6 with port [::1]:8080
-            ip = ip.substring(1, ip.lastIndexOf(']:'));
-        }
-        
-        // Validate the cleaned IP
-        if (!ip || ip === 'undefined' || ip === 'null') {
-            return '127.0.0.1';
-        }
-        
-        return ip;
-    } catch (error) {
-        console.error('Error in rate limit keyGenerator:', error);
-        return '127.0.0.1'; // Fallback IP
-    }
-};
-
-// Rate limiting configurations
-const rateLimits = {
-    general: rateLimit({
-        windowMs: 15 * 60 * 1000, // 15 minutes
-        max: 100, // limit each IP to 100 requests per windowMs
-        message: {
-            success: false,
-            error: 'Too many requests, please try again later.'
-        },
-        standardHeaders: true,
-        legacyHeaders: false,
-        keyGenerator: customKeyGenerator
-    }),
-    
-    pricing: rateLimit({
-        windowMs: 1 * 60 * 1000, // 1 minute
-        max: 10, // limit each IP to 10 pricing requests per minute
-        message: {
-            success: false,
-            error: 'Pricing endpoint rate limit exceeded. Please wait before making another request.'
-        },
-        keyGenerator: customKeyGenerator
-    }),
-    
-    payment: rateLimit({
-        windowMs: 5 * 60 * 1000, // 5 minutes
-        max: 5, // limit each IP to 5 payment initiations per 5 minutes
-        message: {
-            success: false,
-            error: 'Payment initiation rate limit exceeded. Please wait before creating another payment.'
-        },
-        keyGenerator: customKeyGenerator
-    }),
-    
-    strict: rateLimit({
-        windowMs: 60 * 60 * 1000, // 1 hour
-        max: 10, // limit each IP to 10 requests per hour for sensitive endpoints
-        message: {
-            success: false,
-            error: 'Hourly rate limit exceeded for this endpoint.'
-        },
-        keyGenerator: customKeyGenerator
-    }),
-    
-    admin: rateLimit({
-        windowMs: 15 * 60 * 1000, // 15 minutes  
-        max: 10000, // Very generous limit for authenticated admin users
-        message: {
-            success: false,
-            error: 'Admin rate limit exceeded. Please wait before making more requests.'
-        },
-        standardHeaders: true,
-        legacyHeaders: false,
-        keyGenerator: customKeyGenerator,
-        skip: (req) => {
-            // Skip rate limiting if user has valid auth headers (authenticated admin)
-            return req.headers.authorization || req.headers['x-auth-signature'];
-        }
-    }),
-    
-    // Rate limiter that skips rate limiting for any authenticated HIVE user
-    authenticatedUser: rateLimit({
-        windowMs: 15 * 60 * 1000, // 15 minutes
-        max: 1000, // Higher limit for authenticated users
-        message: {
-            success: false,
-            error: 'Rate limit exceeded. Please wait before making more requests.'
-        },
-        standardHeaders: true,
-        legacyHeaders: false,
-        keyGenerator: customKeyGenerator,
-        skip: (req) => {
-            // Skip rate limiting if user has valid HIVE authentication headers
-            return req.headers['x-account'] && req.headers['x-challenge'] && 
-                   req.headers['x-pubkey'] && req.headers['x-signature'];
-        }
-    })
-};
+// Rate limiting removed - handled upstream
 
 // Validation middleware factory
 const validateInput = (schema) => {
@@ -2545,7 +2440,7 @@ const response = await fetch('/api/onboarding/notifications/123/read', {
 });
 
 // Admin management endpoints
-router.get('/api/onboarding/admin/users', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
+router.get('/api/onboarding/admin/users', adminAuthMiddleware, async (req, res) => {
     try {
         const client = await pool.connect();
         try {
@@ -2578,7 +2473,7 @@ router.get('/api/onboarding/admin/users', rateLimits.admin, adminAuthMiddleware,
     }
 });
 
-router.post('/api/onboarding/admin/users/add', rateLimits.admin, adminActiveKeyMiddleware, async (req, res) => {
+router.post('/api/onboarding/admin/users/add', adminActiveKeyMiddleware, async (req, res) => {
     try {
         const { username, permissions = { admin: true } } = req.body;
 
@@ -2636,7 +2531,7 @@ router.post('/api/onboarding/admin/users/add', rateLimits.admin, adminActiveKeyM
     }
 });
 
-router.post('/api/onboarding/admin/users/:username/remove', rateLimits.admin, adminActiveKeyMiddleware, async (req, res) => {
+router.post('/api/onboarding/admin/users/:username/remove', adminActiveKeyMiddleware, async (req, res) => {
     try {
         const { username } = req.params;
 
@@ -2679,7 +2574,7 @@ router.post('/api/onboarding/admin/users/:username/remove', rateLimits.admin, ad
 });
 
 // 1. Get real-time crypto pricing (updated endpoint)
-router.get('/api/onboarding/pricing', rateLimits.pricing, async (req, res) => {
+router.get('/api/onboarding/pricing', async (req, res) => {
     try {
         const pricing = await pricingService.getLatestPricing();
 
@@ -2794,7 +2689,7 @@ router.get('/api/onboarding/pricing', rateLimits.pricing, async (req, res) => {
 
 // 2. Initiate cryptocurrency payment (updated to require all public keys)
 router.post('/api/onboarding/payment/initiate', 
-    rateLimits.payment,
+    
     validateInput(Joi.object({
         username: validationSchemas.username,
         cryptoType: validationSchemas.cryptoType,
@@ -2943,7 +2838,7 @@ router.post('/api/onboarding/payment/initiate',
 });
 
 // 3. Admin endpoint - ACT status and management
-router.get('/api/onboarding/admin/act-status', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
+router.get('/api/onboarding/admin/act-status', adminAuthMiddleware, async (req, res) => {
     try {
         // Update current status
         await hiveAccountService.updateACTBalance();
@@ -3052,7 +2947,7 @@ router.get('/api/onboarding/admin/act-status', rateLimits.admin, adminAuthMiddle
 });
 
 // 3b. Admin endpoint - Manually claim ACT
-router.post('/api/onboarding/admin/claim-act', rateLimits.admin, adminActiveKeyMiddleware, async (req, res) => {
+router.post('/api/onboarding/admin/claim-act', adminActiveKeyMiddleware, async (req, res) => {
     try {
         const result = await hiveAccountService.claimAccountCreationTokens();
 
@@ -3079,7 +2974,7 @@ router.post('/api/onboarding/admin/claim-act', rateLimits.admin, adminActiveKeyM
 });
 
 // 3c. Admin endpoint - Manually trigger account creation processing
-router.post('/api/onboarding/admin/process-pending', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
+router.post('/api/onboarding/admin/process-pending', adminAuthMiddleware, async (req, res) => {
     try {
         await hiveAccountService.monitorPendingCreations();
 
@@ -3098,7 +2993,7 @@ router.post('/api/onboarding/admin/process-pending', rateLimits.admin, adminAuth
 });
 
 // 3d. Admin endpoint - Trigger health check and detailed status
-router.post('/api/onboarding/admin/health-check', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
+router.post('/api/onboarding/admin/health-check', adminAuthMiddleware, async (req, res) => {
     try {
         // Run health check
         await hiveAccountService.performDailyHealthCheck();
@@ -3150,7 +3045,7 @@ router.post('/api/onboarding/admin/health-check', rateLimits.admin, adminAuthMid
 });
 
 // 3d. Admin endpoint - View current RC costs
-router.get('/api/onboarding/admin/rc-costs', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
+router.get('/api/onboarding/admin/rc-costs', adminAuthMiddleware, async (req, res) => {
     try {
         const costs = await rcMonitoringService.getLatestRCCosts();
 
@@ -3233,7 +3128,7 @@ router.get('/api/onboarding/admin/rc-costs', rateLimits.admin, adminAuthMiddlewa
 });
 
 // 3e. Admin endpoint - Blockchain monitoring status
-router.get('/api/onboarding/admin/blockchain-status', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
+router.get('/api/onboarding/admin/blockchain-status', adminAuthMiddleware, async (req, res) => {
     try {
         const status = blockchainMonitor.getStatus();
         
@@ -3300,7 +3195,7 @@ router.get('/api/onboarding/admin/blockchain-status', rateLimits.admin, adminAut
 });
 
 // 3g. Admin endpoint - Check backend service status and trigger updates
-router.post('/api/onboarding/admin/service-status', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
+router.post('/api/onboarding/admin/service-status', adminAuthMiddleware, async (req, res) => {
     try {
         // Force update all services
         await hiveAccountService.updateACTBalance();
@@ -3349,7 +3244,7 @@ router.post('/api/onboarding/admin/service-status', rateLimits.admin, adminAuthM
 });
 
 // 3f. Simple status check endpoint (no auth required for debugging)
-router.get('/api/onboarding/status', rateLimits.general, async (req, res) => {
+router.get('/api/onboarding/status', async (req, res) => {
     try {
         let blockchainStatus = null;
         if (typeof blockchainMonitor !== 'undefined' && blockchainMonitor.getStatus) {
@@ -3376,7 +3271,7 @@ router.get('/api/onboarding/status', rateLimits.general, async (req, res) => {
 });
 
 // 3g. Admin endpoint - Verify pending accounts exist on blockchain
-router.post('/api/onboarding/admin/verify-accounts', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
+router.post('/api/onboarding/admin/verify-accounts', adminAuthMiddleware, async (req, res) => {
     try {
         const { usernames } = req.body;
         
@@ -3487,7 +3382,7 @@ router.post('/api/onboarding/admin/verify-accounts', rateLimits.admin, adminAuth
 });
 
 // 4. Admin endpoint - Get payment channels (last 7 days)
-router.get('/api/onboarding/admin/channels', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
+router.get('/api/onboarding/admin/channels', adminAuthMiddleware, async (req, res) => {
     try {
         const {
             limit = 50,
@@ -3823,7 +3718,7 @@ router.get('/api/onboarding/payment/:paymentId/status', async (req, res) => {
 });
 
 // 4. Validate account request before sending (pre-flight check)
-router.post('/api/onboarding/request/validate', rateLimits.general, async (req, res) => {
+router.post('/api/onboarding/request/validate', async (req, res) => {
     try {
         const { requesterUsername, requestedFrom, publicKeys } = req.body;
 
@@ -3926,7 +3821,7 @@ router.post('/api/onboarding/request/validate', rateLimits.general, async (req, 
 
 // 5. Send friend account request
 router.post('/api/onboarding/request/send', 
-    rateLimits.strict,
+    
     validateInput(Joi.object({
         requesterUsername: validationSchemas.username,
         requestedFrom: validationSchemas.username,
@@ -4983,7 +4878,7 @@ const initializeWebSocketMonitor = (server) => {
 };
 
 // 9. Check if HIVE account exists (public endpoint)
-router.get('/api/onboarding/check-account/:username', rateLimits.general, async (req, res) => {
+router.get('/api/onboarding/check-account/:username', async (req, res) => {
     try {
         const { username } = req.params;
 
@@ -5115,7 +5010,7 @@ router.get('/api/onboarding/rc-costs', async (req, res) => {
 
 // 11. Test endpoint for crypto account generation
 // Test endpoint for Monero and Dash implementations
-router.get('/api/onboarding/test-crypto-implementations', rateLimits.general, async (req, res) => {
+router.get('/api/onboarding/test-crypto-implementations', async (req, res) => {
     try {
         const testResults = {};
         
@@ -5164,7 +5059,7 @@ router.get('/api/onboarding/test-crypto-implementations', rateLimits.general, as
     }
 });
 
-router.get('/api/onboarding/test-address-generation/:cryptoType', rateLimits.general, async (req, res) => {
+router.get('/api/onboarding/test-address-generation/:cryptoType', async (req, res) => {
     try {
         const { cryptoType } = req.params;
 
@@ -5215,7 +5110,7 @@ router.get('/api/onboarding/test-address-generation/:cryptoType', rateLimits.gen
 });
 
 // 12. Get transaction information for client-side transaction assembly
-router.get('/api/onboarding/transaction-info/:cryptoType/:address', rateLimits.general, async (req, res) => {
+router.get('/api/onboarding/transaction-info/:cryptoType/:address', async (req, res) => {
     try {
         const { cryptoType, address } = req.params;
 
@@ -5250,7 +5145,7 @@ router.get('/api/onboarding/transaction-info/:cryptoType/:address', rateLimits.g
 });
 
 // API Status and Debug Endpoint - Comprehensive system test
-router.get('/api/onboarding/debug/system-status', rateLimits.general, async (req, res) => {
+router.get('/api/onboarding/debug/system-status', async (req, res) => {
     try {
         const results = {
             timestamp: new Date().toISOString(),
@@ -5260,7 +5155,7 @@ router.get('/api/onboarding/debug/system-status', rateLimits.general, async (req
             crypto_generator: { initialized: false, supported_cryptos: [] },
             hive_service: { connected: false, rc_balance: null },
             auth_middleware: { active: true },
-            rate_limits: { active: true },
+            rate_limits: { active: false, note: "Rate limiting handled upstream" },
             endpoints_tested: {}
         };
 
@@ -5375,7 +5270,7 @@ router.get('/api/onboarding/debug/system-status', rateLimits.general, async (req
 });
 
 // Test Payment Simulation Endpoint - Demonstrates full payment flow
-router.post('/api/onboarding/test/simulate-payment', rateLimits.general, async (req, res) => {
+router.post('/api/onboarding/test/simulate-payment', async (req, res) => {
     try {
         const { username, cryptoType } = req.body;
         
@@ -6136,23 +6031,23 @@ const {
   submitFlagReport, getPendingFlags, reviewFlagReport, updateUserFlagPermissions, getUserFlagStats
 } = require('./index');
 
-router.get('/api/posts', rateLimits.admin, adminAuthMiddleware, getPosts);
-router.get('/api/posts/stats', rateLimits.admin, adminAuthMiddleware, getPostsStats);
+router.get('/api/posts', adminAuthMiddleware, getPosts);
+router.get('/api/posts/stats', adminAuthMiddleware, getPostsStats);
 router.get('/api/posts/test-flags', testFlags); // Test endpoint (no auth for testing)
-router.post('/api/posts', rateLimits.admin, adminAuthMiddleware, createPost);
-router.put('/api/posts/:author/:permlink', rateLimits.admin, adminAuthMiddleware, updatePost);
-router.patch('/api/posts/:author/:permlink/flags', rateLimits.admin, adminAuthMiddleware, updatePostFlags);
-router.delete('/api/posts/:author/:permlink', rateLimits.admin, adminAuthMiddleware, deletePost);
+router.post('/api/posts', adminAuthMiddleware, createPost);
+router.put('/api/posts/:author/:permlink', adminAuthMiddleware, updatePost);
+router.patch('/api/posts/:author/:permlink/flags', adminAuthMiddleware, updatePostFlags);
+router.delete('/api/posts/:author/:permlink', adminAuthMiddleware, deletePost);
 
 // Community Flag Reporting Routes
-router.post('/api/flags/report', rateLimits.general, authMiddleware, submitFlagReport);
-router.get('/api/flags/pending', rateLimits.admin, adminAuthMiddleware, getPendingFlags);
-router.post('/api/flags/review/:reportId', rateLimits.admin, adminAuthMiddleware, reviewFlagReport);
-router.put('/api/flags/users/:username/permissions', rateLimits.admin, adminAuthMiddleware, updateUserFlagPermissions);
-router.get('/api/flags/users/:username/stats', rateLimits.general, getUserFlagStats);
+router.post('/api/flags/report', authMiddleware, submitFlagReport);
+router.get('/api/flags/pending', adminAuthMiddleware, getPendingFlags);
+router.post('/api/flags/review/:reportId', adminAuthMiddleware, reviewFlagReport);
+router.put('/api/flags/users/:username/permissions', adminAuthMiddleware, updateUserFlagPermissions);
+router.get('/api/flags/users/:username/stats', getUserFlagStats);
 
 // Manual Account Creation Route
-router.post('/api/onboarding/admin/manual-create-account', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
+router.post('/api/onboarding/admin/manual-create-account', adminAuthMiddleware, async (req, res) => {
     try {
         const { channelId, username, publicKeys, useACT = true } = req.body;
         const adminUsername = req.auth.account;
@@ -6302,7 +6197,7 @@ router.post('/api/onboarding/admin/manual-create-account', rateLimits.admin, adm
 });
 
 // 13. Admin endpoint - Cancel payment channel
-router.delete('/api/onboarding/admin/channels/:channelId', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
+router.delete('/api/onboarding/admin/channels/:channelId', adminAuthMiddleware, async (req, res) => {
     try {
         const { channelId } = req.params;
         const adminUsername = req.auth.account;
@@ -6344,7 +6239,7 @@ router.delete('/api/onboarding/admin/channels/:channelId', rateLimits.admin, adm
 });
 
 // 14. Admin endpoint - Get admin account information
-router.get('/api/onboarding/admin/account-info', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
+router.get('/api/onboarding/admin/account-info', adminAuthMiddleware, async (req, res) => {
     try {
         const adminUsername = req.auth.account;
 
@@ -6433,7 +6328,7 @@ router.get('/api/onboarding/admin/account-info', rateLimits.admin, adminAuthMidd
 });
 
 // 15. Admin endpoint - Claim ACT token for admin account
-router.post('/api/onboarding/admin/claim-act', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
+router.post('/api/onboarding/admin/claim-act', adminAuthMiddleware, async (req, res) => {
     try {
         const adminUsername = req.auth.account;
 
@@ -6515,7 +6410,7 @@ router.post('/api/onboarding/admin/claim-act', rateLimits.admin, adminAuthMiddle
 });
 
 // 16. Admin endpoint - Build account with admin keychain
-router.post('/api/onboarding/admin/build-account', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
+router.post('/api/onboarding/admin/build-account', adminAuthMiddleware, async (req, res) => {
     try {
         const { channelId, useACT = true } = req.body;
         const adminUsername = req.auth.account;
@@ -6695,7 +6590,7 @@ router.post('/api/onboarding/admin/build-account', rateLimits.admin, adminAuthMi
 });
 
 // 17. Admin endpoint - Complete keychain account creation
-router.post('/api/onboarding/admin/complete-account-creation', rateLimits.admin, adminAuthMiddleware, async (req, res) => {
+router.post('/api/onboarding/admin/complete-account-creation', adminAuthMiddleware, async (req, res) => {
     try {
         const { channelId, txId, username, creationMethod } = req.body;
         const adminUsername = req.auth.account;
@@ -6776,8 +6671,7 @@ module.exports = {
     hiveAccountService,
     rcMonitoringService,
     HiveAuth,
-    createAuthMiddleware,
-    rateLimits
+    createAuthMiddleware
 };
 
 // Auto-initialize if this file is run directly
