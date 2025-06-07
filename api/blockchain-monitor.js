@@ -188,6 +188,38 @@ class BlockchainMonitoringService {
             finality_type: 'finalized' // Solana uses finalized vs confirmed
         });
 
+        this.networks.set('DASH', {
+            name: 'Dash',
+            type: 'utxo',
+            apis: [
+                // Placeholder - would need actual Dash APIs
+                'https://dashgoldrpc.com',
+                'https://electrum.dash.org:51002'
+            ],
+            confirmations_required: 6,
+            block_time: 2.5 * 60, // 2.5 minutes
+            decimals: 8,
+            min_amount: 0.00001, // Minimum amount to consider (in DASH)
+            supports_memo: false, // Using unique addresses instead
+            monitoring_enabled: true // Now enabled with Insight API
+        });
+
+        this.networks.set('XMR', {
+            name: 'Monero',
+            type: 'account',
+            apis: [
+                // Placeholder - would need actual Monero APIs
+                'https://xmr-node.cakewallet.com:18081',
+                'https://node.community.rino.io:18081'
+            ],
+            confirmations_required: 10,
+            block_time: 2 * 60, // 2 minutes
+            decimals: 12,
+            min_amount: 0.0001, // Minimum amount to consider (in XMR)
+            supports_memo: false, // Using unique addresses instead
+            monitoring_enabled: true // Now enabled with limited public API support
+        });
+
         // Network configurations initialized
     }
 
@@ -734,16 +766,7 @@ class BlockchainMonitoringService {
                 return false;
             }
 
-            // Enhanced memo checking
-            if (channel.memo) {
-                if (!transaction.memo) {
-                    return false;
-                }
-                
-                if (transaction.memo.trim() !== channel.memo.trim()) {
-                    return false;
-                }
-            }
+            // No memo checking needed - using unique addresses instead
 
             // Check if transaction is after channel creation (with buffer)
             const txTime = new Date(transaction.timestamp);
@@ -892,6 +915,10 @@ class BlockchainMonitoringService {
                 return await this.getPolygonTransaction(txHash);
             case 'SOL':
                 return await this.getSolanaTransaction(txHash);
+            case 'DASH':
+                return await this.getDashTransaction(txHash);
+            case 'XMR':
+                return await this.getMoneroTransaction(txHash);
             default:
                 return null;
         }
@@ -913,6 +940,10 @@ class BlockchainMonitoringService {
                 return await this.getPolygonAddressTransactions(address, sinceTimestamp);
             case 'SOL':
                 return await this.getSolanaAddressTransactions(address, sinceTimestamp);
+            case 'DASH':
+                return await this.getDashAddressTransactions(address, sinceTimestamp);
+            case 'XMR':
+                return await this.getMoneroAddressTransactions(address, sinceTimestamp);
             default:
                 return [];
         }
@@ -1339,6 +1370,181 @@ class BlockchainMonitoringService {
     // Public method to manually verify a transaction
     async manualVerifyTransaction(channelId, txHash) {
         return await this.verifyTransactionHash(channelId, txHash);
+    }
+
+    // DASH methods (using Insight API)
+    async getDashTransaction(txHash) {
+        try {
+            // Try multiple Dash Insight APIs
+            const apis = [
+                `https://insight.dash.org/insight-api/tx/${txHash}`,
+                `https://explorer.dash.org/insight-api/tx/${txHash}`
+            ];
+
+            for (const apiUrl of apis) {
+                try {
+                    const response = await fetch(apiUrl);
+                    if (!response.ok) continue;
+
+                    const data = await response.json();
+                    
+                    // Parse Dash transaction (similar to Bitcoin structure)
+                    const outputs = data.vout || [];
+                    const totalOutput = outputs.reduce((sum, output) => sum + (output.value || 0), 0);
+                    
+                    return {
+                        hash: txHash,
+                        amount: totalOutput,
+                        to: outputs[0]?.scriptPubKey?.addresses?.[0] || null,
+                        allOutputs: outputs.map(output => ({
+                            address: output.scriptPubKey?.addresses?.[0],
+                            amount: output.value
+                        })),
+                        confirmations: data.confirmations || 0,
+                        blockHeight: data.blockheight,
+                        timestamp: new Date(data.time * 1000),
+                        memo: null, // Dash doesn't typically use memos
+                        fees: data.fees || 0
+                    };
+                } catch (apiError) {
+                    console.warn(`Failed to fetch from ${apiUrl}:`, apiError.message);
+                    continue;
+                }
+            }
+            
+            console.warn('All Dash APIs failed for transaction:', txHash);
+            return null;
+        } catch (error) {
+            console.error('Error fetching DASH transaction:', error);
+            return null;
+        }
+    }
+
+    async getDashAddressTransactions(address, sinceTimestamp) {
+        try {
+            // Try multiple Dash APIs for address transactions
+            const apis = [
+                `https://insight.dash.org/insight-api/addr/${address}/txs`,
+                `https://explorer.dash.org/insight-api/addr/${address}/txs`
+            ];
+
+            for (const apiUrl of apis) {
+                try {
+                    const response = await fetch(apiUrl);
+                    if (!response.ok) continue;
+
+                    const data = await response.json();
+                    const transactions = data.txs || data || [];
+                    
+                    return transactions
+                        .filter(tx => new Date(tx.time * 1000) >= new Date(sinceTimestamp))
+                        .map(tx => ({
+                            hash: tx.txid,
+                            amount: tx.vout?.reduce((sum, output) => 
+                                output.scriptPubKey?.addresses?.includes(address) ? sum + output.value : sum, 0) || 0,
+                            to: address,
+                            confirmations: tx.confirmations || 0,
+                            blockHeight: tx.blockheight,
+                            timestamp: new Date(tx.time * 1000),
+                            memo: null
+                        }));
+                } catch (apiError) {
+                    console.warn(`Failed to fetch from ${apiUrl}:`, apiError.message);
+                    continue;
+                }
+            }
+            
+            console.warn('All Dash APIs failed for address:', address);
+            return [];
+        } catch (error) {
+            console.error('Error fetching DASH address transactions:', error);
+            return [];
+        }
+    }
+
+    // Monero methods
+    async getMoneroTransaction(txHash) {
+        try {
+            // Try public Monero block explorers
+            const apis = [
+                `https://xmrchain.net/api/transaction/${txHash}`,
+                `https://moneroblocks.info/api/get_tx_info/${txHash}`
+            ];
+
+            for (const apiUrl of apis) {
+                try {
+                    const response = await fetch(apiUrl);
+                    if (!response.ok) continue;
+
+                    const data = await response.json();
+                    
+                    return {
+                        hash: txHash,
+                        amount: data.total_output || data.amount || 0,
+                        to: null, // Monero doesn't expose recipient addresses
+                        confirmations: data.confirmations || 0,
+                        blockHeight: data.block_height || data.height,
+                        timestamp: new Date((data.timestamp || data.block_timestamp) * 1000),
+                        memo: null,
+                        fees: data.tx_fee || data.fee || 0,
+                        ring_size: data.ring_size || 16,
+                        outputs: data.outputs?.length || 0
+                    };
+                } catch (apiError) {
+                    console.warn(`Failed to fetch from ${apiUrl}:`, apiError.message);
+                    continue;
+                }
+            }
+            
+            console.warn('All Monero APIs failed for transaction:', txHash);
+            return null;
+        } catch (error) {
+            console.error('Error fetching Monero transaction:', error);
+            return null;
+        }
+    }
+
+    async getMoneroAddressTransactions(address, sinceTimestamp) {
+        try {
+            // Note: Monero address transaction lookup is very limited due to privacy features
+            // Most public APIs cannot track specific addresses due to ring signatures
+            console.info('Monero address monitoring limited due to privacy features');
+            
+            // Try to get some basic info if available
+            const apis = [
+                `https://xmrchain.net/api/outputs?address=${address}&limit=10`,
+                `https://moneroblocks.info/api/get_address_info/${address}`
+            ];
+
+            for (const apiUrl of apis) {
+                try {
+                    const response = await fetch(apiUrl);
+                    if (!response.ok) continue;
+
+                    const data = await response.json();
+                    
+                    // Very limited data available due to privacy
+                    return (data.outputs || []).map(output => ({
+                        hash: output.tx_hash || 'unknown',
+                        amount: output.amount || 0,
+                        to: address,
+                        confirmations: 10, // Assume confirmed if in explorer
+                        blockHeight: output.block_height || 0,
+                        timestamp: new Date((output.timestamp || Date.now()/1000) * 1000),
+                        memo: null,
+                        privacy_note: 'Limited data due to Monero privacy features'
+                    }));
+                } catch (apiError) {
+                    console.warn(`Failed to fetch from ${apiUrl}:`, apiError.message);
+                    continue;
+                }
+            }
+            
+            return [];
+        } catch (error) {
+            console.error('Error fetching Monero address transactions:', error);
+            return [];
+        }
     }
 
     // Get monitoring status

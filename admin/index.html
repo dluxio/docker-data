@@ -200,6 +200,13 @@
                                 </a>
                             </li>
                             <li class="nav-item">
+                                <a class="nav-link" :class="{ active: currentView === 'crypto-addresses' }" 
+                                   @click="setView('crypto-addresses')">
+                                    <i class="bi bi-wallet"></i>
+                                    Crypto Addresses
+                                </a>
+                            </li>
+                            <li class="nav-item">
                                 <a class="nav-link" :class="{ active: currentView === 'users' }" 
                                    @click="setView('users')">
                                     <i class="bi bi-people"></i>
@@ -506,6 +513,11 @@
                                          @loading="setLoading">
                     </payment-channels-view>
 
+                    <crypto-addresses-view v-if="currentView === 'crypto-addresses'" 
+                                         :api-client="apiClient"
+                                         @loading="setLoading">
+                    </crypto-addresses-view>
+
                     <admin-users-view v-if="currentView === 'users'" 
                                       :api-client="apiClient" 
                                       @loading="setLoading">
@@ -534,6 +546,7 @@
     <script src="js/components/rc-costs.js"></script>
     <script src="js/components/blockchain-status.js"></script>
     <script src="js/components/payment-channels.js"></script>
+    <script src="js/components/crypto-addresses.js"></script>
     <script src="js/components/admin-users.js"></script>
     <script src="js/components/posts-view.js"></script>
     <script src="js/components/flags-view.js"></script>

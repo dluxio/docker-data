@@ -10,6 +10,7 @@ const blockchainMonitor = require('./blockchain-monitor');
 const hiveTx = require('hive-tx');
 const { sha256 } = require("hive-tx/helpers/crypto.js")
 const config = require('../config');
+const CryptoAccountGenerator = require('./crypto-account-generator');
 
 const router = express.Router();
 
@@ -39,7 +40,7 @@ const validationSchemas = {
     }).required(),
     
     cryptoType: Joi.string()
-        .valid('BTC', 'SOL', 'ETH', 'MATIC', 'BNB')
+        .valid('BTC', 'SOL', 'ETH', 'MATIC', 'BNB', 'XMR', 'DASH')
         .required(),
     
     message: Joi.string()
@@ -422,6 +423,25 @@ const setupDatabase = async () => {
           )
         `);
 
+            // Crypto addresses table for unique address generation per channel
+            await client.query(`
+          CREATE TABLE IF NOT EXISTS crypto_addresses (
+            id SERIAL PRIMARY KEY,
+            channel_id VARCHAR(100) NOT NULL,
+            crypto_type VARCHAR(10) NOT NULL,
+            address VARCHAR(255) NOT NULL,
+            public_key TEXT,
+            private_key_encrypted BYTEA,
+            derivation_path VARCHAR(100),
+            derivation_index INTEGER NOT NULL,
+            address_type VARCHAR(20),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            reusable_after TIMESTAMP DEFAULT (CURRENT_TIMESTAMP + INTERVAL '1 week'),
+            UNIQUE(crypto_type, address),
+            UNIQUE(crypto_type, derivation_index)
+          )
+        `);
+
             // Indexes for performance
             await client.query(`
           CREATE INDEX IF NOT EXISTS idx_payments_payment_id ON onboarding_payments(payment_id);
@@ -456,6 +476,11 @@ const setupDatabase = async () => {
           CREATE INDEX IF NOT EXISTS idx_notifications_created ON user_notifications(created_at);
           CREATE INDEX IF NOT EXISTS idx_admin_users_username ON admin_users(username);
           CREATE INDEX IF NOT EXISTS idx_admin_users_active ON admin_users(active);
+          CREATE INDEX IF NOT EXISTS idx_crypto_addresses_channel ON crypto_addresses(channel_id);
+          CREATE INDEX IF NOT EXISTS idx_crypto_addresses_crypto_type ON crypto_addresses(crypto_type);
+          CREATE INDEX IF NOT EXISTS idx_crypto_addresses_address ON crypto_addresses(address);
+          CREATE INDEX IF NOT EXISTS idx_crypto_addresses_reusable ON crypto_addresses(reusable_after);
+          CREATE INDEX IF NOT EXISTS idx_crypto_addresses_derivation ON crypto_addresses(crypto_type, derivation_index);
         `);
 
             // Add missing columns to existing tables (for upgrades)
@@ -510,9 +535,9 @@ const CRYPTO_CONFIG = {
         payment_type: 'address', // Uses address-based payments
         confirmations_required: 2,
         block_time_seconds: 10 * 60, // 10 minutes
-        memo_support: true, // Supports OP_RETURN memos
-        memo_type: 'op_return',
-        memo_max_length: 80, // OP_RETURN max 80 bytes
+        memo_support: false, // Using unique addresses instead
+        memo_type: null,
+        memo_max_length: 0,
         rpc_endpoints: [
             'https://blockstream.info/api',
             'https://api.blockcypher.com/v1/btc/main'
@@ -527,9 +552,9 @@ const CRYPTO_CONFIG = {
         payment_type: 'address', // Uses address-based payments
         confirmations_required: 1,
         block_time_seconds: 0.4,
-        memo_support: true, // Supports transaction memos
-        memo_type: 'instruction',
-        memo_max_length: 566, // SOL memo instruction max
+        memo_support: false, // Using unique addresses instead
+        memo_type: null,
+        memo_max_length: 0,
         rpc_endpoints: [
             'https://api.mainnet-beta.solana.com',
             'https://solana-api.projectserum.com'
@@ -544,6 +569,9 @@ const CRYPTO_CONFIG = {
         payment_type: 'address', // Uses address-based payments
         confirmations_required: 2,
         block_time_seconds: 12,
+        memo_support: false, // Using unique addresses instead
+        memo_type: null,
+        memo_max_length: 0,
         rpc_endpoints: [
             'https://mainnet.infura.io/v3/YOUR_KEY',
             'https://eth-mainnet.alchemyapi.io/v2/YOUR_KEY'
@@ -558,6 +586,9 @@ const CRYPTO_CONFIG = {
         payment_type: 'address', // Uses address-based payments
         confirmations_required: 10,
         block_time_seconds: 2,
+        memo_support: false, // Using unique addresses instead
+        memo_type: null,
+        memo_max_length: 0,
         rpc_endpoints: [
             'https://polygon-rpc.com',
             'https://rpc-mainnet.maticvigil.com'
@@ -572,9 +603,46 @@ const CRYPTO_CONFIG = {
         payment_type: 'address', // Uses address-based payments
         confirmations_required: 3,
         block_time_seconds: 3,
+        memo_support: false, // Using unique addresses instead
+        memo_type: null,
+        memo_max_length: 0,
         rpc_endpoints: [
             'https://bsc-dataseed.binance.org',
             'https://bsc-dataseed1.defibit.io'
+        ]
+    },
+    XMR: {
+        name: 'Monero',
+        coingecko_id: 'monero',
+        decimals: 12,
+        avg_transfer_fee: 0.0001, // XMR
+        fallback_price_usd: 150,
+        payment_type: 'address',
+        confirmations_required: 10, // Monero requires more confirmations
+        block_time_seconds: 2 * 60, // 2 minutes
+        memo_support: false, // Using unique addresses instead
+        memo_type: null,
+        memo_max_length: 0,
+        rpc_endpoints: [
+            'https://xmr-node.cakewallet.com:18081',
+            'https://node.community.rino.io:18081'
+        ]
+    },
+    DASH: {
+        name: 'Dash',
+        coingecko_id: 'dash',
+        decimals: 8,
+        avg_transfer_fee: 0.00001, // DASH
+        fallback_price_usd: 30,
+        payment_type: 'address',
+        confirmations_required: 6, // Similar to Bitcoin
+        block_time_seconds: 2.5 * 60, // 2.5 minutes
+        memo_support: false, // Using unique addresses instead
+        memo_type: null,
+        memo_max_length: 0,
+        rpc_endpoints: [
+            'https://dashgoldrpc.com',
+            'https://electrum.dash.org:51002'
         ]
     }
 };
@@ -962,8 +1030,9 @@ class PricingService {
     }
 }
 
-// Create pricing service instance
+// Create service instances
 const pricingService = new PricingService();
+const cryptoGenerator = new CryptoAccountGenerator();
 
 // Memo verification utilities
 class MemoVerification {
@@ -2006,38 +2075,50 @@ const generateMemo = (username, channelId) => {
     return channelId;
 };
 
-// Get shared payment address for a crypto type
-const getPaymentAddress = (cryptoType) => {
-    const address = PAYMENT_ADDRESSES[cryptoType];
-    if (!address) {
-        throw new Error(`Payment address for ${cryptoType} not configured. Please set ${cryptoType}_PAYMENT_ADDRESS environment variable.`);
+// Get unique payment address for a crypto type and channel
+const getPaymentAddress = async (cryptoType, channelId) => {
+    try {
+        // Generate unique address for this payment channel
+        const addressInfo = await cryptoGenerator.getChannelAddress(cryptoType, channelId);
+        
+        return {
+            address: addressInfo.address,
+            publicKey: addressInfo.publicKey,
+            derivationPath: addressInfo.derivationPath,
+            addressType: addressInfo.addressType,
+            crypto_type: cryptoType,
+            shared: false, // Each channel gets its own unique address
+            reused: addressInfo.reused || false,
+            transactionInfo: await cryptoGenerator.getTransactionInfo(cryptoType, addressInfo.address)
+        };
+    } catch (error) {
+        console.error(`Error generating payment address for ${cryptoType}:`, error);
+        throw new Error(`Failed to generate payment address for ${cryptoType}: ${error.message}`);
     }
-
-    return {
-        address,
-        crypto_type: cryptoType,
-        shared: true // Indicates this is a shared address
-    };
 };
 
 // Create a new payment channel
-const createPaymentChannel = async (username, cryptoType, amountCrypto, amountUsd, paymentAddress, memo, publicKeys = null) => {
+const createPaymentChannel = async (username, cryptoType, amountCrypto, amountUsd, publicKeys = null) => {
     const client = await pool.connect();
     try {
         const channelId = generateChannelId();
+        
+        // Generate unique address for this channel
+        const paymentAddress = await getPaymentAddress(cryptoType, channelId);
 
         const result = await client.query(`
         INSERT INTO payment_channels 
-        (channel_id, username, crypto_type, payment_address, amount_crypto, amount_usd, memo, public_keys)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        (channel_id, username, crypto_type, payment_address, amount_crypto, amount_usd, public_keys)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING *
-      `, [channelId, username, cryptoType, paymentAddress.address, amountCrypto, amountUsd, memo, JSON.stringify(publicKeys)]);
+      `, [channelId, username, cryptoType, paymentAddress.address, amountCrypto, amountUsd, JSON.stringify(publicKeys)]);
 
-        console.log(`📝 Channel created for @${username}: ${amountCrypto} ${cryptoType} (${channelId})`);
+        console.log(`📝 Channel created for @${username}: ${amountCrypto} ${cryptoType} (${channelId}) - Address: ${paymentAddress.address}`);
 
         return {
             ...result.rows[0],
             address: paymentAddress.address,
+            addressInfo: paymentAddress,
             shared: paymentAddress.shared
         };
     } finally {
@@ -2806,19 +2887,14 @@ router.post('/api/onboarding/payment/initiate',
         }
 
         // Generate payment details
-        let paymentAddress, memo, channel;
+        let channel;
         try {
-            paymentAddress = getPaymentAddress(cryptoType);
-            memo = generateMemo(username, generateChannelId());
-
-            // Create payment channel with provided public keys
+            // Create payment channel with provided public keys (address generated automatically)
             channel = await createPaymentChannel(
                 username,
                 cryptoType,
                 cryptoRate.total_amount,
                 cryptoRate.final_cost_usd, // Use the per-crypto price
-                paymentAddress,
-                memo,
                 publicKeys // Store the validated public keys (Joi already validated them)
             );
         } catch (channelError) {
@@ -2839,8 +2915,14 @@ router.post('/api/onboarding/payment/initiate',
                 amount: parseFloat(cryptoRate.total_amount),
                 amountFormatted: `${parseFloat(cryptoRate.total_amount).toFixed(CRYPTO_CONFIG[cryptoType].decimals === 18 ? 6 : CRYPTO_CONFIG[cryptoType].decimals)} ${cryptoType}`,
                 amountUSD: parseFloat(cryptoRate.final_cost_usd),
-                address: paymentAddress.address,
-                memo,
+                address: channel.address,
+                addressInfo: {
+                    address: channel.address,
+                    addressType: channel.addressInfo?.addressType,
+                    derivationPath: channel.addressInfo?.derivationPath,
+                    reused: channel.addressInfo?.reused || false,
+                    transactionInfo: channel.addressInfo?.transactionInfo
+                },
                 expiresAt: channel.expires_at,
                 network: CRYPTO_CONFIG[cryptoType].name,
                 confirmationsRequired: CRYPTO_CONFIG[cryptoType].confirmations_required,
@@ -2853,7 +2935,7 @@ router.post('/api/onboarding/payment/initiate',
                 },
                 instructions: [
                     `Send exactly ${parseFloat(cryptoRate.total_amount).toFixed(CRYPTO_CONFIG[cryptoType].decimals === 18 ? 6 : CRYPTO_CONFIG[cryptoType].decimals)} ${cryptoType} to the address above`,
-                    `Include the memo: ${memo}`,
+                    `This address is unique to your payment - no memo required`,
                     `Payment expires in 24 hours`,
                     `Account will be created automatically after ${CRYPTO_CONFIG[cryptoType].confirmations_required} confirmation(s)`,
                     `HIVE account @${username} will be created with your provided public keys`
@@ -3567,7 +3649,7 @@ router.get('/api/onboarding/payment/status/:channelId', async (req, res) => {
                     case 'pending':
                         if (!channel.tx_hash) {
                             statusMessage = '💳 Waiting for payment';
-                            statusDetails = `Send ${channel.amount_crypto} ${channel.crypto_type} to the address with the specified memo.`;
+                            statusDetails = `Send ${channel.amount_crypto} ${channel.crypto_type} to the unique address provided.`;
                             progress = 20;
                         } else {
                             statusMessage = '🔍 Payment detected, waiting for confirmations';
@@ -3625,7 +3707,7 @@ router.get('/api/onboarding/payment/status/:channelId', async (req, res) => {
                     timeLeft: Math.max(0, Math.floor((new Date(channel.expires_at) - new Date()) / (1000 * 60))), // minutes left
                     instructions: channel.status === 'pending' ? [
                         `Send exactly ${parseFloat(channel.amount_crypto).toFixed(CRYPTO_CONFIG[channel.crypto_type]?.decimals === 18 ? 6 : CRYPTO_CONFIG[channel.crypto_type]?.decimals || 6)} ${channel.crypto_type} to the address above`,
-                        `Include the memo: ${channel.memo}`,
+                        `This address is unique to your payment - no memo required`,
                         `Payment expires in ${Math.max(0, Math.floor((new Date(channel.expires_at) - new Date()) / (1000 * 60 * 60)))} hours`,
                         `Account will be created automatically after ${CRYPTO_CONFIG[channel.crypto_type]?.confirmations_required || 1} confirmation(s)`
                     ] : []
@@ -3686,7 +3768,7 @@ router.get('/api/onboarding/channel/:channelId/status', async (req, res) => {
                     publicKeys: channel.public_keys,
                     isExpired: new Date() > new Date(channel.expires_at),
                     timeLeft: Math.max(0, Math.floor((new Date(channel.expires_at) - new Date()) / (1000 * 60))), // minutes left
-                    shared: true // All addresses are shared
+                    shared: false // Each channel gets unique address
                 }
             });
         } finally {
@@ -4866,6 +4948,10 @@ const initializeOnboardingService = async () => {
         // Set up database
         await setupDatabase();
 
+        // Initialize crypto account generator
+        await cryptoGenerator.initialize();
+        console.log('✅ Crypto account generator initialized');
+
         // Start pricing service
         pricingService.startScheduledUpdates();
 
@@ -5037,7 +5123,324 @@ router.get('/api/onboarding/rc-costs', async (req, res) => {
     }
 });
 
-// 11. Fetch and merge HIVE Bridge notifications with local notifications
+// 11. Test endpoint for crypto account generation
+// Test endpoint for Monero and Dash implementations
+router.get('/api/onboarding/test-crypto-implementations', rateLimits.general, async (req, res) => {
+    try {
+        const testResults = {};
+        
+        // Test Dash
+        try {
+            const dashAddress = 'XdNrJj3hPyLrLJteMvjZ8Qy8VzHzVzHzVz'; // Example Dash address
+            const dashInfo = await cryptoGenerator.getDashTransactionInfo(dashAddress);
+            testResults.dash = {
+                success: true,
+                transactionInfo: dashInfo
+            };
+        } catch (error) {
+            testResults.dash = {
+                success: false,
+                error: error.message
+            };
+        }
+        
+        // Test Monero
+        try {
+            const moneroAddress = '4AdUndXHHZ6cfufTMvppY6JwXNouMBzSkbLYfpAV5Usx3skxNgYeYTRJ5BNjPUC4QqLdgdqur7Lw9bDkKy7jJuAcTZzE'; // Example Monero address
+            const moneroInfo = await cryptoGenerator.getMoneroTransactionInfo(moneroAddress);
+            testResults.monero = {
+                success: true,
+                transactionInfo: moneroInfo
+            };
+        } catch (error) {
+            testResults.monero = {
+                success: false,
+                error: error.message
+            };
+        }
+        
+        res.json({
+            success: true,
+            message: 'Crypto implementation test completed',
+            results: testResults
+        });
+    } catch (error) {
+        console.error('Error testing crypto implementations:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to test crypto implementations',
+            details: error.message
+        });
+    }
+});
+
+router.get('/api/onboarding/test-address-generation/:cryptoType', rateLimits.general, async (req, res) => {
+    try {
+        const { cryptoType } = req.params;
+
+        if (!CRYPTO_CONFIG[cryptoType]) {
+            return res.status(400).json({
+                success: false,
+                error: 'Unsupported cryptocurrency',
+                supportedCurrencies: Object.keys(CRYPTO_CONFIG)
+            });
+        }
+
+        // Generate a test channel ID
+        const testChannelId = generateChannelId();
+        
+        // Generate address for this test channel
+        const addressInfo = await cryptoGenerator.getChannelAddress(cryptoType, testChannelId);
+        
+        // Get transaction info
+        const transactionInfo = await cryptoGenerator.getTransactionInfo(cryptoType, addressInfo.address);
+
+        res.json({
+            success: true,
+            test: true,
+            cryptoType,
+            channelId: testChannelId,
+            addressInfo: {
+                address: addressInfo.address,
+                publicKey: addressInfo.publicKey,
+                derivationPath: addressInfo.derivationPath,
+                addressType: addressInfo.addressType,
+                reused: addressInfo.reused || false
+            },
+            transactionInfo,
+            network: CRYPTO_CONFIG[cryptoType].name,
+            decimals: CRYPTO_CONFIG[cryptoType].decimals,
+            confirmationsRequired: CRYPTO_CONFIG[cryptoType].confirmations_required,
+            blockTime: CRYPTO_CONFIG[cryptoType].block_time_seconds,
+            note: 'This is a test endpoint. The generated address is real and functional.'
+        });
+    } catch (error) {
+        console.error('Error testing address generation:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to test address generation',
+            details: error.message
+        });
+    }
+});
+
+// 12. Get transaction information for client-side transaction assembly
+router.get('/api/onboarding/transaction-info/:cryptoType/:address', rateLimits.general, async (req, res) => {
+    try {
+        const { cryptoType, address } = req.params;
+
+        if (!CRYPTO_CONFIG[cryptoType]) {
+            return res.status(400).json({
+                success: false,
+                error: 'Unsupported cryptocurrency',
+                supportedCurrencies: Object.keys(CRYPTO_CONFIG)
+            });
+        }
+
+        const transactionInfo = await cryptoGenerator.getTransactionInfo(cryptoType, address);
+
+        res.json({
+            success: true,
+            cryptoType,
+            address,
+            transactionInfo,
+            network: CRYPTO_CONFIG[cryptoType].name,
+            decimals: CRYPTO_CONFIG[cryptoType].decimals,
+            confirmationsRequired: CRYPTO_CONFIG[cryptoType].confirmations_required,
+            blockTime: CRYPTO_CONFIG[cryptoType].block_time_seconds
+        });
+    } catch (error) {
+        console.error('Error getting transaction info:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to get transaction information',
+            details: error.message
+        });
+    }
+});
+
+// 13. Fund consolidation endpoints (Admin only)
+router.get('/api/onboarding/admin/consolidation-info/:cryptoType', createAuthMiddleware(true), async (req, res) => {
+    try {
+        const { cryptoType } = req.params;
+        
+        if (!CRYPTO_CONFIG[cryptoType]) {
+            return res.status(400).json({
+                success: false,
+                error: 'Unsupported cryptocurrency',
+                supportedCurrencies: Object.keys(CRYPTO_CONFIG)
+            });
+        }
+        
+        const addresses = await cryptoGenerator.getAllAddressesWithFunds(cryptoType);
+        const feeEstimate = await cryptoGenerator.estimateConsolidationFee(cryptoType, addresses.length);
+        
+        res.json({
+            success: true,
+            cryptoType,
+            addressCount: addresses.length,
+            addresses: addresses.map(addr => ({
+                address: addr.address,
+                channelId: addr.channel_id,
+                createdAt: addr.created_at
+            })),
+            feeEstimate,
+            instructions: cryptoGenerator.getConsolidationInstructions(cryptoType)
+        });
+    } catch (error) {
+        console.error('Error getting consolidation info:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+router.post('/api/onboarding/admin/generate-consolidation-tx', createAuthMiddleware(true), async (req, res) => {
+    try {
+        const { cryptoType, destinationAddress, priority = 'medium' } = req.body;
+        
+        if (!cryptoType || !destinationAddress) {
+            return res.status(400).json({
+                success: false,
+                error: 'cryptoType and destinationAddress are required'
+            });
+        }
+        
+        if (!CRYPTO_CONFIG[cryptoType]) {
+            return res.status(400).json({
+                success: false,
+                error: 'Unsupported cryptocurrency',
+                supportedCurrencies: Object.keys(CRYPTO_CONFIG)
+            });
+        }
+        
+        const addresses = await cryptoGenerator.getAllAddressesWithFunds(cryptoType);
+        if (addresses.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'No addresses found for this cryptocurrency'
+            });
+        }
+        
+        const consolidationTx = await cryptoGenerator.generateConsolidationTransaction(
+            cryptoType, 
+            addresses, 
+            destinationAddress, 
+            priority
+        );
+        
+        res.json({
+            success: true,
+            consolidationTransaction: consolidationTx
+        });
+    } catch (error) {
+        console.error('Error generating consolidation transaction:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// 14. Admin endpoint to view all crypto addresses
+router.get('/api/onboarding/admin/crypto-addresses', createAuthMiddleware(true), async (req, res) => {
+    try {
+        const { cryptoType, limit = 100, offset = 0 } = req.query;
+        
+        const client = await pool.connect();
+        try {
+            let sql = `
+                SELECT 
+                    ca.address,
+                    ca.crypto_type,
+                    ca.channel_id,
+                    ca.derivation_index,
+                    ca.address_type,
+                    ca.created_at,
+                    ca.reusable_after,
+                    pc.status as channel_status,
+                    pc.amount_crypto,
+                    pc.amount_usd,
+                    pc.created_at as channel_created_at
+                FROM crypto_addresses ca
+                LEFT JOIN payment_channels pc ON ca.channel_id = pc.channel_id
+                WHERE 1=1
+            `;
+            
+            const params = [];
+            let paramIndex = 1;
+            
+            if (cryptoType) {
+                sql += ` AND ca.crypto_type = $${paramIndex}`;
+                params.push(cryptoType);
+                paramIndex++;
+            }
+            
+            sql += ` ORDER BY ca.created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+            params.push(limit, offset);
+            
+            const result = await client.query(sql, params);
+            
+            res.json({
+                success: true,
+                addresses: result.rows,
+                pagination: {
+                    limit: parseInt(limit),
+                    offset: parseInt(offset),
+                    total: result.rows.length
+                }
+            });
+        } finally {
+            client.release();
+        }
+    } catch (error) {
+        console.error('Error fetching crypto addresses:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// 15. Admin endpoint to get address statistics
+router.get('/api/onboarding/admin/address-stats', createAuthMiddleware(true), async (req, res) => {
+    try {
+        const client = await pool.connect();
+        try {
+            const sql = `
+                SELECT 
+                    ca.crypto_type,
+                    COUNT(*) as total_addresses,
+                    COUNT(CASE WHEN ca.reusable_after <= NOW() THEN 1 END) as reusable_addresses,
+                    COUNT(CASE WHEN pc.status = 'completed' THEN 1 END) as completed_channels,
+                    COUNT(CASE WHEN pc.status = 'pending' THEN 1 END) as pending_channels,
+                    COUNT(CASE WHEN pc.status = 'expired' THEN 1 END) as expired_channels
+                FROM crypto_addresses ca
+                LEFT JOIN payment_channels pc ON ca.channel_id = pc.channel_id
+                GROUP BY ca.crypto_type
+                ORDER BY ca.crypto_type
+            `;
+            
+            const result = await client.query(sql);
+            
+            res.json({
+                success: true,
+                statistics: result.rows
+            });
+        } finally {
+            client.release();
+        }
+    } catch (error) {
+        console.error('Error fetching address statistics:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// 16. Fetch and merge HIVE Bridge notifications with local notifications
 router.get('/api/onboarding/notifications/:username/merged', async (req, res) => {
     try {
         const { username } = req.params;
