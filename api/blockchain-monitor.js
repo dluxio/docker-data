@@ -1232,28 +1232,67 @@ class BlockchainMonitoringService {
             const data = await response.json();
             const tx = data.result;
 
-            if (!tx) return null;
+            if (!tx || !tx.meta) {
+                Logger.warn('Solana transaction not found or invalid', { txHash });
+                return null;
+            }
 
-            // Parse Solana transaction (simplified)
-            const amount = tx.meta?.postBalances?.[1] - tx.meta?.preBalances?.[1] || 0;
-            
-            return {
+            // Find the recipient by looking for the largest positive balance change
+            const accountKeys = tx.transaction.message.accountKeys;
+            let maxBalanceChange = 0;
+            let recipientAddress = null;
+            let recipientIndex = -1;
+
+            for (let i = 0; i < accountKeys.length; i++) {
+                const preBalance = tx.meta.preBalances[i] || 0;
+                const postBalance = tx.meta.postBalances[i] || 0;
+                const balanceChange = postBalance - preBalance;
+
+                if (balanceChange > maxBalanceChange) {
+                    maxBalanceChange = balanceChange;
+                    recipientAddress = accountKeys[i];
+                    recipientIndex = i;
+                }
+            }
+
+            if (maxBalanceChange <= 0) {
+                Logger.warn('No positive balance change found in Solana transaction', { txHash });
+                return null;
+            }
+
+            const transaction = {
                 hash: txHash,
-                amount: amount / Math.pow(10, 9), // Convert lamports to SOL
-                to: tx.transaction?.message?.accountKeys?.[1] || null,
-                confirmations: tx.slot ? 1 : 0, // Simplified
+                amount: maxBalanceChange / Math.pow(10, 9), // Convert lamports to SOL
+                to: recipientAddress,
+                confirmations: tx.meta.confirmationStatus === 'finalized' ? 1 : 0,
                 blockHeight: tx.slot,
-                timestamp: new Date(tx.blockTime * 1000),
-                memo: null // Would need to parse memo program
+                timestamp: new Date((tx.blockTime || Math.floor(Date.now() / 1000)) * 1000),
+                memo: null, // Could parse memo program if needed
+                lamports: maxBalanceChange, // Keep original lamports for precision
+                fee: (tx.meta.fee || 0) / Math.pow(10, 9) // Transaction fee in SOL
             };
+
+            Logger.info('Parsed Solana transaction', { 
+                hash: txHash,
+                amount: transaction.amount,
+                to: recipientAddress,
+                lamports: maxBalanceChange
+            });
+
+            return transaction;
+
         } catch (error) {
-            console.error('Error fetching Solana transaction:', error);
+            Logger.error('Error fetching Solana transaction', { 
+                txHash,
+                error: error.message 
+            });
             return null;
         }
     }
 
     async getSolanaAddressTransactions(address, sinceTimestamp) {
         try {
+            // Get signatures for the address
             const response = await fetch('https://api.mainnet-beta.solana.com', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1268,11 +1307,98 @@ class BlockchainMonitoringService {
             const data = await response.json();
             const signatures = data.result || [];
 
-            // Would need to fetch each transaction individually for full details
-            // This is a simplified implementation
-            return [];
+            if (signatures.length === 0) {
+                Logger.info('No signatures found for Solana address', { address });
+                return [];
+            }
+
+            Logger.info(`Found ${signatures.length} signatures for Solana address`, { address });
+
+            // Fetch details for each transaction signature
+            const transactions = [];
+            const sinceTime = Math.floor(new Date(sinceTimestamp).getTime() / 1000);
+
+            for (const sig of signatures.slice(0, 20)) { // Limit to 20 recent transactions
+                try {
+                    if (sig.blockTime && sig.blockTime < sinceTime) {
+                        continue; // Skip transactions older than since timestamp
+                    }
+
+                    const txResponse = await fetch('https://api.mainnet-beta.solana.com', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            jsonrpc: '2.0',
+                            id: 1,
+                            method: 'getTransaction',
+                            params: [sig.signature, { 
+                                encoding: 'json',
+                                maxSupportedTransactionVersion: 0 
+                            }]
+                        })
+                    });
+
+                    const txData = await txResponse.json();
+                    const tx = txData.result;
+
+                    if (!tx || !tx.meta) {
+                        continue;
+                    }
+
+                    // Parse transaction to find transfers to our address
+                    const accountKeys = tx.transaction.message.accountKeys;
+                    const addressIndex = accountKeys.findIndex(key => key === address);
+                    
+                    if (addressIndex === -1) {
+                        continue; // Address not involved in this transaction
+                    }
+
+                    // Calculate balance change for our address
+                    const preBalance = tx.meta.preBalances[addressIndex] || 0;
+                    const postBalance = tx.meta.postBalances[addressIndex] || 0;
+                    const balanceChange = postBalance - preBalance;
+
+                    // Only consider incoming transactions (positive balance change)
+                    if (balanceChange > 0) {
+                        const transaction = {
+                            hash: sig.signature,
+                            amount: balanceChange / Math.pow(10, 9), // Convert lamports to SOL
+                            to: address,
+                            confirmations: sig.confirmationStatus === 'finalized' ? 1 : 0,
+                            blockHeight: tx.slot,
+                            timestamp: new Date((sig.blockTime || Math.floor(Date.now() / 1000)) * 1000),
+                            memo: null, // Could parse memo program if needed
+                            lamports: balanceChange // Keep original lamports for precision
+                        };
+
+                        transactions.push(transaction);
+                        Logger.info('Found Solana transaction', { 
+                            hash: transaction.hash, 
+                            amount: transaction.amount,
+                            lamports: balanceChange,
+                            address
+                        });
+                    }
+
+                    // Add small delay to avoid rate limiting
+                    await new Promise(resolve => setTimeout(resolve, 100));
+
+                } catch (txError) {
+                    Logger.warn('Error fetching Solana transaction details', { 
+                        signature: sig.signature,
+                        error: txError.message 
+                    });
+                    continue;
+                }
+            }
+
+            return transactions;
+
         } catch (error) {
-            console.error('Error fetching Solana address transactions:', error);
+            Logger.error('Error fetching Solana address transactions', { 
+                address,
+                error: error.message 
+            });
             return [];
         }
     }

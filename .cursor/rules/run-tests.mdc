@@ -5,4 +5,4 @@ alwaysApply: true
 ---
 Write tests for the code you wrote... Maintain tests if you break something
 
-Always perform the test suite before you declare victory/completion!
+Always perform the test suite, before you declare victory/completion!
