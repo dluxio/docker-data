@@ -357,6 +357,84 @@ const setupDatabase = async () => {
           )
         `);
 
+            // Posts table for content management
+            await client.query(`
+          CREATE TABLE IF NOT EXISTS posts (
+            id SERIAL PRIMARY KEY,
+            author VARCHAR(50) NOT NULL,
+            permlink VARCHAR(255) NOT NULL,
+            type VARCHAR(20) DEFAULT 'post',
+            block BIGINT,
+            votes INTEGER DEFAULT 0,
+            voteweight DECIMAL(20, 8) DEFAULT 0,
+            promote DECIMAL(20, 8) DEFAULT 0,
+            paid DECIMAL(20, 8) DEFAULT 0,
+            nsfw BOOLEAN DEFAULT FALSE,
+            sensitive BOOLEAN DEFAULT FALSE,
+            hidden BOOLEAN DEFAULT FALSE,
+            featured BOOLEAN DEFAULT FALSE,
+            flagged BOOLEAN DEFAULT FALSE,
+            flag_reason TEXT,
+            moderated_by VARCHAR(50),
+            moderated_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(author, permlink)
+          )
+        `);
+
+            // Flag reports table for content moderation
+            await client.query(`
+          CREATE TABLE IF NOT EXISTS flag_reports (
+            id SERIAL PRIMARY KEY,
+            post_author VARCHAR(50) NOT NULL,
+            post_permlink VARCHAR(255) NOT NULL,
+            reporter_account VARCHAR(50) NOT NULL,
+            flag_type VARCHAR(50) NOT NULL, -- 'spam', 'nsfw', 'hate', 'violence', etc.
+            description TEXT,
+            status VARCHAR(20) DEFAULT 'pending', -- 'pending', 'accepted', 'rejected', 'dismissed'
+            reviewed_by VARCHAR(50),
+            reviewed_at TIMESTAMP,
+            action_taken VARCHAR(100),
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(post_author, post_permlink, reporter_account, flag_type)
+          )
+        `);
+
+            // Flag user statistics for reputation tracking
+            await client.query(`
+          CREATE TABLE IF NOT EXISTS flag_user_stats (
+            id SERIAL PRIMARY KEY,
+            account VARCHAR(50) UNIQUE NOT NULL,
+            flags_submitted INTEGER DEFAULT 0,
+            flags_accepted INTEGER DEFAULT 0,
+            flags_rejected INTEGER DEFAULT 0,
+            flags_dismissed INTEGER DEFAULT 0,
+            reputation_score DECIMAL(10, 2) DEFAULT 50.0,
+            is_trusted_flagger BOOLEAN DEFAULT FALSE,
+            flag_permissions JSONB DEFAULT '{"can_flag": true, "max_flags_per_day": 10}',
+            banned_until TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          )
+        `);
+
+            // User permissions for flagging system
+            await client.query(`
+          CREATE TABLE IF NOT EXISTS user_flag_permissions (
+            id SERIAL PRIMARY KEY,
+            username VARCHAR(50) UNIQUE NOT NULL,
+            can_flag BOOLEAN DEFAULT TRUE,
+            can_review_flags BOOLEAN DEFAULT FALSE,
+            max_flags_per_day INTEGER DEFAULT 10,
+            is_moderator BOOLEAN DEFAULT FALSE,
+            is_trusted_flagger BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          )
+        `);
+
             // Indexes for performance
             await client.query(`
           CREATE INDEX IF NOT EXISTS idx_payments_payment_id ON onboarding_payments(payment_id);
@@ -396,6 +474,25 @@ const setupDatabase = async () => {
           CREATE INDEX IF NOT EXISTS idx_crypto_addresses_address ON crypto_addresses(address);
           CREATE INDEX IF NOT EXISTS idx_crypto_addresses_reusable ON crypto_addresses(reusable_after);
           CREATE INDEX IF NOT EXISTS idx_crypto_addresses_derivation ON crypto_addresses(crypto_type, derivation_index);
+          CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author);
+          CREATE INDEX IF NOT EXISTS idx_posts_permlink ON posts(permlink);
+          CREATE INDEX IF NOT EXISTS idx_posts_author_permlink ON posts(author, permlink);
+          CREATE INDEX IF NOT EXISTS idx_posts_type ON posts(type);
+          CREATE INDEX IF NOT EXISTS idx_posts_block ON posts(block);
+          CREATE INDEX IF NOT EXISTS idx_posts_flagged ON posts(flagged);
+          CREATE INDEX IF NOT EXISTS idx_posts_featured ON posts(featured);
+          CREATE INDEX IF NOT EXISTS idx_posts_hidden ON posts(hidden);
+          CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at);
+          CREATE INDEX IF NOT EXISTS idx_flag_reports_post ON flag_reports(post_author, post_permlink);
+          CREATE INDEX IF NOT EXISTS idx_flag_reports_reporter ON flag_reports(reporter_account);
+          CREATE INDEX IF NOT EXISTS idx_flag_reports_status ON flag_reports(status);
+          CREATE INDEX IF NOT EXISTS idx_flag_reports_type ON flag_reports(flag_type);
+          CREATE INDEX IF NOT EXISTS idx_flag_reports_created ON flag_reports(created_at);
+          CREATE INDEX IF NOT EXISTS idx_flag_user_stats_account ON flag_user_stats(account);
+          CREATE INDEX IF NOT EXISTS idx_flag_user_stats_reputation ON flag_user_stats(reputation_score);
+          CREATE INDEX IF NOT EXISTS idx_flag_user_stats_trusted ON flag_user_stats(is_trusted_flagger);
+          CREATE INDEX IF NOT EXISTS idx_user_flag_permissions_username ON user_flag_permissions(username);
+          CREATE INDEX IF NOT EXISTS idx_user_flag_permissions_moderator ON user_flag_permissions(is_moderator);
         `);
 
             // Add missing columns to existing tables (for upgrades)

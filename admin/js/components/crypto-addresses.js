@@ -173,12 +173,12 @@ const CryptoAddressesView = {
                                     <div class="col-md-4">
                                         <strong>Addresses:</strong> {{ consolidation.info.addressCount }}<br>
                                         <strong>Total Balance:</strong> {{ consolidation.info.totalBalance && consolidation.info.totalBalance.toFixed(8) }} {{ consolidation.info.cryptoType }}<br>
-                                        <strong>USD Value:</strong> ${{ consolidation.info.totalBalanceUSD.toFixed(2) }}
+                                        <strong>USD Value:</strong> &#36;{{ consolidation.info.totalBalanceUSD.toFixed(2) }}
                                     </div>
                                     <div class="col-md-4">
                                         <strong>Est. Fee ({{ consolidation.priority }}):</strong><br>
                                         {{ consolidation.info.feeEstimate[consolidation.priority].fee.toFixed(8) }} {{ consolidation.info.cryptoType }}<br>
-                                        <span class="text-muted">(${{ consolidation.info.feeEstimate[consolidation.priority].feeUSD.toFixed(2) }})</span>
+                                        <span class="text-muted">(&#36;{{ consolidation.info.feeEstimate[consolidation.priority].feeUSD.toFixed(2) }})</span>
                                     </div>
                                     <div class="col-md-4">
                                         <strong>Net Amount:</strong><br>
@@ -225,7 +225,7 @@ const CryptoAddressesView = {
                                     </div>
                                     <div class="col-md-6">
                                         <strong>Estimated Fee:</strong> {{ consolidation.preparationData.estimatedFee.toFixed(8) }} {{ consolidation.preparationData.cryptoType }}<br>
-                                        <strong>Fee USD:</strong> ${{ consolidation.preparationData.estimatedFeeUSD.toFixed(2) }}<br>
+                                        <strong>Fee USD:</strong> &#36;{{ consolidation.preparationData.estimatedFeeUSD.toFixed(2) }}<br>
                                         <strong>Net Amount:</strong> {{ consolidation.preparationData.netAmount.toFixed(8) }} {{ consolidation.preparationData.cryptoType }}
                                     </div>
                                 </div>
