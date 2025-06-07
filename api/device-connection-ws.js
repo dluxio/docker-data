@@ -43,6 +43,9 @@ class DeviceConnectionWebSocket {
                 case 'device_ack':
                     this.handleAcknowledgment(data.messageId);
                     break;
+                case 'device_signing_response':
+                    await this.handleSigningResponse(ws, data);
+                    break;
                 default:
                     return false; // Not a device connection message
             }
@@ -102,10 +105,9 @@ class DeviceConnectionWebSocket {
         // Send current session status
         ws.send(JSON.stringify({
             type: 'device_session_status',
-            sessionId,
-            status: sessionStatus,
-            userType,
-            timestamp: new Date().toISOString()
+            status: {
+                connected: sessionStatus.isConnected
+            }
         }));
 
         console.log(`Device WebSocket subscribed to session ${sessionId} as ${userType}`);
@@ -228,6 +230,61 @@ class DeviceConnectionWebSocket {
         }
     }
 
+    // Handle signing response from WebSocket client
+    async handleSigningResponse(ws, data) {
+        try {
+            const { sessionId, requestId, response, error, timestamp } = data;
+
+            if (!sessionId || !requestId) {
+                ws.send(JSON.stringify({
+                    type: 'device_error',
+                    message: 'sessionId and requestId are required for signing response'
+                }));
+                return;
+            }
+
+            // Verify session exists and user has access
+            const sessionStatus = deviceService.getSessionStatus(sessionId);
+            if (!sessionStatus.isConnected) {
+                ws.send(JSON.stringify({
+                    type: 'device_error',
+                    message: 'Invalid or expired session ID'
+                }));
+                return;
+            }
+
+            // Verify the client is connected as a signer to this session
+            if (ws.userType !== 'signer') {
+                ws.send(JSON.stringify({
+                    type: 'device_error',
+                    message: 'Only signers can send signing responses'
+                }));
+                return;
+            }
+
+            // Submit the response through the device service
+            await deviceService.respondToRequest(sessionId, requestId, response, error);
+
+            // Send confirmation to the signer
+            ws.send(JSON.stringify({
+                type: 'device_response_accepted',
+                sessionId,
+                requestId,
+                timestamp: new Date().toISOString()
+            }));
+
+            console.log(`WebSocket signing response received for request ${requestId} in session ${sessionId}`);
+
+        } catch (error) {
+            console.error('Error handling WebSocket signing response:', error);
+            ws.send(JSON.stringify({
+                type: 'device_error',
+                message: 'Failed to process signing response',
+                details: error.message
+            }));
+        }
+    }
+
     // Start acknowledgment timeout checker
     startAckTimeoutChecker() {
         this.ackChecker = setInterval(() => {
@@ -280,17 +337,13 @@ class DeviceConnectionWebSocket {
     notifyDeviceConnected(sessionId, signerInfo) {
         this.broadcastToSession(sessionId, {
             type: 'device_connected',
-            sessionId,
-            signerInfo,
-            message: 'Device successfully connected'
+            signerInfo
         });
     }
 
     notifyDeviceDisconnected(sessionId) {
         this.broadcastToSession(sessionId, {
-            type: 'device_disconnected',
-            sessionId,
-            message: 'Device disconnected'
+            type: 'device_disconnected'
         });
     }
 
@@ -301,9 +354,9 @@ class DeviceConnectionWebSocket {
             sessionId,
             requestId,
             requestType,
-            requestData,
+            data: requestData,
             deviceInfo,
-            message: `New signing request: ${requestType}`
+            timestamp: new Date().toISOString()
         }, true); // Requires acknowledgment
         
         console.log(`Sent signing request ${requestId} to signer in session ${sessionId}`);
@@ -326,31 +379,22 @@ class DeviceConnectionWebSocket {
 
     notifySessionExpired(sessionId) {
         this.broadcastToSession(sessionId, {
-            type: 'device_session_expired',
-            sessionId,
-            message: 'Session has expired'
+            type: 'device_session_expired'
         });
     }
 
     notifyRequestTimeout(sessionId, requestId) {
         // Send timeout notification to BOTH signer and requester
-        // Signer should know the request expired
-        this.broadcastToSessionUserType(sessionId, 'signer', {
+        const timeoutMessage = {
             type: 'device_request_timeout',
             sessionId,
             requestId,
-            message: 'Signing request timed out - no longer accepting responses',
-            userType: 'signer'
-        });
+            message: 'Signing request timed out'
+        };
         
-        // Requester should know they won't get a response
-        this.broadcastToSessionUserType(sessionId, 'requester', {
-            type: 'device_request_timeout',
-            sessionId,
-            requestId,
-            message: 'Signing request timed out - no response received',
-            userType: 'requester'
-        });
+        // Send to both user types
+        this.broadcastToSessionUserType(sessionId, 'signer', timeoutMessage);
+        this.broadcastToSessionUserType(sessionId, 'requester', timeoutMessage);
         
         console.log(`Sent timeout notifications for request ${requestId} in session ${sessionId}`);
     }

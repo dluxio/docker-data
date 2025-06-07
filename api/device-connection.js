@@ -513,7 +513,14 @@ async function setupDeviceDatabase() {
 const createPairing = async (req, res) => {
     try {
         const username = req.auth.account;
-        const deviceInfo = req.body.deviceInfo || {};
+        const { deviceName, username: bodyUsername } = req.body;
+        
+        // Use authenticated username, ignore any username in body
+        const deviceInfo = {
+            deviceName: deviceName || 'Unknown Device',
+            ...req.body
+        };
+        delete deviceInfo.username; // Remove username from deviceInfo
 
         const result = await deviceService.createPairing(username, deviceInfo);
 
@@ -535,8 +542,12 @@ const createPairing = async (req, res) => {
 // POST /api/device/connect - Connect to a device using pairing code
 const connectToDevice = async (req, res) => {
     try {
-        const { pairCode } = req.body;
-        const requesterInfo = req.body.deviceInfo || {};
+        const { pairCode, deviceName } = req.body;
+        
+        const requesterInfo = {
+            deviceName: deviceName || 'Unknown Device',
+            ...req.body.deviceInfo || {}
+        };
 
         if (!pairCode || pairCode.length !== 6) {
             return res.status(400).json({
@@ -760,37 +771,7 @@ const testDeviceConnection = async (req, res) => {
     }
 };
 
-// GET /api/device/websocket-info - Get WebSocket connection info
-const getWebSocketInfo = async (req, res) => {
-    try {
-        res.json({
-            success: true,
-            websocketUrl: '/ws/payment-monitor', // Reusing existing WebSocket endpoint
-            supportedEvents: [
-                'device_subscribe',
-                'device_unsubscribe', 
-                'device_ping',
-                'device_pairing_created',
-                'device_connected',
-                'device_disconnected',
-                'device_signing_request',
-                'device_signing_response',
-                'device_session_expired',
-                'device_request_timeout'
-            ],
-            instructions: {
-                connect: 'Connect to WebSocket at /ws/payment-monitor',
-                subscribe: 'Send {"type": "device_subscribe", "sessionId": "your-session-id", "userType": "signer|requester"}',
-                notes: 'WebSocket replaces polling /api/device/requests for real-time notifications'
-            }
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
-};
+
 
 module.exports = {
     deviceService,
@@ -805,6 +786,5 @@ module.exports = {
     disconnectDevice,
     getDeviceStatus,
     waitForResponse,
-    testDeviceConnection,
-    getWebSocketInfo
+    testDeviceConnection
 }; 
