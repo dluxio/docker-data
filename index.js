@@ -26,6 +26,7 @@ const {
 // Test endpoints (can be removed in production)
 const { testWebSocketIntegration } = require('./api/test-device-websocket');
 const { testMessageDirection } = require('./api/test-message-direction');
+const { getProtocolSummary } = require('./api/device-protocol-summary');
 const { createAuthMiddleware, rateLimits } = require('./api/onboarding');
 
 // Trust proxy setting for rate limiting and real client IP detection
@@ -78,6 +79,7 @@ api.get("/api/device/test", testDeviceConnection);
 // Test endpoints (can be removed in production)
 api.get("/api/device/test-websocket", testWebSocketIntegration);
 api.get("/api/device/test-message-direction", testMessageDirection);
+api.get("/api/device/protocol-summary", getProtocolSummary);
 
 api.get("/api/:api_type/:api_call", API.hive_api);
 api.get("/dapps/@:author/:permlink", API.getPostRoute);
