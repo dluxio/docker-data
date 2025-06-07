@@ -435,7 +435,7 @@ const setupDatabase = async () => {
           )
         `);
 
-            // Indexes for performance
+            // Indexes for performance - core tables first
             await client.query(`
           CREATE INDEX IF NOT EXISTS idx_payments_payment_id ON onboarding_payments(payment_id);
           CREATE INDEX IF NOT EXISTS idx_payments_status ON onboarding_payments(status);
@@ -474,29 +474,54 @@ const setupDatabase = async () => {
           CREATE INDEX IF NOT EXISTS idx_crypto_addresses_address ON crypto_addresses(address);
           CREATE INDEX IF NOT EXISTS idx_crypto_addresses_reusable ON crypto_addresses(reusable_after);
           CREATE INDEX IF NOT EXISTS idx_crypto_addresses_derivation ON crypto_addresses(crypto_type, derivation_index);
-          CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author);
-          CREATE INDEX IF NOT EXISTS idx_posts_permlink ON posts(permlink);
-          CREATE INDEX IF NOT EXISTS idx_posts_author_permlink ON posts(author, permlink);
-          CREATE INDEX IF NOT EXISTS idx_posts_type ON posts(type);
-          CREATE INDEX IF NOT EXISTS idx_posts_block ON posts(block);
-          CREATE INDEX IF NOT EXISTS idx_posts_flagged ON posts(flagged);
-          CREATE INDEX IF NOT EXISTS idx_posts_featured ON posts(featured);
-          CREATE INDEX IF NOT EXISTS idx_posts_hidden ON posts(hidden);
-          CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at);
-          CREATE INDEX IF NOT EXISTS idx_flag_reports_post ON flag_reports(post_author, post_permlink);
-          CREATE INDEX IF NOT EXISTS idx_flag_reports_reporter ON flag_reports(reporter_account);
-          CREATE INDEX IF NOT EXISTS idx_flag_reports_status ON flag_reports(status);
-          CREATE INDEX IF NOT EXISTS idx_flag_reports_type ON flag_reports(flag_type);
-          CREATE INDEX IF NOT EXISTS idx_flag_reports_created ON flag_reports(created_at);
-          CREATE INDEX IF NOT EXISTS idx_flag_user_stats_account ON flag_user_stats(account);
-          CREATE INDEX IF NOT EXISTS idx_flag_user_stats_reputation ON flag_user_stats(reputation_score);
-          CREATE INDEX IF NOT EXISTS idx_flag_user_stats_trusted ON flag_user_stats(is_trusted_flagger);
-          CREATE INDEX IF NOT EXISTS idx_user_flag_permissions_username ON user_flag_permissions(username);
-          CREATE INDEX IF NOT EXISTS idx_user_flag_permissions_moderator ON user_flag_permissions(is_moderator);
         `);
+
+            // Posts and flags indexes - with error handling for missing columns
+            try {
+                await client.query(`
+              CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author);
+              CREATE INDEX IF NOT EXISTS idx_posts_permlink ON posts(permlink);
+              CREATE INDEX IF NOT EXISTS idx_posts_author_permlink ON posts(author, permlink);
+              CREATE INDEX IF NOT EXISTS idx_posts_type ON posts(type);
+              CREATE INDEX IF NOT EXISTS idx_posts_block ON posts(block);
+              CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at);
+            `);
+            } catch (postsIndexError) {
+                console.log('Basic posts indexes creation failed:', postsIndexError.message);
+            }
+
+            // Extended posts indexes (for columns that might not exist)
+            try {
+                await client.query(`
+              CREATE INDEX IF NOT EXISTS idx_posts_flagged ON posts(flagged);
+              CREATE INDEX IF NOT EXISTS idx_posts_featured ON posts(featured);
+              CREATE INDEX IF NOT EXISTS idx_posts_hidden ON posts(hidden);
+            `);
+            } catch (extendedPostsError) {
+                console.log('Extended posts indexes creation failed (columns might not exist):', extendedPostsError.message);
+            }
+
+            // Flag system indexes
+            try {
+                await client.query(`
+              CREATE INDEX IF NOT EXISTS idx_flag_reports_post ON flag_reports(post_author, post_permlink);
+              CREATE INDEX IF NOT EXISTS idx_flag_reports_reporter ON flag_reports(reporter_account);
+              CREATE INDEX IF NOT EXISTS idx_flag_reports_status ON flag_reports(status);
+              CREATE INDEX IF NOT EXISTS idx_flag_reports_type ON flag_reports(flag_type);
+              CREATE INDEX IF NOT EXISTS idx_flag_reports_created ON flag_reports(created_at);
+              CREATE INDEX IF NOT EXISTS idx_flag_user_stats_account ON flag_user_stats(account);
+              CREATE INDEX IF NOT EXISTS idx_flag_user_stats_reputation ON flag_user_stats(reputation_score);
+              CREATE INDEX IF NOT EXISTS idx_flag_user_stats_trusted ON flag_user_stats(is_trusted_flagger);
+              CREATE INDEX IF NOT EXISTS idx_user_flag_permissions_username ON user_flag_permissions(username);
+              CREATE INDEX IF NOT EXISTS idx_user_flag_permissions_moderator ON user_flag_permissions(is_moderator);
+            `);
+            } catch (flagIndexError) {
+                console.log('Flag system indexes creation failed (tables might not exist):', flagIndexError.message);
+            }
 
             // Add missing columns to existing tables (for upgrades)
             try {
+                // Add missing column to onboarding_requests
                 await client.query(`
                     ALTER TABLE onboarding_requests 
                     ADD COLUMN IF NOT EXISTS account_created_tx VARCHAR(255)
@@ -515,6 +540,46 @@ const setupDatabase = async () => {
                     // Column probably already exists, which is fine
     
                 }
+            }
+
+            // Add missing columns to posts table if it exists
+            try {
+                // Check if posts table exists but is missing columns
+                const tableCheck = await client.query(`
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'posts' AND table_schema = 'public'
+                `);
+                
+                if (tableCheck.rows.length > 0) {
+                    // Table exists, check for missing columns and add them
+                    const existingColumns = tableCheck.rows.map(row => row.column_name);
+                    
+                    const requiredColumns = [
+                        { name: 'nsfw', type: 'BOOLEAN DEFAULT FALSE' },
+                        { name: 'sensitive', type: 'BOOLEAN DEFAULT FALSE' },
+                        { name: 'hidden', type: 'BOOLEAN DEFAULT FALSE' },
+                        { name: 'featured', type: 'BOOLEAN DEFAULT FALSE' },
+                        { name: 'flagged', type: 'BOOLEAN DEFAULT FALSE' },
+                        { name: 'flag_reason', type: 'TEXT' },
+                        { name: 'moderated_by', type: 'VARCHAR(50)' },
+                        { name: 'moderated_at', type: 'TIMESTAMP' }
+                    ];
+                    
+                    for (const column of requiredColumns) {
+                        if (!existingColumns.includes(column.name)) {
+                            try {
+                                await client.query(`ALTER TABLE posts ADD COLUMN ${column.name} ${column.type}`);
+                                console.log(`Added missing column posts.${column.name}`);
+                            } catch (columnError) {
+                                console.log(`Column posts.${column.name} might already exist:`, columnError.message);
+                            }
+                        }
+                    }
+                }
+            } catch (postsError) {
+                // Posts table might not exist yet, which is fine
+                console.log('Posts table check failed (might not exist yet):', postsError.message);
             }
 
     
