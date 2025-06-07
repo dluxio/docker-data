@@ -5374,6 +5374,124 @@ router.get('/api/onboarding/debug/system-status', rateLimits.general, async (req
     }
 });
 
+// Test Payment Simulation Endpoint - Demonstrates full payment flow
+router.post('/api/onboarding/test/simulate-payment', rateLimits.general, async (req, res) => {
+    try {
+        const { username, cryptoType } = req.body;
+        
+        if (!username || !cryptoType) {
+            return res.status(400).json({
+                success: false,
+                error: 'username and cryptoType are required'
+            });
+        }
+
+        if (!CRYPTO_CONFIG[cryptoType]) {
+            return res.status(400).json({
+                success: false,
+                error: 'Unsupported cryptocurrency',
+                supportedCurrencies: Object.keys(CRYPTO_CONFIG)
+            });
+        }
+
+        // Get current pricing
+        const pricing = await pricingService.getLatestPricing();
+        let cryptoRates = {};
+        
+        if (typeof pricing.crypto_rates === 'string') {
+            cryptoRates = JSON.parse(pricing.crypto_rates);
+        } else {
+            cryptoRates = pricing.crypto_rates || {};
+        }
+
+        const cryptoRate = cryptoRates[cryptoType];
+        if (!cryptoRate) {
+            return res.status(500).json({
+                success: false,
+                error: 'Pricing data not available for this cryptocurrency'
+            });
+        }
+
+        // Simulate the payment flow
+        const channelId = generateChannelId();
+        const simulatedAddress = `${cryptoType}_simulated_${channelId.slice(-8)}`;
+        const simulatedTxHash = `tx_${crypto.randomBytes(16).toString('hex')}`;
+
+        // Create a simulated payment channel record
+        const client = await pool.connect();
+        try {
+            await client.query(`
+                INSERT INTO payment_channels 
+                (channel_id, username, crypto_type, amount_crypto, amount_usd, address, status, created_at, expires_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW() + INTERVAL '24 hours')
+            `, [
+                channelId,
+                username,
+                cryptoType,
+                cryptoRate.total_amount,
+                cryptoRate.final_cost_usd,
+                simulatedAddress,
+                'pending'
+            ]);
+
+            // Simulate payment confirmation after a short delay
+            setTimeout(async () => {
+                try {
+                    const updateClient = await pool.connect();
+                    await updateClient.query(`
+                        UPDATE payment_channels 
+                        SET status = 'confirmed', tx_hash = $1, confirmed_at = NOW()
+                        WHERE channel_id = $2
+                    `, [simulatedTxHash, channelId]);
+                    updateClient.release();
+                    
+                    console.log(`✅ Simulated payment confirmed for ${username} (${cryptoType})`);
+                } catch (error) {
+                    console.error('Error updating simulated payment:', error);
+                }
+            }, 2000);
+
+        } finally {
+            client.release();
+        }
+
+        res.json({
+            success: true,
+            simulation: true,
+            message: 'Payment simulation created successfully',
+            payment: {
+                channelId,
+                username,
+                cryptoType,
+                amount: parseFloat(cryptoRate.total_amount),
+                amountFormatted: `${parseFloat(cryptoRate.total_amount).toFixed(CRYPTO_CONFIG[cryptoType].decimals === 18 ? 6 : CRYPTO_CONFIG[cryptoType].decimals)} ${cryptoType}`,
+                amountUSD: parseFloat(cryptoRate.final_cost_usd),
+                address: simulatedAddress,
+                expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+                network: CRYPTO_CONFIG[cryptoType].name,
+                confirmationsRequired: CRYPTO_CONFIG[cryptoType].confirmations_required,
+                estimatedConfirmationTime: `${Math.ceil(CRYPTO_CONFIG[cryptoType].block_time_seconds * CRYPTO_CONFIG[cryptoType].confirmations_required / 60)} minutes`,
+                instructions: [
+                    `[SIMULATION] Send exactly ${parseFloat(cryptoRate.total_amount).toFixed(CRYPTO_CONFIG[cryptoType].decimals === 18 ? 6 : CRYPTO_CONFIG[cryptoType].decimals)} ${cryptoType} to the address above`,
+                    `This is a simulated payment for testing purposes`,
+                    `Payment will be automatically "confirmed" in 2 seconds`,
+                    `Check status with: GET /api/onboarding/payment/status/${channelId}`
+                ],
+                simulatedTxHash: simulatedTxHash,
+                note: 'This is a test simulation. No real cryptocurrency payment is required.'
+            }
+        });
+
+    } catch (error) {
+        console.error('Error creating payment simulation:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to create payment simulation',
+            details: error.message
+        });
+    }
+});
+
 // 13. Fund consolidation endpoints (Admin only)
 router.get('/api/onboarding/admin/consolidation-info/:cryptoType', createAuthMiddleware(true), async (req, res) => {
     try {
