@@ -5145,6 +5145,39 @@ router.get('/api/onboarding/transaction-info/:cryptoType/:address', async (req, 
 });
 
 // API Status and Debug Endpoint - Comprehensive system test
+// Test endpoint for encryption functionality
+router.get('/api/onboarding/test/encryption', async (req, res) => {
+    try {
+        const CryptoEncryption = require('./crypto-encryption');
+        const encryption = new CryptoEncryption();
+        
+        // Test encryption/decryption
+        const testPrivateKey = 'a'.repeat(64); // 64 hex chars
+        const encrypted = encryption.encryptPrivateKey(testPrivateKey);
+        const decrypted = encryption.decryptPrivateKey(encrypted);
+        
+        const success = testPrivateKey === decrypted;
+        
+        res.json({
+            success: true,
+            encryption_test: {
+                passed: success,
+                original_length: testPrivateKey.length,
+                encrypted_length: encrypted.length,
+                decrypted_matches: success,
+                encryption_key_configured: !!process.env.CRYPTO_ENCRYPTION_KEY
+            }
+        });
+    } catch (error) {
+        console.error('Encryption test error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Encryption test failed',
+            details: error.message
+        });
+    }
+});
+
 router.get('/api/onboarding/debug/system-status', async (req, res) => {
     try {
         const results = {
@@ -5156,6 +5189,10 @@ router.get('/api/onboarding/debug/system-status', async (req, res) => {
             hive_service: { connected: false, rc_balance: null },
             auth_middleware: { active: true },
             rate_limits: { active: false, note: "Rate limiting handled upstream" },
+            encryption: { 
+                active: !!process.env.CRYPTO_ENCRYPTION_KEY,
+                note: process.env.CRYPTO_ENCRYPTION_KEY ? "Private key encryption enabled" : "Using development encryption key"
+            },
             endpoints_tested: {}
         };
 

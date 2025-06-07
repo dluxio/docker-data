@@ -5,6 +5,7 @@ const BIP32Factory = require('bip32');
 const ecc = require('tiny-secp256k1');
 const { generateMnemonic, mnemonicToSeedSync } = require('bip39');
 const { pool } = require('../index');
+const CryptoEncryption = require('./crypto-encryption');
 
 // Initialize BIP32 with secp256k1
 const bip32 = BIP32Factory.default(ecc);
@@ -12,6 +13,7 @@ const bip32 = BIP32Factory.default(ecc);
 class CryptoAccountGenerator {
     constructor() {
         this.masterSeed = null;
+        this.encryption = new CryptoEncryption();
         this.networks = {
             BTC: bitcoin.networks.bitcoin,
             ETH: null, // Ethereum doesn't use bitcoin networks
@@ -49,6 +51,9 @@ class CryptoAccountGenerator {
                 console.log('🔑 Mnemonic backup (store securely):');
                 console.log(mnemonic);
             }
+
+            // Test encryption functionality
+            this.encryption.testEncryption();
         } catch (error) {
             console.error('Error initializing crypto account generator:', error);
             throw error;
@@ -292,7 +297,9 @@ class CryptoAccountGenerator {
             const nextIndex = nextIndexResult.rows[0].next_index;
             const addressInfo = await this.generateChannelAddress(cryptoType, channelId, nextIndex);
 
-            // Save the new address to database
+            // Save the new address to database with encrypted private key
+            const encryptedPrivateKey = this.encryption.encryptPrivateKey(addressInfo.privateKey);
+            
             await client.query(`
                 INSERT INTO crypto_addresses 
                 (channel_id, crypto_type, address, public_key, private_key_encrypted, derivation_path, derivation_index, address_type, reusable_after)
@@ -302,7 +309,7 @@ class CryptoAccountGenerator {
                 cryptoType.toUpperCase(),
                 addressInfo.address,
                 addressInfo.publicKey,
-                Buffer.from(addressInfo.privateKey, 'hex'), // In production, encrypt this
+                encryptedPrivateKey,
                 addressInfo.derivationPath,
                 addressInfo.index,
                 addressInfo.addressType
@@ -597,8 +604,13 @@ class CryptoAccountGenerator {
             SET reusable_after = NOW() 
             WHERE channel_id = $1`;
         
-        await this.db.query(sql, [channelId]);
-        console.log(`Marked addresses for channel ${channelId} as immediately reusable`);
+        const client = await pool.connect();
+        try {
+            await client.query(sql, [channelId]);
+            console.log(`Marked addresses for channel ${channelId} as immediately reusable`);
+        } finally {
+            client.release();
+        }
     }
 
     // Fund consolidation methods
@@ -609,8 +621,22 @@ class CryptoAccountGenerator {
             WHERE crypto_type = $1 
             ORDER BY created_at ASC`;
         
-        const result = await this.db.query(sql, [cryptoType]);
-        return result.rows;
+        const client = await pool.connect();
+        try {
+            const result = await client.query(sql, [cryptoType]);
+            return result.rows;
+        } finally {
+            client.release();
+        }
+    }
+
+    /**
+     * Decrypt a private key from the database
+     * @param {Buffer} encryptedPrivateKey - The encrypted private key from database
+     * @returns {string} Decrypted private key (hex string)
+     */
+    decryptPrivateKey(encryptedPrivateKey) {
+        return this.encryption.decryptPrivateKey(encryptedPrivateKey);
     }
 
     async estimateConsolidationFee(cryptoType, addressCount) {

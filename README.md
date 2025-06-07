@@ -10,7 +10,7 @@ A comprehensive cryptocurrency payment system for Hive blockchain account creati
 - **Automated Account Creation**: Automatic Hive account creation after payment confirmation
 - **Address Reuse**: Efficient address management with reuse for expired payments
 - **Admin Dashboard**: Comprehensive monitoring and management tools
-- **Rate Limiting**: Built-in protection against abuse
+
 - **Transaction Verification**: Automatic payment verification and memo checking
 
 ## 🚀 Quick Start
@@ -287,6 +287,7 @@ POST /api/onboarding/admin/generate-consolidation-tx
 - **Transaction Verification**: Multiple verification layers
 - **Encrypted Storage**: Private keys are encrypted in database
 - **Time Expiration**: Payments expire after 24 hours
+- **Upstream Rate Limiting**: Rate limiting handled at proxy/CDN level
 
 ## 🔧 Configuration
 
@@ -300,10 +301,7 @@ Each cryptocurrency is configured with:
 
 ### Rate Limits
 
-- General endpoints: 100 requests/15 minutes
-- Pricing endpoints: 200 requests/15 minutes  
-- Payment endpoints: 50 requests/15 minutes
-- Admin endpoints: 20 requests/15 minutes
+Rate limiting has been removed from the application and is now handled upstream at the proxy/CDN level for better performance and scalability.
 
 ## 📈 Monitoring
 
@@ -407,7 +405,7 @@ This Hive Onboarding API provides a comprehensive cryptocurrency payment system 
 - **Database operations** and payment channel management
 - **System monitoring** and health checks
 - **Admin interfaces** for payment management
-- **Rate limiting** and security features
+- **Security features** with upstream rate limiting
 - **Payment simulation** for testing
 - **Real crypto address generation** for all supported currencies
 - **Complete payment flow** from initiation to confirmation
@@ -417,7 +415,7 @@ This Hive Onboarding API provides a comprehensive cryptocurrency payment system 
 - **Private key encryption** should be implemented for production
 - **Blockchain monitoring** for automatic payment detection needs setup
 - **Account creation** automation after payment confirmation
-- **Rate limiting** can interfere with rapid testing
+
 
 ### 💡 Recommended Next Steps
 1. ✅ ~~Fix the circular dependency in `crypto-account-generator.js`~~ **COMPLETED**
@@ -453,7 +451,7 @@ The test suite includes:
 - **Payment Flow**: Real payment initiation and status tracking
 - **Payment Simulation**: Complete flow with auto-confirmation
 - **Transaction Information**: UTXO/nonce/blockhash data for each crypto
-- **Error Handling**: Invalid inputs, rate limiting, duplicate prevention
+- **Error Handling**: Invalid inputs, duplicate prevention
 - **Security**: Input validation and authentication
 
 #### Manual Testing Endpoints
@@ -470,7 +468,7 @@ Latest comprehensive test run: **16/18 tests passed (88.9% success rate)**
 - ✅ All core functionality working
 - ✅ Real crypto address generation fixed
 - ✅ Payment flow end-to-end validation
-- ⚠️ Minor rate limiting during rapid testing
+- ✅ Rate limiting removed for better performance
 
 For issues or questions, please check the system status endpoint first, then review the logs for specific error messages.
 
