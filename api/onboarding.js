@@ -6481,14 +6481,25 @@ router.delete('/api/onboarding/admin/channels/:channelId', adminAuthMiddleware, 
                 });
             }
 
-            // Delete the channel
+            // Delete related records first to avoid foreign key constraint violations
+            
+            // Delete payment confirmations
+            await client.query('DELETE FROM payment_confirmations WHERE channel_id = $1', [channelId]);
+            
+            // Delete hive account creations
+            await client.query('DELETE FROM hive_account_creations WHERE channel_id = $1', [channelId]);
+            
+            // Delete crypto addresses
+            await client.query('DELETE FROM crypto_addresses WHERE channel_id = $1', [channelId]);
+            
+            // Now delete the main payment channel
             await client.query('DELETE FROM payment_channels WHERE channel_id = $1', [channelId]);
 
-            console.log(`Payment channel ${channelId} canceled by admin ${adminUsername}`);
+            console.log(`Payment channel ${channelId} deleted by admin ${adminUsername}`);
 
             res.json({
                 success: true,
-                message: 'Payment channel canceled successfully'
+                message: 'Payment channel and all related records deleted successfully'
             });
         } finally {
             client.release();
