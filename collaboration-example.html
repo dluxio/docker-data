@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hive Collaboration Example</title>
+    <script src="https://unpkg.com/yjs@13.6.8/dist/yjs.js"></script>
+    <script src="https://unpkg.com/@hocuspocus/provider@2.10.0/dist/hocuspocus-provider.umd.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .auth-form {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 5px;
+            border: 1px solid #dee2e6;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+        }
+        input, textarea {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+        .editor {
+            min-height: 300px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 15px;
+            background: white;
+            font-family: serif;
+            line-height: 1.6;
+        }
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .users {
+            margin-top: 10px;
+            font-size: 14px;
+        }
+        .user-indicator {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            color: white;
+            font-size: 12px;
+            margin-right: 5px;
+        }
+        .examples {
+            margin-top: 20px;
+            padding: 15px;
+            background: #e9ecef;
+            border-radius: 5px;
+        }
+        .examples h3 {
+            margin-top: 0;
+        }
+        .examples pre {
+            background: white;
+            padding: 10px;
+            border-radius: 3px;
+            overflow-x: auto;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 Hive Collaboration Server Example</h1>
+        <p>This demonstrates real-time collaborative editing using Hocuspocus with Hive blockchain authentication.</p>
+        
+        <div class="auth-form">
+            <h3>Authentication & Document</h3>
+            <div class="form-group">
+                <label for="account">Hive Account:</label>
+                <input type="text" id="account" placeholder="your-hive-username" required>
+            </div>
+            <div class="form-group">
+                <label for="privateKey">Private Key (Posting Key):</label>
+                <input type="password" id="privateKey" placeholder="5JxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxKJ" required>
+            </div>
+            <div class="form-group">
+                <label for="documentName">Document (owner/permlink):</label>
+                <input type="text" id="documentName" placeholder="alice/my-document-2024" required>
+            </div>
+            <button onclick="connect()" id="connectBtn">Connect to Document</button>
+            <button onclick="disconnect()" id="disconnectBtn" disabled>Disconnect</button>
+        </div>
+
+        <div class="editor" id="editor" contenteditable="false" style="opacity: 0.5;">
+            Connect to start editing...
+        </div>
+        
+        <div class="users" id="users">
+            <strong>Connected Users:</strong> <span id="userList">None</span>
+        </div>
+
+        <div id="status"></div>
+
+        <div class="examples">
+            <h3>How it works:</h3>
+            <p>1. Enter your Hive account credentials and document path</p>
+            <p>2. The system generates authentication headers with a signed challenge</p>
+            <p>3. Connects to the Hocuspocus server via WebSocket</p>
+            <p>4. Real-time collaborative editing with Y.js CRDT</p>
+            
+            <h4>Authentication Headers Example:</h4>
+            <pre id="authExample">Will show after connecting...</pre>
+            
+            <h4>WebSocket URL:</h4>
+            <pre id="wsUrl">ws://localhost:1234/{owner}/{permlink}</pre>
+        </div>
+    </div>
+
+    <script>
+        let provider = null;
+        let yDoc = null;
+        let yText = null;
+        let connected = false;
+
+        // Mock Hive signature function (in real app, use hive-tx library)
+        async function signChallenge(challenge, privateKey) {
+            // This is a simplified mock - in production use proper hive-tx signing
+            // For demo purposes, we'll generate a fake signature
+            return `mock_signature_${challenge}_${privateKey.slice(-8)}`;
+        }
+
+        // Mock public key derivation (in real app, derive from private key)
+        function getPublicKey(privateKey) {
+            // This is a mock - in production derive actual public key from private key  
+            return `STM7MockPublicKey${privateKey.slice(-8)}`;
+        }
+
+        async function generateAuthToken(account, privateKey) {
+            const challenge = Math.floor(Date.now() / 1000);
+            const pubkey = getPublicKey(privateKey);
+            const signature = await signChallenge(challenge.toString(), privateKey);
+            
+            const authData = {
+                account,
+                challenge: challenge.toString(),
+                pubkey,
+                signature
+            };
+            
+            // Show auth example
+            document.getElementById('authExample').textContent = JSON.stringify(authData, null, 2);
+            
+            return JSON.stringify(authData);
+        }
+
+        async function connect() {
+            const account = document.getElementById('account').value.trim();
+            const privateKey = document.getElementById('privateKey').value.trim();
+            const documentName = document.getElementById('documentName').value.trim();
+
+            if (!account || !privateKey || !documentName) {
+                showStatus('Please fill in all fields', 'error');
+                return;
+            }
+
+            if (!documentName.includes('/')) {
+                showStatus('Document name must be in format: owner/permlink', 'error');
+                return;
+            }
+
+            try {
+                document.getElementById('connectBtn').disabled = true;
+                showStatus('Generating authentication...', 'success');
+
+                // Generate auth token
+                const token = await generateAuthToken(account, privateKey);
+                
+                // Update WebSocket URL display
+                document.getElementById('wsUrl').textContent = `ws://localhost:1234/${documentName}`;
+
+                // Create Y.js document
+                yDoc = new Y.Doc();
+                yText = yDoc.getText('content');
+
+                showStatus('Connecting to collaboration server...', 'success');
+
+                // Create Hocuspocus provider
+                provider = new HocuspocusProvider({
+                    url: 'ws://localhost:1234',
+                    name: documentName,
+                    token: token,
+                    document: yDoc,
+                });
+
+                // Handle connection events
+                provider.on('connect', () => {
+                    connected = true;
+                    showStatus('✅ Connected! You can now edit collaboratively.', 'success');
+                    document.getElementById('editor').contentEditable = true;
+                    document.getElementById('editor').style.opacity = 1;
+                    document.getElementById('editor').innerHTML = yText.toString() || 'Start typing...';
+                    document.getElementById('disconnectBtn').disabled = false;
+                    
+                    // Bind Y.js text to contenteditable
+                    bindTextEditor();
+                });
+
+                provider.on('disconnect', () => {
+                    connected = false;
+                    showStatus('❌ Disconnected from server', 'error');
+                    document.getElementById('editor').contentEditable = false;
+                    document.getElementById('editor').style.opacity = 0.5;
+                    document.getElementById('connectBtn').disabled = false;
+                    document.getElementById('disconnectBtn').disabled = true;
+                });
+
+                provider.on('authenticationFailed', (error) => {
+                    showStatus(`❌ Authentication failed: ${error.reason}`, 'error');
+                    document.getElementById('connectBtn').disabled = false;
+                });
+
+                // Handle awareness (user presence)
+                provider.awareness.on('change', () => {
+                    updateUserList();
+                });
+
+            } catch (error) {
+                showStatus(`❌ Connection failed: ${error.message}`, 'error');
+                document.getElementById('connectBtn').disabled = false;
+            }
+        }
+
+        function bindTextEditor() {
+            const editor = document.getElementById('editor');
+            
+            // Sync Y.js text changes to editor
+            yText.observe((event) => {
+                if (!event.target.equals(yText)) return;
+                
+                // Update editor content without losing cursor position
+                const content = yText.toString();
+                if (editor.innerHTML !== content) {
+                    const selection = window.getSelection();
+                    const range = selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+                    
+                    editor.innerHTML = content;
+                    
+                    // Restore cursor position
+                    if (range) {
+                        try {
+                            selection.removeAllRanges();
+                            selection.addRange(range);
+                        } catch (e) {
+                            // Cursor position might be invalid
+                        }
+                    }
+                }
+            });
+
+            // Sync editor changes to Y.js
+            editor.addEventListener('input', () => {
+                const content = editor.innerText;
+                if (content !== yText.toString()) {
+                    yText.delete(0, yText.length);
+                    yText.insert(0, content);
+                }
+            });
+        }
+
+        function updateUserList() {
+            if (!provider) return;
+            
+            const users = Array.from(provider.awareness.getStates().values())
+                .filter(state => state.user)
+                .map(state => state.user);
+            
+            const userList = document.getElementById('userList');
+            
+            if (users.length === 0) {
+                userList.innerHTML = 'None';
+            } else {
+                userList.innerHTML = users.map(user => 
+                    `<span class="user-indicator" style="background-color: ${user.color}">
+                        ${user.name}
+                    </span>`
+                ).join('');
+            }
+        }
+
+        function disconnect() {
+            if (provider) {
+                provider.destroy();
+                provider = null;
+            }
+            if (yDoc) {
+                yDoc.destroy();
+                yDoc = null;
+            }
+            yText = null;
+            connected = false;
+            
+            document.getElementById('editor').contentEditable = false;
+            document.getElementById('editor').style.opacity = 0.5;
+            document.getElementById('editor').innerHTML = 'Connect to start editing...';
+            document.getElementById('connectBtn').disabled = false;
+            document.getElementById('disconnectBtn').disabled = true;
+            document.getElementById('userList').innerHTML = 'None';
+            
+            showStatus('Disconnected', 'error');
+        }
+
+        function showStatus(message, type) {
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.className = `status ${type}`;
+        }
+
+        // Demo helper: populate with example data
+        window.addEventListener('load', () => {
+            document.getElementById('account').value = 'alice';
+            document.getElementById('documentName').value = 'alice/my-document-2024';
+        });
+    </script>
+</body>
+</html> 
