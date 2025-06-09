@@ -24,11 +24,104 @@ router.get('/api/collaboration/test', (req, res) => {
       'GET /api/collaboration/info/:owner/:permlink',
       'GET /api/collaboration/permissions/:owner/:permlink',
       'POST /api/collaboration/permissions/:owner/:permlink',
-      'GET /api/collaboration/activity/:owner/:permlink'
+      'GET /api/collaboration/activity/:owner/:permlink',
+      'GET /api/collaboration/debug/:owner/:permlink'
     ],
     websocket: 'ws://localhost:1234/{owner}/{permlink}',
     databases: 'Collaboration tables will be auto-created by WebSocket server'
   })
+})
+
+// Debug endpoint to inspect document content (no auth required for debugging)
+router.get('/api/collaboration/debug/:owner/:permlink', async (req, res) => {
+  try {
+    const { owner, permlink } = req.params
+    const showContent = req.query.content === 'true'
+    const showRaw = req.query.raw === 'true'
+    
+    validateDocumentPath(owner, permlink)
+    
+    const client = await pool.connect()
+    try {
+      const result = await client.query(
+        'SELECT *, LENGTH(document_data) as content_size, OCTET_LENGTH(document_data) as byte_size FROM collaboration_documents WHERE owner = $1 AND permlink = $2',
+        [owner, permlink]
+      )
+      
+      if (result.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          error: 'Document not found in database',
+          suggestion: 'Document may not have been created via API or may only exist in Hocuspocus memory'
+        })
+      }
+      
+      const doc = result.rows[0]
+      const contentSize = parseInt(doc.content_size) || 0
+      const byteSize = parseInt(doc.byte_size) || 0
+      
+      // Log to console for server debugging
+      console.log('=== DOCUMENT DEBUG ===')
+      console.log(`Document: ${owner}/${permlink}`)
+      console.log(`Content Size: ${contentSize} characters`)
+      console.log(`Byte Size: ${byteSize} bytes`)
+      console.log(`Is Public: ${doc.is_public}`)
+      console.log(`Created: ${doc.created_at}`)
+      console.log(`Updated: ${doc.updated_at}`)
+      console.log(`Last Activity: ${doc.last_activity}`)
+      
+      if (doc.document_data) {
+        console.log(`Content Preview (first 200 chars): ${doc.document_data.substring(0, 200)}${doc.document_data.length > 200 ? '...' : ''}`)
+        console.log(`Content Type: ${typeof doc.document_data}`)
+        console.log(`Has Actual Content: ${doc.document_data.trim().length > 0}`)
+      } else {
+        console.log('Document data is NULL or undefined')
+      }
+      console.log('=====================')
+      
+      const response = {
+        success: true,
+        document: {
+          owner: doc.owner,
+          permlink: doc.permlink,
+          documentPath: `${doc.owner}/${doc.permlink}`,
+          isPublic: doc.is_public,
+          contentSize,
+          byteSize,
+          hasContent: contentSize > 0,
+          hasActualContent: doc.document_data ? doc.document_data.trim().length > 0 : false,
+          contentType: typeof doc.document_data,
+          isNull: doc.document_data === null,
+          isUndefined: doc.document_data === undefined,
+          isEmpty: !doc.document_data || doc.document_data.trim().length === 0,
+          createdAt: doc.created_at,
+          updatedAt: doc.updated_at,
+          lastActivity: doc.last_activity
+        }
+      }
+      
+      if (showContent && doc.document_data) {
+        response.content = {
+          preview: doc.document_data.substring(0, 500),
+          isTruncated: doc.document_data.length > 500
+        }
+      }
+      
+      if (showRaw && doc.document_data) {
+        response.rawContent = doc.document_data
+      }
+      
+      res.json(response)
+    } finally {
+      client.release()
+    }
+  } catch (error) {
+    console.error('Error debugging document:', error)
+    res.status(500).json({
+      success: false,
+      error: error.message
+    })
+  }
 })
 
 // Apply auth middleware to all other collaboration routes (except test)
