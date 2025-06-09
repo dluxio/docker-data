@@ -21,7 +21,6 @@ const sha256 = (data) => {
 class HiveAuthExtension {
   async onAuthenticate(data) {
     const { token, documentName } = data
-    console.log({token})
     try {
       // Parse token - should contain auth headers as JSON
       const authData = JSON.parse(token)
@@ -35,7 +34,7 @@ class HiveAuthExtension {
       // Validate challenge timestamp (must be within 1 hour for WebSocket)
       const challengeTime = parseInt(challenge)
       const now = Math.floor(Date.now() / 1000)
-      const maxAge = 60 * 60 // 1 hour in seconds
+      const maxAge = 24 * 60 * 60 // 1 hour in seconds
       
       if (isNaN(challengeTime) || (now - challengeTime) > maxAge || challengeTime > (now + 300)) {
         throw new Error('Invalid challenge timestamp')
