@@ -24,7 +24,7 @@ class HiveAuthExtension {
     
     try {
       // Parse token - should contain auth headers as JSON
-      const authData = JSON.parse(token)
+      const authData = token
       const { account, challenge, pubkey, signature } = authData
       
       // Validate required fields
@@ -281,7 +281,6 @@ const server = new Server({
   
   // Authentication
   async onAuthenticate(data) {
-    console.log('onAuthenticate', data)
     return await hiveAuth.onAuthenticate(data)
   },
   
