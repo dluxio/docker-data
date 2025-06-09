@@ -281,6 +281,7 @@ const server = new Server({
   
   // Authentication
   async onAuthenticate(data) {
+    console.log('onAuthenticate', data)
     return await hiveAuth.onAuthenticate(data)
   },
   
