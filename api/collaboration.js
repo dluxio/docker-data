@@ -209,9 +209,119 @@ router.get('/api/collaboration/test-sync/:owner/:permlink', async (req, res) => 
   }
 })
 
+// Convert plain text documents to Y.js format (admin endpoint)
+router.post('/api/collaboration/convert-documents', async (req, res) => {
+  try {
+    const account = req.headers['x-account']
+    const adminHeaders = req.headers
+    
+    // Basic admin check (you might want to add more security)
+    const isAdmin = adminHeaders['x-account'] === 'disregardfiat' && 
+                   adminHeaders['x-challenge'] && 
+                   adminHeaders['x-pubkey'] && 
+                   adminHeaders['x-signature']
+    
+    if (!isAdmin) {
+      return res.status(403).json({
+        success: false,
+        error: 'Admin access required'
+      })
+    }
+    
+    const client = await pool.connect()
+    try {
+      // Get all documents that might have plain text content
+      const result = await client.query(`
+        SELECT owner, permlink, document_data, LENGTH(document_data) as content_size
+        FROM collaboration_documents 
+        WHERE document_data IS NOT NULL AND document_data != ''
+        ORDER BY updated_at DESC
+      `)
+      
+      const Y = require('yjs')
+      const conversions = []
+      const errors = []
+      
+      for (const doc of result.rows) {
+        try {
+          // Test if it's already Y.js format
+          const documentBuffer = Buffer.from(doc.document_data, 'base64')
+          const testDoc = new Y.Doc()
+          Y.applyUpdate(testDoc, new Uint8Array(documentBuffer))
+          
+          // If we get here, it's already Y.js format
+          conversions.push({
+            document: `${doc.owner}/${doc.permlink}`,
+            status: 'already_yjs',
+            contentSize: doc.content_size
+          })
+        } catch (yError) {
+          // Not Y.js format, convert plain text to Y.js
+          try {
+            const yDoc = new Y.Doc()
+            const yText = yDoc.getText('content')
+            
+            // Insert the plain text content
+            yText.insert(0, doc.document_data)
+            
+            // Encode as Y.js binary update
+            const update = Y.encodeStateAsUpdate(yDoc)
+            const documentData = Buffer.from(update).toString('base64')
+            
+            // Update the document in database
+            await client.query(`
+              UPDATE collaboration_documents 
+              SET document_data = $1, updated_at = NOW()
+              WHERE owner = $2 AND permlink = $3
+            `, [documentData, doc.owner, doc.permlink])
+            
+            conversions.push({
+              document: `${doc.owner}/${doc.permlink}`,
+              status: 'converted',
+              originalSize: doc.content_size,
+              newSize: documentData.length,
+              contentPreview: doc.document_data.substring(0, 100)
+            })
+          } catch (conversionError) {
+            errors.push({
+              document: `${doc.owner}/${doc.permlink}`,
+              error: conversionError.message,
+              contentSize: doc.content_size
+            })
+          }
+        }
+      }
+      
+      res.json({
+        success: true,
+        message: `Processed ${result.rows.length} documents`,
+        conversions,
+        errors,
+        summary: {
+          total: result.rows.length,
+          converted: conversions.filter(c => c.status === 'converted').length,
+          alreadyYjs: conversions.filter(c => c.status === 'already_yjs').length,
+          errors: errors.length
+        }
+      })
+    } finally {
+      client.release()
+    }
+  } catch (error) {
+    console.error('Error converting documents:', error)
+    res.status(500).json({
+      success: false,
+      error: error.message
+    })
+  }
+})
+
 // Apply auth middleware to all other collaboration routes (except test)
 router.use('/api/collaboration', (req, res, next) => {
-  if (req.path === '/test' || req.path.startsWith('/test-sync/') || req.path.startsWith('/debug/')) {
+  if (req.path === '/test' || 
+      req.path.startsWith('/test-sync/') || 
+      req.path.startsWith('/debug/') ||
+      req.path === '/convert-documents') {
     return next()
   }
   return authMiddleware(req, res, next)

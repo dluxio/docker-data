@@ -97,37 +97,32 @@ class HiveAuthExtension {
   }
   
   async checkDocumentAccess(account, owner, permlink) {
+    const client = await pool.connect()
     try {
-      const client = await pool.connect()
-      try {
-        // Check if user is the owner
-        if (account === owner) {
-          return true
-        }
-        
-        // Check if document is public
-        const docResult = await client.query(
-          'SELECT is_public FROM collaboration_documents WHERE owner = $1 AND permlink = $2',
-          [owner, permlink]
-        )
-        
-        if (docResult.rows.length > 0 && docResult.rows[0].is_public) {
-          return true
-        }
-        
-        // Check explicit permissions
-        const permResult = await client.query(
-          'SELECT permission_type FROM collaboration_permissions WHERE owner = $1 AND permlink = $2 AND account = $3',
-          [owner, permlink, account]
-        )
-        
-        return permResult.rows.length > 0
-      } finally {
-        client.release()
+      // Owner always has access
+      if (account === owner) {
+        return true
       }
-    } catch (error) {
-      console.error('Error checking document access:', error)
-      return false
+      
+      // Check if document is public
+      const docResult = await client.query(
+        'SELECT is_public FROM collaboration_documents WHERE owner = $1 AND permlink = $2',
+        [owner, permlink]
+      )
+      
+      if (docResult.rows.length > 0 && docResult.rows[0].is_public) {
+        return true
+      }
+      
+      // Check explicit permissions
+      const permResult = await client.query(
+        'SELECT can_read FROM collaboration_permissions WHERE owner = $1 AND permlink = $2 AND account = $3',
+        [owner, permlink, account]
+      )
+      
+      return permResult.rows.length > 0 && permResult.rows[0].can_read
+    } finally {
+      client.release()
     }
   }
   
@@ -135,10 +130,10 @@ class HiveAuthExtension {
     try {
       const client = await pool.connect()
       try {
-        await client.query(
-          'INSERT INTO collaboration_activity (owner, permlink, account, activity_type, activity_data) VALUES ($1, $2, $3, $4, $5)',
-          [owner, permlink, account, activityType, data]
-        )
+        await client.query(`
+          INSERT INTO collaboration_activity (owner, permlink, account, activity_type, activity_data)
+          VALUES ($1, $2, $3, $4, $5)
+        `, [owner, permlink, account, activityType, JSON.stringify(data)])
       } finally {
         client.release()
       }
@@ -148,122 +143,19 @@ class HiveAuthExtension {
   }
   
   generateUserColor(account) {
-    // Generate a consistent color for each user based on their account name
-    const hash = createHash('md5').update(account).digest('hex')
-    const hue = parseInt(hash.substr(0, 2), 16) * 360 / 255
-    return `hsl(${hue}, 70%, 50%)`
-  }
-}
-
-// Custom database extension for PostgreSQL storage
-class PostgreSQLDatabase {
-  constructor() {
-    this.pool = pool
-  }
-  
-  async onStoreDocument(data) {
-    const { documentName, document } = data
-    const [owner, permlink] = documentName.split('/')
+    // Generate a consistent color for the user based on their account name
+    const hash = account.split('').reduce((a, b) => {
+      a = ((a << 5) - a) + b.charCodeAt(0)
+      return a & a
+    }, 0)
     
-    if (!owner || !permlink) {
-      throw new Error('Invalid document format')
-    }
-    
-    try {
-      const client = await this.pool.connect()
-      try {
-        // Store the Y.js document data - encode the document state as update
-        const update = Y.encodeStateAsUpdate(document)
-        const documentData = Buffer.from(update).toString('base64')
-        
-        await client.query(`
-          INSERT INTO collaboration_documents (owner, permlink, document_data, last_activity, updated_at)
-          VALUES ($1, $2, $3, NOW(), NOW())
-          ON CONFLICT (owner, permlink)
-          DO UPDATE SET 
-            document_data = EXCLUDED.document_data,
-            last_activity = NOW(),
-            updated_at = NOW()
-        `, [owner, permlink, documentData])
-        
-        // Update statistics
-        await this.updateDocumentStats(owner, permlink, client)
-        
-        console.log(`Document stored: ${documentName}`)
-      } finally {
-        client.release()
-      }
-    } catch (error) {
-      console.error('Error storing document:', error)
-      throw error
-    }
-  }
-  
-  async onLoadDocument(data) {
-    const { documentName } = data
-    const [owner, permlink] = documentName.split('/')
-    
-    if (!owner || !permlink) {
-      throw new Error('Invalid document format')
-    }
-    
-    try {
-      const client = await this.pool.connect()
-      try {
-        const result = await client.query(
-          'SELECT document_data FROM collaboration_documents WHERE owner = $1 AND permlink = $2',
-          [owner, permlink]
-        )
-        
-        if (result.rows.length > 0 && result.rows[0].document_data) {
-          const documentBuffer = Buffer.from(result.rows[0].document_data, 'base64')
-          console.log(`Document loaded: ${documentName}`)
-          return new Uint8Array(documentBuffer)
-        }
-        
-        console.log(`New document: ${documentName}`)
-        return null
-      } finally {
-        client.release()
-      }
-    } catch (error) {
-      console.error('Error loading document:', error)
-      return null
-    }
-  }
-  
-  async updateDocumentStats(owner, permlink, client) {
-    try {
-      // Update or create stats entry
-      await client.query(`
-        INSERT INTO collaboration_stats (owner, permlink, last_activity, total_edits, updated_at)
-        VALUES ($1, $2, NOW(), 1, NOW())
-        ON CONFLICT (owner, permlink)
-        DO UPDATE SET 
-          last_activity = NOW(),
-          total_edits = collaboration_stats.total_edits + 1,
-          updated_at = NOW()
-      `, [owner, permlink])
-    } catch (error) {
-      console.error('Error updating document stats:', error)
-    }
+    const hue = Math.abs(hash) % 360
+    return `hsl(${hue}, 70%, 60%)`
   }
 }
 
 // Initialize extensions
 const hiveAuth = new HiveAuthExtension()
-const postgresDB = new PostgreSQLDatabase()
-
-// Create custom database extension
-class PostgreSQLExtension {
-  async onLoadDocument(data) {
-    return await postgresDB.onLoadDocument(data)
-  }
-  
-  async onStoreDocument(data) {
-    return await postgresDB.onStoreDocument(data)
-  }
-}
 
 // Configure the Hocuspocus server
 const server = new Server({
@@ -365,7 +257,118 @@ const server = new Server({
   
   extensions: [
     new Logger(),
-    new PostgreSQLExtension(),
+    
+    // Use official Hocuspocus Database extension instead of custom handlers
+    new Database({
+      // Fetch Y.js document from PostgreSQL
+      fetch: async ({ documentName }) => {
+        const [owner, permlink] = documentName.split('/')
+        
+        if (!owner || !permlink) {
+          throw new Error('Invalid document format')
+        }
+        
+        try {
+          const client = await pool.connect()
+          try {
+            const result = await client.query(
+              'SELECT document_data FROM collaboration_documents WHERE owner = $1 AND permlink = $2',
+              [owner, permlink]
+            )
+            
+            if (result.rows.length > 0 && result.rows[0].document_data) {
+              const rawData = result.rows[0].document_data
+              
+              try {
+                // Try to decode as Y.js binary data (base64 encoded)
+                const documentBuffer = Buffer.from(rawData, 'base64')
+                const uint8Array = new Uint8Array(documentBuffer)
+                
+                // Validate that this is Y.js binary data
+                const testDoc = new Y.Doc()
+                Y.applyUpdate(testDoc, uint8Array)
+                
+                console.log(`Y.js document loaded: ${documentName}`)
+                return uint8Array
+              } catch (yError) {
+                // If not Y.js format, convert plain text to Y.js
+                console.log(`Converting plain text to Y.js for document: ${documentName}`)
+                
+                const yDoc = new Y.Doc()
+                const yText = yDoc.getText('content')
+                yText.insert(0, rawData)
+                
+                const update = Y.encodeStateAsUpdate(yDoc)
+                
+                // Store converted Y.js data back to database
+                const documentData = Buffer.from(update).toString('base64')
+                await client.query(`
+                  UPDATE collaboration_documents 
+                  SET document_data = $1, updated_at = NOW()
+                  WHERE owner = $2 AND permlink = $3
+                `, [documentData, owner, permlink])
+                
+                console.log(`Document converted and stored: ${documentName}`)
+                return update
+              }
+            }
+            
+            console.log(`New document: ${documentName}`)
+            return null
+          } finally {
+            client.release()
+          }
+        } catch (error) {
+          console.error('Error loading document:', error)
+          return null
+        }
+      },
+      
+      // Store Y.js document to PostgreSQL
+      store: async ({ documentName, state }) => {
+        const [owner, permlink] = documentName.split('/')
+        
+        if (!owner || !permlink) {
+          throw new Error('Invalid document format')
+        }
+        
+        try {
+          const client = await pool.connect()
+          try {
+            // Encode Y.js state as base64 for storage
+            const documentData = Buffer.from(state).toString('base64')
+            
+            await client.query(`
+              INSERT INTO collaboration_documents (owner, permlink, document_data, last_activity, updated_at)
+              VALUES ($1, $2, $3, NOW(), NOW())
+              ON CONFLICT (owner, permlink)
+              DO UPDATE SET 
+                document_data = EXCLUDED.document_data,
+                last_activity = NOW(),
+                updated_at = NOW()
+            `, [owner, permlink, documentData])
+            
+            // Update statistics
+            await client.query(`
+              INSERT INTO collaboration_stats (owner, permlink, last_activity, total_edits, updated_at)
+              VALUES ($1, $2, NOW(), 1, NOW())
+              ON CONFLICT (owner, permlink)
+              DO UPDATE SET 
+                last_activity = NOW(),
+                total_edits = collaboration_stats.total_edits + 1,
+                updated_at = NOW()
+            `, [owner, permlink])
+            
+            console.log(`Document stored: ${documentName}`)
+          } finally {
+            client.release()
+          }
+        } catch (error) {
+          console.error('Error storing document:', error)
+          throw error
+        }
+      }
+    }),
   ],
 })
 
