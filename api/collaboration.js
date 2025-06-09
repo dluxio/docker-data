@@ -204,7 +204,7 @@ router.get('/api/collaboration/documents', async (req, res) => {
 router.get('/api/collaboration/info/:owner/:permlink', async (req, res) => {
   try {
     const { owner, permlink } = req.params
-    const account = req.hiveAuth.account
+    const account = req.headers['x-account']
     
     validateDocumentPath(owner, permlink)
     
@@ -279,7 +279,7 @@ router.get('/api/collaboration/info/:owner/:permlink', async (req, res) => {
 // 3. Create Document
 router.post('/api/collaboration/documents', async (req, res) => {
   try {
-    const account = req.hiveAuth.account
+    const account = req.headers['x-account']
     const { permlink, isPublic = false, title, description } = req.body
     
     if (!permlink) {
@@ -351,7 +351,7 @@ router.post('/api/collaboration/documents', async (req, res) => {
 router.delete('/api/collaboration/documents/:owner/:permlink', async (req, res) => {
   try {
     const { owner, permlink } = req.params
-    const account = req.hiveAuth.account
+    const account = req.headers['x-account']
     
     validateDocumentPath(owner, permlink)
     
@@ -398,7 +398,7 @@ router.delete('/api/collaboration/documents/:owner/:permlink', async (req, res) 
 router.get('/api/collaboration/permissions/:owner/:permlink', async (req, res) => {
   try {
     const { owner, permlink } = req.params
-    const account = req.hiveAuth.account
+    const account = req.headers['x-account']
     
     validateDocumentPath(owner, permlink)
     
@@ -450,7 +450,7 @@ router.get('/api/collaboration/permissions/:owner/:permlink', async (req, res) =
 router.post('/api/collaboration/permissions/:owner/:permlink', async (req, res) => {
   try {
     const { owner, permlink } = req.params
-    const account = req.hiveAuth.account
+    const account = req.headers['x-account']
     const { targetAccount, permissionType } = req.body
     
     validateDocumentPath(owner, permlink)
@@ -536,7 +536,7 @@ router.post('/api/collaboration/permissions/:owner/:permlink', async (req, res) 
 router.delete('/api/collaboration/permissions/:owner/:permlink/:targetAccount', async (req, res) => {
   try {
     const { owner, permlink, targetAccount } = req.params
-    const account = req.hiveAuth.account
+    const account = req.headers['x-account']
     
     validateDocumentPath(owner, permlink)
     
@@ -588,7 +588,7 @@ router.delete('/api/collaboration/permissions/:owner/:permlink/:targetAccount', 
 router.get('/api/collaboration/activity/:owner/:permlink', async (req, res) => {
   try {
     const { owner, permlink } = req.params
-    const account = req.hiveAuth.account
+    const account = req.headers['x-account']
     const limit = Math.min(parseInt(req.query.limit) || 50, 100)
     const offset = Math.max(parseInt(req.query.offset) || 0, 0)
     
@@ -643,7 +643,7 @@ router.get('/api/collaboration/activity/:owner/:permlink', async (req, res) => {
 router.get('/api/collaboration/stats/:owner/:permlink', async (req, res) => {
   try {
     const { owner, permlink } = req.params
-    const account = req.hiveAuth.account
+    const account = req.headers['x-account']
     
     validateDocumentPath(owner, permlink)
     
