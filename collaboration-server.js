@@ -257,6 +257,28 @@ const postgresDB = new PostgreSQLDatabase()
 const server = new Server({
   port: 1234,
   
+  // CORS configuration
+  cors: {
+    origin: [
+      'https://vue.dlux.io',
+      'https://dlux.io', 
+      'http://www.dlux.io',
+      'http://localhost:3001',
+      'http://localhost:5508',
+      // Add any other origins you need
+    ],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'x-account',
+      'x-challenge', 
+      'x-pubkey',
+      'x-signature',
+    ]
+  },
+  
   // Authentication
   async onAuthenticate(data) {
     return await hiveAuth.onAuthenticate(data)
