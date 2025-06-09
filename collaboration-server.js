@@ -6,6 +6,7 @@ const config = require('./config')
 const { CollaborationAuth } = require('./collaboration-auth')
 const { PrivateKey, PublicKey, Signature } = require('hive-tx')
 const { createHash } = require('crypto')
+const Y = require('yjs')
 
 // Initialize database pool
 const pool = new Pool({
@@ -171,8 +172,9 @@ class PostgreSQLDatabase {
     try {
       const client = await this.pool.connect()
       try {
-        // Store the Y.js document data
-        const documentData = Buffer.from(document).toString('base64')
+        // Store the Y.js document data - encode the document state as update
+        const update = Y.encodeStateAsUpdate(document)
+        const documentData = Buffer.from(update).toString('base64')
         
         await client.query(`
           INSERT INTO collaboration_documents (owner, permlink, document_data, last_activity, updated_at)
@@ -214,9 +216,9 @@ class PostgreSQLDatabase {
         )
         
         if (result.rows.length > 0 && result.rows[0].document_data) {
-          const documentData = Buffer.from(result.rows[0].document_data, 'base64')
+          const documentBuffer = Buffer.from(result.rows[0].document_data, 'base64')
           console.log(`Document loaded: ${documentName}`)
-          return documentData
+          return new Uint8Array(documentBuffer)
         }
         
         console.log(`New document: ${documentName}`)
