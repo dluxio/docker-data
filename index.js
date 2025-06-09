@@ -11,6 +11,7 @@ exports.pool = pool;
 
 const API = require("./api/index");
 const { router: onboardingRouter, setupDatabase, initializeWebSocketMonitor, initializeOnboardingService } = require('./api/onboarding');
+const collaborationRouter = require('./api/collaboration');
 const { 
     setupDeviceDatabase, 
     createPairing, 
@@ -56,6 +57,7 @@ const wsMonitor = initializeWebSocketMonitor(http);
 api.use(API.https_redirect);
 api.use(cors());
 api.use(onboardingRouter);
+api.use(collaborationRouter);
 
 // Serve admin dashboard static files
 api.use('/admin', express.static('admin'));
