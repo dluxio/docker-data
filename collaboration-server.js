@@ -3,7 +3,7 @@ const { Database } = require('@hocuspocus/extension-database')
 const { Logger } = require('@hocuspocus/extension-logger')
 const { Pool } = require('pg')
 const config = require('./config')
-const { HiveAuth } = require('./api/onboarding')
+const { CollaborationAuth } = require('./collaboration-auth')
 const { PrivateKey, PublicKey, Signature } = require('hive-tx')
 const { createHash } = require('crypto')
 
@@ -42,7 +42,7 @@ class HiveAuthExtension {
       }
       
       // Get account keys from HIVE blockchain
-      const accountKeys = await HiveAuth.getAccountKeys(account)
+      const accountKeys = await CollaborationAuth.getAccountKeys(account)
       if (!accountKeys) {
         throw new Error(`Account @${account} not found on HIVE blockchain`)
       }
@@ -60,7 +60,7 @@ class HiveAuthExtension {
       }
       
       // Verify the signature
-      const isValidSignature = await HiveAuth.verifySignature(challenge.toString(), signature, pubkey)
+      const isValidSignature = await CollaborationAuth.verifySignature(challenge.toString(), signature, pubkey)
       if (!isValidSignature) {
         throw new Error('Invalid signature')
       }

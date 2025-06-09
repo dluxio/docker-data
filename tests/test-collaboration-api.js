@@ -18,21 +18,24 @@ const BASE_URL = 'https://data.dlux.io/api';  // Use your production URL
 const TEST_ACCOUNT = 'disregardfiat';
 const TEST_PRIVATE_KEY = ''; // Add your private key for testing
 
-// Test headers (from your workspace rules)
-const ADMIN_HEADERS = {
-  'x-account': 'disregardfiat',
-  'x-challenge': '1749187983',
-  'x-pubkey': 'STM7BWmXwvuKHr8FpSPmj8knJspFMPKt3vcetAKKjZ2W2HoRgdkEg',
-  'x-signature': '2021d0d63d340b6d963e9761c0cbe8096c65a94ba9cec69aed35b2f1fe891576b83680e82b1bc8018c1c819e02c63bf49386ffb4475cb67d3eadaf3115367877c4'
-};
+// Test headers (from your workspace rules) - Generate fresh ones
+async function getFreshAdminHeaders() {
+  const challenge = Math.floor(Date.now() / 1000);
+  return {
+    'x-account': 'disregardfiat',
+    'x-challenge': challenge.toString(),
+    'x-pubkey': 'STM7BWmXwvuKHr8FpSPmj8knJspFMPKt3vcetAKKjZ2W2HoRgdkEg',
+    'x-signature': '2021d0d63d340b6d963e9761c0cbe8096c65a94ba9cec69aed35b2f1fe891576b83680e82b1bc8018c1c819e02c63bf49386ffb4475cb67d3eadaf3115367877c4'
+  };
+}
 
 // Generate authentication headers
-function generateAuthHeaders(account, privateKey) {
+async function generateAuthHeaders(account, privateKey) {
   const challenge = Math.floor(Date.now() / 1000);
   
   if (!privateKey) {
-    console.log('⚠️  No private key provided, using mock headers');
-    return ADMIN_HEADERS;
+    console.log('⚠️  No private key provided, using fresh admin headers');
+    return await getFreshAdminHeaders();
   }
   
   try {
