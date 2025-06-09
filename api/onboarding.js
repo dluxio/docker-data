@@ -1,6 +1,12 @@
 const express = require('express');
-const { pool } = require('../index');
+const { Pool } = require('pg');
+const config = require('../config');
 const crypto = require('crypto');
+
+// Create database pool directly to avoid circular dependency
+const pool = new Pool({
+  connectionString: config.dbcs,
+});
 const axios = require('axios');
 const cors = require('cors');
 const Joi = require('joi');
@@ -8,7 +14,6 @@ const { PaymentChannelMonitor } = require('./wsmonitor');
 const blockchainMonitor = require('./blockchain-monitor');
 const hiveTx = require('hive-tx');
 const { sha256 } = require("hive-tx/helpers/crypto.js")
-const config = require('../config');
 const CryptoAccountGenerator = require('./crypto-account-generator');
 
 const router = express.Router();
