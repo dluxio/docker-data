@@ -25,7 +25,8 @@ router.get('/api/collaboration/test', (req, res) => {
       'GET /api/collaboration/permissions/:owner/:permlink',
       'POST /api/collaboration/permissions/:owner/:permlink',
       'GET /api/collaboration/activity/:owner/:permlink',
-      'GET /api/collaboration/debug/:owner/:permlink'
+      'GET /api/collaboration/debug/:owner/:permlink',
+      'GET /api/collaboration/test-sync/:owner/:permlink'
     ],
     websocket: 'ws://localhost:1234/{owner}/{permlink}',
     databases: 'Collaboration tables will be auto-created by WebSocket server'
@@ -124,9 +125,93 @@ router.get('/api/collaboration/debug/:owner/:permlink', async (req, res) => {
   }
 })
 
+// Test Y.js document sync endpoint (for debugging document loading issues)
+router.get('/api/collaboration/test-sync/:owner/:permlink', async (req, res) => {
+  try {
+    const { owner, permlink } = req.params
+    
+    validateDocumentPath(owner, permlink)
+    
+    const client = await pool.connect()
+    try {
+      const result = await client.query(
+        'SELECT document_data, LENGTH(document_data) as content_size FROM collaboration_documents WHERE owner = $1 AND permlink = $2',
+        [owner, permlink]
+      )
+      
+      if (result.rows.length === 0) {
+        return res.json({
+          success: false,
+          error: 'Document not found in database',
+          suggestion: 'Create the document first via POST /api/collaboration/documents'
+        })
+      }
+      
+      const doc = result.rows[0]
+      
+      // Test Y.js document decoding
+      const Y = require('yjs')
+      let decodedDocument = null
+      let decodingError = null
+      
+      if (doc.document_data) {
+        try {
+          // This simulates what the Hocuspocus server should do
+          const documentBuffer = Buffer.from(doc.document_data, 'base64')
+          const yDoc = new Y.Doc()
+          Y.applyUpdate(yDoc, new Uint8Array(documentBuffer))
+          
+          // Try to get text content
+          const yText = yDoc.getText('content')
+          decodedDocument = {
+            hasContent: yText.length > 0,
+            contentLength: yText.length,
+            content: yText.toString(),
+            preview: yText.toString().substring(0, 200)
+          }
+        } catch (error) {
+          decodingError = error.message
+        }
+      }
+      
+      res.json({
+        success: true,
+        document: `${owner}/${permlink}`,
+        database: {
+          hasDocumentData: !!doc.document_data,
+          contentSize: parseInt(doc.content_size) || 0,
+          dataType: typeof doc.document_data,
+          dataLength: doc.document_data ? doc.document_data.length : 0
+        },
+        yjs: {
+          decodingSuccessful: !decodingError,
+          decodingError,
+          decodedDocument
+        },
+        websocketUrl: `ws://localhost:1234/${owner}/${permlink}`,
+        diagnosis: {
+          canDecode: !decodingError,
+          hasActualContent: decodedDocument ? decodedDocument.hasContent : false,
+          issue: decodingError ? 'Y.js document decoding failed' : 
+                 (!doc.document_data ? 'No document data in database' : 
+                 (!decodedDocument?.hasContent ? 'Document exists but has no content' : 'Document appears normal'))
+        }
+      })
+    } finally {
+      client.release()
+    }
+  } catch (error) {
+    console.error('Error testing document sync:', error)
+    res.status(500).json({
+      success: false,
+      error: error.message
+    })
+  }
+})
+
 // Apply auth middleware to all other collaboration routes (except test)
 router.use('/api/collaboration', (req, res, next) => {
-  if (req.path === '/test') {
+  if (req.path === '/test' || req.path.startsWith('/test-sync/') || req.path.startsWith('/debug/')) {
     return next()
   }
   return authMiddleware(req, res, next)

@@ -254,6 +254,17 @@ class PostgreSQLDatabase {
 const hiveAuth = new HiveAuthExtension()
 const postgresDB = new PostgreSQLDatabase()
 
+// Create custom database extension
+class PostgreSQLExtension {
+  async onLoadDocument(data) {
+    return await postgresDB.onLoadDocument(data)
+  }
+  
+  async onStoreDocument(data) {
+    return await postgresDB.onStoreDocument(data)
+  }
+}
+
 // Configure the Hocuspocus server
 const server = new Server({
   port: 1234,
@@ -283,15 +294,6 @@ const server = new Server({
   // Authentication
   async onAuthenticate(data) {
     return await hiveAuth.onAuthenticate(data)
-  },
-  
-  // Document storage
-  async onStoreDocument(data) {
-    return await postgresDB.onStoreDocument(data)
-  },
-  
-  async onLoadDocument(data) {
-    return await postgresDB.onLoadDocument(data)
   },
   
   // Connection management
@@ -363,6 +365,7 @@ const server = new Server({
   
   extensions: [
     new Logger(),
+    new PostgreSQLExtension(),
   ],
 })
 
