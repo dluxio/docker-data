@@ -100,7 +100,7 @@ async function checkDocumentAccess(account, owner, permlink, requiredPermission 
 // 1. List Documents
 router.get('/api/collaboration/documents', async (req, res) => {
   try {
-    const account = req.hiveAuth.account
+    const account = req.headers['x-account']
     const limit = Math.min(parseInt(req.query.limit) || 50, 100)
     const offset = Math.max(parseInt(req.query.offset) || 0, 0)
     const type = req.query.type || 'all'
