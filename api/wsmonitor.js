@@ -1,6 +1,12 @@
 const WebSocket = require('ws');
-const { pool } = require('../index');
+const { Pool } = require('pg');
+const config = require('../config');
 const { deviceConnectionWS } = require('./device-connection-ws');
+
+// Create database pool directly to avoid circular dependency
+const pool = new Pool({
+  connectionString: config.dbcs,
+});
 
 // Helper function to explain WebSocket close codes
 function getCloseCodeMeaning(code) {

@@ -4,8 +4,14 @@ const { ethers } = require('ethers');
 const BIP32Factory = require('bip32');
 const ecc = require('tiny-secp256k1');
 const { generateMnemonic, mnemonicToSeedSync } = require('bip39');
-const { pool } = require('../index');
+const { Pool } = require('pg');
+const config = require('../config');
 const CryptoEncryption = require('./crypto-encryption');
+
+// Create database pool directly to avoid circular dependency
+const pool = new Pool({
+  connectionString: config.dbcs,
+});
 
 // Initialize BIP32 with secp256k1
 const bip32 = BIP32Factory.default(ecc);

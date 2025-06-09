@@ -7207,10 +7207,11 @@ router.post('/api/onboarding/request/:requestId/create-account', authMiddleware,
 });
 
 // Posts Management Routes
+const apiIndex = require('./index');
 const { 
   getPosts, getPostsStats, createPost, updatePost, deletePost, updatePostFlags, testFlags,
   submitFlagReport, getPendingFlags, reviewFlagReport, updateUserFlagPermissions, getUserFlagStats
-} = require('./index');
+} = apiIndex;
 
 router.get('/api/posts', adminAuthMiddleware, getPosts);
 router.get('/api/posts/stats', adminAuthMiddleware, getPostsStats);

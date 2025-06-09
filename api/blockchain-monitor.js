@@ -1,5 +1,11 @@
 const fetch = require('node-fetch');
-const { pool } = require('../index');
+const { Pool } = require('pg');
+const config = require('../config');
+
+// Create database pool directly to avoid circular dependency
+const pool = new Pool({
+  connectionString: config.dbcs,
+});
 
 // Enhanced error classes for better error handling
 class BlockchainMonitorError extends Error {
