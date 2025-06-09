@@ -21,10 +21,10 @@ const sha256 = (data) => {
 class HiveAuthExtension {
   async onAuthenticate(data) {
     const { token, documentName } = data
-    
+    console.log({token})
     try {
       // Parse token - should contain auth headers as JSON
-      const authData = token
+      const authData = JSON.parse(token)
       const { account, challenge, pubkey, signature } = authData
       
       // Validate required fields
