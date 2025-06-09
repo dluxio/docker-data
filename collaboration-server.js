@@ -1,10 +1,9 @@
 const { Server } = require('@hocuspocus/server')
 const { Database } = require('@hocuspocus/extension-database')
-const { Logger } = require('@hocuspocus/extension-logger')
+
 const { Pool } = require('pg')
 const config = require('./config')
 const { CollaborationAuth } = require('./collaboration-auth')
-const { PrivateKey, PublicKey, Signature } = require('hive-tx')
 const { createHash } = require('crypto')
 const Y = require('yjs')
 
@@ -194,8 +193,6 @@ const server = new Server({
     const [owner, permlink] = documentName.split('/')
     
     if (context.user) {
-      console.log(`User ${context.user.name} connected to ${documentName}`)
-      
       // Update active user count
       try {
         const client = await pool.connect()
@@ -223,8 +220,6 @@ const server = new Server({
     const [owner, permlink] = documentName.split('/')
     
     if (context.user) {
-      console.log(`User ${context.user.name} disconnected from ${documentName}`)
-      
       // Log disconnect activity
       await hiveAuth.logActivity(owner, permlink, context.user.name, 'disconnect', {
         timestamp: new Date().toISOString()
@@ -251,13 +246,10 @@ const server = new Server({
   
   // Error handling
   async onDestroy() {
-    console.log('Hocuspocus server shutting down...')
     await pool.end()
   },
   
   extensions: [
-    new Logger(),
-    
     // Use official Hocuspocus Database extension instead of custom handlers
     new Database({
       // Fetch Y.js document from PostgreSQL
@@ -288,12 +280,9 @@ const server = new Server({
                 const testDoc = new Y.Doc()
                 Y.applyUpdate(testDoc, uint8Array)
                 
-                console.log(`Y.js document loaded: ${documentName}`)
                 return uint8Array
               } catch (yError) {
                 // If not Y.js format, convert plain text to Y.js
-                console.log(`Converting plain text to Y.js for document: ${documentName}`)
-                
                 const yDoc = new Y.Doc()
                 const yText = yDoc.getText('content')
                 yText.insert(0, rawData)
@@ -308,12 +297,9 @@ const server = new Server({
                   WHERE owner = $2 AND permlink = $3
                 `, [documentData, owner, permlink])
                 
-                console.log(`Document converted and stored: ${documentName}`)
                 return update
               }
             }
-            
-            console.log(`New document: ${documentName}`)
             return null
           } finally {
             client.release()
@@ -359,7 +345,7 @@ const server = new Server({
                 updated_at = NOW()
             `, [owner, permlink])
             
-            console.log(`Document stored: ${documentName}`)
+
           } finally {
             client.release()
           }
@@ -449,7 +435,7 @@ async function setupCollaborationDatabase() {
         CREATE INDEX IF NOT EXISTS idx_collab_stats_owner_permlink ON collaboration_stats(owner, permlink);
       `)
       
-      console.log('Collaboration database tables created successfully')
+
     } finally {
       client.release()
     }
@@ -467,8 +453,6 @@ async function startCollaborationServer() {
     
     // Start the server
     server.listen()
-    console.log('🚀 Hocuspocus collaboration server started on port 1234')
-    console.log('📡 WebSocket endpoint: ws://localhost:1234/{owner}/{permlink}')
   } catch (error) {
     console.error('Failed to start collaboration server:', error)
     process.exit(1)
@@ -477,13 +461,11 @@ async function startCollaborationServer() {
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
-  console.log('\n🛑 Received SIGINT, shutting down gracefully...')
   await server.destroy()
   process.exit(0)
 })
 
 process.on('SIGTERM', async () => {
-  console.log('\n🛑 Received SIGTERM, shutting down gracefully...')
   await server.destroy()
   process.exit(0)
 })
