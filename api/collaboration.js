@@ -13,8 +13,31 @@ const pool = new Pool({
 // Auth middleware - any valid HIVE user can use collaboration
 const authMiddleware = createAuthMiddleware(false, false)
 
-// Apply auth middleware to all collaboration routes
-router.use('/api/collaboration', authMiddleware)
+// Test endpoint (no auth required)
+router.get('/api/collaboration/test', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Collaboration API is working!',
+    endpoints: [
+      'GET /api/collaboration/documents',
+      'POST /api/collaboration/documents', 
+      'GET /api/collaboration/info/:owner/:permlink',
+      'GET /api/collaboration/permissions/:owner/:permlink',
+      'POST /api/collaboration/permissions/:owner/:permlink',
+      'GET /api/collaboration/activity/:owner/:permlink'
+    ],
+    websocket: 'ws://localhost:1234/{owner}/{permlink}',
+    databases: 'Collaboration tables will be auto-created by WebSocket server'
+  })
+})
+
+// Apply auth middleware to all other collaboration routes (except test)
+router.use('/api/collaboration', (req, res, next) => {
+  if (req.path === '/test') {
+    return next()
+  }
+  return authMiddleware(req, res, next)
+})
 
 // Helper function to validate document format
 function validateDocumentPath(owner, permlink) {
@@ -706,23 +729,6 @@ router.get('/api/collaboration/stats/:owner/:permlink', async (req, res) => {
       error: error.message
     })
   }
-})
-
-// Test endpoint to verify collaboration API is working
-router.get('/api/collaboration/test', (req, res) => {
-  res.json({
-    success: true,
-    message: 'Collaboration API is working!',
-    endpoints: [
-      'GET /api/collaboration/documents',
-      'POST /api/collaboration/documents', 
-      'GET /api/collaboration/info/:owner/:permlink',
-      'GET /api/collaboration/permissions/:owner/:permlink',
-      'POST /api/collaboration/permissions/:owner/:permlink',
-      'GET /api/collaboration/activity/:owner/:permlink'
-    ],
-    websocket: 'ws://localhost:1234/{owner}/{permlink}'
-  })
 })
 
 module.exports = router 
