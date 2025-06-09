@@ -1,5 +1,6 @@
 const { PrivateKey, PublicKey, Signature } = require('hive-tx')
 const fetch = require('node-fetch')
+const { sha256 } = require("hive-tx/helpers/crypto.js")
 
 /**
  * Minimal Hive authentication utilities for collaboration server
@@ -45,18 +46,16 @@ class CollaborationAuth {
   /**
    * Verify signature using HIVE cryptography
    */
-  static async verifySignature(message, signature, publicKey) {
+  static async verifySignature(challenge, signature, key) {
     try {
-      const pubKey = PublicKey.from(publicKey)
-      const sig = Signature.from(signature)
-      const messageBuffer = Buffer.from(message, 'utf8')
-      
-      return pubKey.verify(sig, messageBuffer)
+            const publicKey = PublicKey.from(key);
+            const message = sha256(challenge);
+            return publicKey.verify(message, Signature.from(signature));
     } catch (error) {
-      console.error('Error verifying signature:', error)
-      return false
+        console.error('Signature verification error:', error);
+        return false
     }
-  }
+}
 }
 
 module.exports = { CollaborationAuth } 
