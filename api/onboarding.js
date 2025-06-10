@@ -6884,7 +6884,7 @@ router.get('/api/onboarding/notifications/:username/merged', async (req, res) =>
                 type: row.notification_type,
                 title: row.title,
                 message: row.message,
-                data: row.data ? JSON.parse(row.data) : null,
+                data: row.data ? (typeof row.data === 'string' ? JSON.parse(row.data) : row.data) : null,
                 status: row.status,
                 priority: row.priority,
                 createdAt: new Date(row.created_at),
