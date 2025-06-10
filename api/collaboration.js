@@ -846,4 +846,62 @@ router.get('/api/collaboration/stats/:owner/:permlink', async (req, res) => {
   }
 })
 
+// 11. Test endpoint to check collaboration notifications
+router.get('/api/collaboration/test-notifications/:username', async (req, res) => {
+  try {
+    const { username } = req.params
+    
+    const client = await pool.connect()
+    try {
+      // Get all collaboration-related notifications for the user
+      const result = await client.query(`
+        SELECT 
+          id,
+          notification_type,
+          title,
+          message,
+          data,
+          status,
+          priority,
+          created_at,
+          read_at,
+          dismissed_at
+        FROM user_notifications 
+        WHERE username = $1 
+          AND notification_type IN ('collaboration_invite', 'collaboration_removed')
+        ORDER BY created_at DESC
+        LIMIT 20
+      `, [username])
+      
+      const notifications = result.rows.map(row => ({
+        id: row.id,
+        type: row.notification_type,
+        title: row.title,
+        message: row.message,
+        data: row.data ? JSON.parse(row.data) : null,
+        status: row.status,
+        priority: row.priority,
+        createdAt: row.created_at,
+        readAt: row.read_at,
+        dismissedAt: row.dismissed_at
+      }))
+      
+      res.json({
+        success: true,
+        username,
+        collaborationNotifications: notifications,
+        count: notifications.length
+      })
+    } finally {
+      client.release()
+    }
+  } catch (error) {
+    console.error('Error testing collaboration notifications:', error)
+    res.status(500).json({
+      success: false,
+      error: error.message
+    })
+  }
+})
+
 module.exports = router 

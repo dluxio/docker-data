@@ -23,7 +23,28 @@ All API endpoints (except public info endpoints) require Hive blockchain authent
 
 Documents are identified by the format: `owner-hive-account/permlink`
 
-Example: `alice/my-document-2024`
+Example: `alice/URiHERhq0qFjczMD`
+
+**Note**: Documents now have separate display names and technical permlinks:
+- **Permlink**: URL-safe random identifier (e.g., `URiHERhq0qFjczMD`) used for routing and references
+- **Document Name**: User-friendly display name (e.g., `My Project Notes`) that can be changed by owners/editors
+
+## Document Naming System
+
+The collaboration system uses a dual-identifier approach:
+
+### Technical Permlinks
+- **Auto-generated**: 16-character URL-safe random strings (e.g., `URiHERhq0qFjczMD`)
+- **Immutable**: Never change once created, ensuring stable URLs and references
+- **Used for**: WebSocket connections, API endpoints, database relationships
+
+### Display Names
+- **User-friendly**: Human-readable names (e.g., `My Project Notes`, `2024-01-15 Meeting Minutes`)
+- **Editable**: Can be changed by document owners or users with edit permissions
+- **Default format**: `YYYY-MM-DD untitled` if not specified during creation
+- **Used for**: UI display, document organization, user experience
+
+This separation allows users to rename documents without breaking existing links or references.
 
 
 
@@ -48,14 +69,16 @@ GET /api/collaboration/documents
   "documents": [
     {
       "owner": "alice",
-      "permlink": "my-document-2024",
-      "documentPath": "alice/my-document-2024",
+      "permlink": "URiHERhq0qFjczMD",
+      "documentName": "My Project Notes",
+      "documentPath": "alice/URiHERhq0qFjczMD",
       "isPublic": false,
       "hasContent": true,
       "contentSize": 1024,
       "accessType": "owner",
       "createdAt": "2024-01-01T12:00:00Z",
-      "updatedAt": "2024-01-01T15:30:00Z"
+      "updatedAt": "2024-01-01T15:30:00Z",
+      "lastActivity": "2024-01-01T15:30:00Z"
     }
   ],
   "pagination": {
@@ -76,12 +99,17 @@ POST /collaboration/documents
 **Request Body:**
 ```json
 {
-  "permlink": "my-new-document",
+  "documentName": "My New Document", 
   "isPublic": false,
   "title": "My New Document",
   "description": "A collaborative document"
 }
 ```
+
+**Notes:**
+- `documentName` is optional. If not provided, defaults to `YYYY-MM-DD untitled` format
+- `permlink` is automatically generated as a 16-character URL-safe random string
+- `title` and `description` are optional metadata for activity logging
 
 **Response:**
 ```json
@@ -89,22 +117,82 @@ POST /collaboration/documents
   "success": true,
   "document": {
     "owner": "alice",
-    "permlink": "my-new-document",
-    "documentPath": "alice/my-new-document",
+    "permlink": "URiHERhq0qFjczMD",
+    "documentName": "My New Document",
+    "documentPath": "alice/URiHERhq0qFjczMD",
     "isPublic": false,
-    "websocketUrl": "/collaboration/alice/my-new-document",
-    "authHeaders": {
-      "x-account": "alice",
-      "x-challenge": "timestamp",
-      "x-pubkey": "key",
-      "x-signature": "signature"
-    },
+    "websocketUrl": "ws://localhost:1234/alice/URiHERhq0qFjczMD",
     "createdAt": "2024-01-01T12:00:00Z"
   }
 }
 ```
 
-### 5. Delete Document
+### 5. Update Document Name
+
+```http
+PATCH /collaboration/documents/{owner}/{permlink}/name
+```
+
+**Request Body:**
+```json
+{
+  "documentName": "Updated Document Name"
+}
+```
+
+**Notes:**
+- Only document owners or users with edit permissions can rename documents
+- Document name cannot be empty and has a maximum length of 500 characters
+- Permlink remains unchanged when renaming
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Document name updated successfully",
+  "document": {
+    "owner": "alice",
+    "permlink": "URiHERhq0qFjczMD",
+    "documentName": "Updated Document Name",
+    "documentPath": "alice/URiHERhq0qFjczMD",
+    "updatedBy": "alice",
+    "updatedAt": "2024-01-01T16:00:00Z"
+  }
+}
+```
+
+### 6. Get Document Info
+
+```http
+GET /collaboration/info/{owner}/{permlink}
+```
+
+**Notes:**
+- Returns detailed information about a specific document
+- Requires read access to the document (owner, granted permission, or public document)
+
+**Response:**
+```json
+{
+  "success": true,
+  "document": {
+    "owner": "alice",
+    "permlink": "URiHERhq0qFjczMD",
+    "documentName": "My Document",
+    "documentPath": "alice/URiHERhq0qFjczMD",
+    "isPublic": false,
+    "hasContent": true,
+    "contentSize": 1024,
+    "accessType": "owner",
+    "websocketUrl": "ws://localhost:1234/alice/URiHERhq0qFjczMD",
+    "createdAt": "2024-01-01T12:00:00Z",
+    "updatedAt": "2024-01-01T15:30:00Z",
+    "lastActivity": "2024-01-01T15:30:00Z"
+  }
+}
+```
+
+### 7. Delete Document
 
 ```http
 DELETE /collaboration/documents/{owner}/{permlink}
@@ -120,7 +208,7 @@ DELETE /collaboration/documents/{owner}/{permlink}
 }
 ```
 
-### 6. Get Document Permissions
+### 8. Get Document Permissions
 
 ```http
 GET /collaboration/permissions/{owner}/{permlink}
@@ -130,7 +218,7 @@ GET /collaboration/permissions/{owner}/{permlink}
 ```json
 {
   "success": true,
-  "document": "alice/my-document",
+  "document": "alice/URiHERhq0qFjczMD",
   "permissions": [
     {
       "account": "bob",
@@ -147,7 +235,7 @@ GET /collaboration/permissions/{owner}/{permlink}
 }
 ```
 
-### 7. Grant Permission
+### 9. Grant Permission
 
 ```http
 POST /collaboration/permissions/{owner}/{permlink}
@@ -185,7 +273,7 @@ POST /collaboration/permissions/{owner}/{permlink}
 }
 ```
 
-### 8. Revoke Permission
+### 10. Revoke Permission
 
 ```http
 DELETE /collaboration/permissions/{owner}/{permlink}/{targetAccount}
@@ -199,7 +287,7 @@ DELETE /collaboration/permissions/{owner}/{permlink}/{targetAccount}
 }
 ```
 
-### 9. Get Activity Log
+### 11. Get Activity Log
 
 ```http
 GET /collaboration/activity/{owner}/{permlink}
@@ -213,7 +301,7 @@ GET /collaboration/activity/{owner}/{permlink}
 ```json
 {
   "success": true,
-  "document": "alice/my-document",
+  "document": "alice/URiHERhq0qFjczMD",
   "activity": [
     {
       "account": "bob",
@@ -234,7 +322,7 @@ GET /collaboration/activity/{owner}/{permlink}
 }
 ```
 
-### 10. Get Document Statistics
+### 12. Get Document Statistics
 
 ```http
 GET /collaboration/stats/{owner}/{permlink}
@@ -244,7 +332,7 @@ GET /collaboration/stats/{owner}/{permlink}
 ```json
 {
   "success": true,
-  "document": "alice/my-document",
+  "document": "alice/URiHERhq0qFjczMD",
   "stats": {
     "total_users": 3,
     "active_users": 1,
@@ -269,7 +357,7 @@ GET /collaboration/stats/{owner}/{permlink}
 }
 ```
 
-### 11. Get Detailed Permissions
+### 13. Get Detailed Permissions
 
 ```http
 GET /collaboration/permissions-detailed/{owner}/{permlink}
@@ -279,7 +367,7 @@ GET /collaboration/permissions-detailed/{owner}/{permlink}
 ```json
 {
   "success": true,
-  "document": "alice/my-document",
+  "document": "alice/URiHERhq0qFjczMD",
   "permissions": [
     {
       "account": "bob",
@@ -296,7 +384,7 @@ GET /collaboration/permissions-detailed/{owner}/{permlink}
 }
 ```
 
-### 12. Manual Document Cleanup
+### 14. Manual Document Cleanup
 
 ```http
 POST /collaboration/cleanup/manual/{owner}/{permlink}
@@ -339,6 +427,60 @@ The Hive Collaboration API provides comprehensive real-time collaboration capabi
 - **Edit Statistics**: Monitor document changes and user activity
 - **Permission Auditing**: Log all permission grants and revocations
 
+## API Usage Examples
+
+### Creating Documents
+
+```javascript
+// Create document with custom name
+const response = await fetch('/api/collaboration/documents', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'x-account': 'alice',
+    'x-challenge': Math.floor(Date.now() / 1000).toString(),
+    'x-pubkey': 'STM...',
+    'x-signature': '...'
+  },
+  body: JSON.stringify({
+    documentName: 'My Project Notes',
+    isPublic: false
+  })
+})
+
+// Returns: { permlink: "URiHERhq0qFjczMD", documentName: "My Project Notes" }
+```
+
+```javascript
+// Create document with default name
+const response = await fetch('/api/collaboration/documents', {
+  method: 'POST',
+  headers: { /* auth headers */ },
+  body: JSON.stringify({
+    isPublic: false
+  })
+})
+
+// Returns: { permlink: "loWoeOsHjrz8UhRR", documentName: "2024-01-15 untitled" }
+```
+
+### Renaming Documents
+
+```javascript
+// Update document name
+const response = await fetch('/api/collaboration/documents/alice/URiHERhq0qFjczMD/name', {
+  method: 'PATCH',
+  headers: {
+    'Content-Type': 'application/json',
+    'x-account': 'alice', // or user with edit permission
+    // ... other auth headers
+  },
+  body: JSON.stringify({
+    documentName: 'Updated Project Notes'
+  })
+})
+```
+
 ## Frontend Integration
 
 
@@ -378,6 +520,7 @@ CREATE TABLE collaboration_documents (
   id SERIAL PRIMARY KEY,
   owner VARCHAR(50) NOT NULL,
   permlink VARCHAR(255) NOT NULL,
+  document_name VARCHAR(500) DEFAULT '',
   document_data TEXT,
   is_public BOOLEAN DEFAULT false,
   last_activity TIMESTAMP DEFAULT NOW(),
