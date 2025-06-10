@@ -369,6 +369,7 @@ async function setupCollaborationDatabase() {
           id SERIAL PRIMARY KEY,
           owner VARCHAR(50) NOT NULL,
           permlink VARCHAR(255) NOT NULL,
+          document_name VARCHAR(500) DEFAULT '',
           document_data TEXT,
           is_public BOOLEAN DEFAULT false,
           last_activity TIMESTAMP DEFAULT NOW(),
@@ -376,6 +377,12 @@ async function setupCollaborationDatabase() {
           updated_at TIMESTAMP DEFAULT NOW(),
           UNIQUE(owner, permlink)
         )
+      `)
+      
+      // Add document_name column if it doesn't exist (for existing databases)
+      await client.query(`
+        ALTER TABLE collaboration_documents 
+        ADD COLUMN IF NOT EXISTS document_name VARCHAR(500) DEFAULT ''
       `)
       
       // Create collaboration_permissions table

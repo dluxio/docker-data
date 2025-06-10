@@ -2,6 +2,7 @@ const express = require('express')
 const { Pool } = require('pg')
 const config = require('../config')
 const { createAuthMiddleware } = require('./onboarding')
+const crypto = require('crypto')
 
 const router = express.Router()
 
@@ -16,7 +17,21 @@ const authMiddleware = createAuthMiddleware(false, false)
 // Apply auth middleware to all collaboration routes
 router.use('/api/collaboration', authMiddleware)
 
+// Helper function to generate random URL-safe permlink
+function generateRandomPermlink(length = 16) {
+  return crypto.randomBytes(Math.ceil(length * 3 / 4))
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=/g, '')
+    .slice(0, length)
+}
 
+// Helper function to generate default document name
+function generateDefaultDocumentName() {
+  const timestamp = new Date().toISOString().split('T')[0] // YYYY-MM-DD format
+  return `${timestamp} untitled`
+}
 
 // Helper function to validate document format
 function validateDocumentPath(owner, permlink) {
@@ -90,7 +105,7 @@ router.get('/api/collaboration/documents', async (req, res) => {
       
       if (type === 'owned') {
         query = `
-          SELECT d.owner, d.permlink, d.is_public, d.created_at, d.updated_at, d.last_activity,
+          SELECT d.owner, d.permlink, d.document_name, d.is_public, d.created_at, d.updated_at, d.last_activity,
                  LENGTH(d.document_data) as content_size,
                  'owner' as access_type
           FROM collaboration_documents d
@@ -101,7 +116,7 @@ router.get('/api/collaboration/documents', async (req, res) => {
         params = [account, limit, offset]
       } else if (type === 'shared') {
         query = `
-          SELECT d.owner, d.permlink, d.is_public, d.created_at, d.updated_at, d.last_activity,
+          SELECT d.owner, d.permlink, d.document_name, d.is_public, d.created_at, d.updated_at, d.last_activity,
                  LENGTH(d.document_data) as content_size,
                  p.permission_type as access_type
           FROM collaboration_documents d
@@ -114,7 +129,7 @@ router.get('/api/collaboration/documents', async (req, res) => {
       } else {
         // All accessible documents
         query = `
-          SELECT DISTINCT d.owner, d.permlink, d.is_public, d.created_at, d.updated_at, d.last_activity,
+          SELECT DISTINCT d.owner, d.permlink, d.document_name, d.is_public, d.created_at, d.updated_at, d.last_activity,
                  LENGTH(d.document_data) as content_size,
                  CASE 
                    WHEN d.owner = $1 THEN 'owner'
@@ -147,6 +162,7 @@ router.get('/api/collaboration/documents', async (req, res) => {
       const documents = result.rows.map(row => ({
         owner: row.owner,
         permlink: row.permlink,
+        documentName: row.document_name || '',
         documentPath: `${row.owner}/${row.permlink}`,
         isPublic: row.is_public,
         hasContent: row.content_size > 0,
@@ -198,7 +214,7 @@ router.get('/api/collaboration/info/:owner/:permlink', async (req, res) => {
     const client = await pool.connect()
     try {
       const result = await client.query(
-        'SELECT owner, permlink, is_public, created_at, updated_at, last_activity, LENGTH(document_data) as content_size FROM collaboration_documents WHERE owner = $1 AND permlink = $2',
+        'SELECT owner, permlink, document_name, is_public, created_at, updated_at, last_activity, LENGTH(document_data) as content_size FROM collaboration_documents WHERE owner = $1 AND permlink = $2',
         [owner, permlink]
       )
       
@@ -232,6 +248,7 @@ router.get('/api/collaboration/info/:owner/:permlink', async (req, res) => {
         document: {
           owner: doc.owner,
           permlink: doc.permlink,
+          documentName: doc.document_name || '',
           documentPath: `${doc.owner}/${doc.permlink}`,
           isPublic: doc.is_public,
           hasContent: parseInt(doc.content_size) > 0,
@@ -259,37 +276,23 @@ router.get('/api/collaboration/info/:owner/:permlink', async (req, res) => {
 router.post('/api/collaboration/documents', async (req, res) => {
   try {
     const account = req.headers['x-account']
-    const { permlink, isPublic = false, title, description } = req.body
+    const { documentName, isPublic = false, title, description } = req.body
     
-    if (!permlink) {
-      return res.status(400).json({
-        success: false,
-        error: 'Permlink is required'
-      })
-    }
+    // Generate random URL-safe permlink
+    const permlink = generateRandomPermlink(16)
+    
+    // Use provided name or generate default
+    const finalDocumentName = documentName || generateDefaultDocumentName()
     
     validateDocumentPath(account, permlink)
     
     const client = await pool.connect()
     try {
-      // Check if document already exists
-      const existingDoc = await client.query(
-        'SELECT id FROM collaboration_documents WHERE owner = $1 AND permlink = $2',
-        [account, permlink]
-      )
-      
-      if (existingDoc.rows.length > 0) {
-        return res.status(409).json({
-          success: false,
-          error: 'Document already exists'
-        })
-      }
-      
-      // Create document
+      // Create document with random permlink and specified/default name
       await client.query(`
-        INSERT INTO collaboration_documents (owner, permlink, is_public, created_at, updated_at)
-        VALUES ($1, $2, $3, NOW(), NOW())
-      `, [account, permlink, isPublic])
+        INSERT INTO collaboration_documents (owner, permlink, document_name, is_public, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, NOW(), NOW())
+      `, [account, permlink, finalDocumentName, isPublic])
       
       // Initialize stats
       await client.query(`
@@ -301,13 +304,14 @@ router.post('/api/collaboration/documents', async (req, res) => {
       await client.query(`
         INSERT INTO collaboration_activity (owner, permlink, account, activity_type, activity_data)
         VALUES ($1, $2, $3, 'create', $4)
-      `, [account, permlink, account, JSON.stringify({ title, description, isPublic })])
+      `, [account, permlink, account, JSON.stringify({ documentName: finalDocumentName, title, description, isPublic })])
       
       res.json({
         success: true,
         document: {
           owner: account,
           permlink,
+          documentName: finalDocumentName,
           documentPath: `${account}/${permlink}`,
           isPublic,
           websocketUrl: `ws://localhost:1234/${account}/${permlink}`,
@@ -326,7 +330,87 @@ router.post('/api/collaboration/documents', async (req, res) => {
   }
 })
 
-// 4. Delete Document
+// 4. Update Document Name
+router.patch('/api/collaboration/documents/:owner/:permlink/name', async (req, res) => {
+  try {
+    const { owner, permlink } = req.params
+    const account = req.headers['x-account']
+    const { documentName } = req.body
+    
+    if (!documentName || documentName.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        error: 'Document name is required and cannot be empty'
+      })
+    }
+    
+    if (documentName.length > 500) {
+      return res.status(400).json({
+        success: false,
+        error: 'Document name cannot exceed 500 characters'
+      })
+    }
+    
+    validateDocumentPath(owner, permlink)
+    
+    // Check if user has edit access (owner or editable permission)
+    const hasEditAccess = await checkDocumentAccess(account, owner, permlink, 'edit')
+    if (!hasEditAccess) {
+      return res.status(403).json({
+        success: false,
+        error: 'Only document owner or users with edit permission can rename document'
+      })
+    }
+    
+    const client = await pool.connect()
+    try {
+      // Update document name
+      const result = await client.query(
+        'UPDATE collaboration_documents SET document_name = $1, updated_at = NOW() WHERE owner = $2 AND permlink = $3',
+        [documentName.trim(), owner, permlink]
+      )
+      
+      if (result.rowCount === 0) {
+        return res.status(404).json({
+          success: false,
+          error: 'Document not found'
+        })
+      }
+      
+      // Log rename activity
+      await client.query(`
+        INSERT INTO collaboration_activity (owner, permlink, account, activity_type, activity_data)
+        VALUES ($1, $2, $3, 'rename', $4)
+      `, [owner, permlink, account, JSON.stringify({ 
+        newName: documentName.trim(),
+        renamedBy: account 
+      })])
+      
+      res.json({
+        success: true,
+        message: 'Document name updated successfully',
+        document: {
+          owner,
+          permlink,
+          documentName: documentName.trim(),
+          documentPath: `${owner}/${permlink}`,
+          updatedBy: account,
+          updatedAt: new Date().toISOString()
+        }
+      })
+    } finally {
+      client.release()
+    }
+  } catch (error) {
+    console.error('Error updating document name:', error)
+    res.status(500).json({
+      success: false,
+      error: error.message
+    })
+  }
+})
+
+// 5. Delete Document
 router.delete('/api/collaboration/documents/:owner/:permlink', async (req, res) => {
   try {
     const { owner, permlink } = req.params
@@ -373,7 +457,7 @@ router.delete('/api/collaboration/documents/:owner/:permlink', async (req, res) 
   }
 })
 
-// 5. Get Document Permissions
+// 6. Get Document Permissions
 router.get('/api/collaboration/permissions/:owner/:permlink', async (req, res) => {
   try {
     const { owner, permlink } = req.params
@@ -425,7 +509,7 @@ router.get('/api/collaboration/permissions/:owner/:permlink', async (req, res) =
   }
 })
 
-// Grant Permission endpoint  
+// 7. Grant Permission endpoint  
 router.post('/api/collaboration/permissions/:owner/:permlink', async (req, res) => {
   try {
     const { owner, permlink } = req.params
@@ -489,6 +573,27 @@ router.post('/api/collaboration/permissions/:owner/:permlink', async (req, res) 
         VALUES ($1, $2, $3, 'permission_granted', $4)
       `, [owner, permlink, account, JSON.stringify({ targetAccount, permissionType })])
       
+      // Create notification for the user being granted access
+      await client.query(`
+        INSERT INTO user_notifications 
+        (username, notification_type, title, message, data, priority)
+        VALUES ($1, $2, $3, $4, $5, $6)
+      `, [
+        targetAccount,
+        'collaboration_invite',
+        'Document Collaboration Invite',
+        `@${account} invited you to collaborate on their document "${permlink}"`,
+        JSON.stringify({
+          documentOwner: owner,
+          documentPermlink: permlink,
+          documentPath: `${owner}/${permlink}`,
+          permissionType,
+          grantedBy: account,
+          grantedAt: new Date().toISOString()
+        }),
+        'normal'
+      ])
+      
       res.json({
         success: true,
         message: `${permissionType} permission granted to @${targetAccount}`,
@@ -511,7 +616,7 @@ router.post('/api/collaboration/permissions/:owner/:permlink', async (req, res) 
   }
 })
 
-// 7. Revoke Permission
+// 8. Revoke Permission
 router.delete('/api/collaboration/permissions/:owner/:permlink/:targetAccount', async (req, res) => {
   try {
     const { owner, permlink, targetAccount } = req.params
@@ -547,6 +652,37 @@ router.delete('/api/collaboration/permissions/:owner/:permlink/:targetAccount', 
         VALUES ($1, $2, $3, 'permission_revoked', $4)
       `, [owner, permlink, account, JSON.stringify({ targetAccount })])
       
+      // Dismiss/mark as read any collaboration invite notifications for this document
+      await client.query(`
+        UPDATE user_notifications 
+        SET dismissed_at = NOW(), read_at = COALESCE(read_at, NOW())
+        WHERE username = $1 
+          AND notification_type = 'collaboration_invite'
+          AND data->>'documentOwner' = $2 
+          AND data->>'documentPermlink' = $3
+          AND dismissed_at IS NULL
+      `, [targetAccount, owner, permlink])
+      
+      // Create notification informing user their access was revoked
+      await client.query(`
+        INSERT INTO user_notifications 
+        (username, notification_type, title, message, data, priority)
+        VALUES ($1, $2, $3, $4, $5, $6)
+      `, [
+        targetAccount,
+        'collaboration_removed',
+        'Document Access Removed',
+        `@${account} removed your access to their document "${permlink}"`,
+        JSON.stringify({
+          documentOwner: owner,
+          documentPermlink: permlink,
+          documentPath: `${owner}/${permlink}`,
+          removedBy: account,
+          removedAt: new Date().toISOString()
+        }),
+        'normal'
+      ])
+      
       res.json({
         success: true,
         message: `Permission revoked from @${targetAccount}`
@@ -563,7 +699,7 @@ router.delete('/api/collaboration/permissions/:owner/:permlink/:targetAccount', 
   }
 })
 
-// 8. Get Activity Log
+// 9. Get Activity Log
 router.get('/api/collaboration/activity/:owner/:permlink', async (req, res) => {
   try {
     const { owner, permlink } = req.params
@@ -618,7 +754,7 @@ router.get('/api/collaboration/activity/:owner/:permlink', async (req, res) => {
   }
 })
 
-// 9. Get Document Statistics
+// 10. Get Document Statistics
 router.get('/api/collaboration/stats/:owner/:permlink', async (req, res) => {
   try {
     const { owner, permlink } = req.params
