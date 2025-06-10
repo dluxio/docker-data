@@ -591,7 +591,7 @@ router.post('/api/collaboration/permissions/:owner/:permlink', async (req, res) 
           grantedBy: account,
           grantedAt: new Date().toISOString()
         }),
-        'normal'
+        'high'
       ])
       
       res.json({
@@ -680,7 +680,7 @@ router.delete('/api/collaboration/permissions/:owner/:permlink/:targetAccount', 
           removedBy: account,
           removedAt: new Date().toISOString()
         }),
-        'normal'
+        'high'
       ])
       
       res.json({
