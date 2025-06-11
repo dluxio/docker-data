@@ -1261,4 +1261,105 @@ router.get('/api/collaboration/websocket-security-status', async (req, res) => {
   }
 })
 
+// Test Collaboration Authentication endpoint (used for debugging CORS/auth issues)
+router.get('/api/collaboration/test-auth', async (req, res) => {
+  try {
+    // Extract auth headers
+    const account = req.headers['x-account']
+    const challenge = req.headers['x-challenge']
+    const pubkey = req.headers['x-pubkey']
+    const signature = req.headers['x-signature']
+    
+    // Validate required headers
+    if (!account || !challenge || !pubkey || !signature) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing authentication headers',
+        required: ['x-account', 'x-challenge', 'x-pubkey', 'x-signature']
+      })
+    }
+    
+    // Validate challenge timestamp
+    const challengeTime = parseInt(challenge)
+    const now = Math.floor(Date.now() / 1000)
+    const maxAge = 24 * 60 * 60 // 24 hours
+    
+    if (isNaN(challengeTime) || (now - challengeTime) > maxAge || challengeTime > (now + 300)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid challenge timestamp',
+        challengeTime,
+        currentTime: now,
+        maxAge,
+        difference: now - challengeTime
+      })
+    }
+    
+    // Import CollaborationAuth here to avoid circular dependencies
+    const { CollaborationAuth } = require('../collaboration-auth')
+    
+    // Get account keys from HIVE blockchain
+    const accountKeys = await CollaborationAuth.getAccountKeys(account)
+    if (!accountKeys) {
+      return res.status(404).json({
+        success: false,
+        error: `Account @${account} not found on HIVE blockchain`
+      })
+    }
+    
+    // Check if the provided public key belongs to the account
+    const allKeys = [
+      ...accountKeys.owner,
+      ...accountKeys.active,
+      ...accountKeys.posting,
+      accountKeys.memo
+    ].filter(Boolean)
+    
+    if (!allKeys.includes(pubkey)) {
+      return res.status(403).json({
+        success: false,
+        error: 'Public key does not belong to the specified account',
+        providedKey: pubkey,
+        accountKeys: {
+          owner: accountKeys.owner.length,
+          active: accountKeys.active.length,
+          posting: accountKeys.posting.length,
+          memo: accountKeys.memo ? 1 : 0
+        }
+      })
+    }
+    
+    // Verify the signature
+    const isValidSignature = await CollaborationAuth.verifySignature(challenge.toString(), signature, pubkey)
+    if (!isValidSignature) {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid signature'
+      })
+    }
+    
+    return res.json({
+      success: true,
+      message: 'Collaboration authentication successful',
+      account,
+      keyType: accountKeys.posting.includes(pubkey) ? 'posting' : 
+                accountKeys.active.includes(pubkey) ? 'active' : 
+                accountKeys.owner.includes(pubkey) ? 'owner' : 'memo',
+      timestamp: new Date().toISOString(),
+      corsInfo: {
+        credentials: 'Authentication works with credentials: false',
+        headers: 'Standard auth headers processed correctly'
+      }
+    })
+    
+  } catch (error) {
+    console.error('Collaboration test auth error:', error)
+    return res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+      message: error.message
+    })
+  }
+})
+
 module.exports = router 
