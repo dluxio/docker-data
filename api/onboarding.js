@@ -6885,7 +6885,7 @@ router.get('/api/onboarding/notifications/:username/merged', async (req, res) =>
                 // Ensure collaboration_invite notifications have the URL in the data object
                 if (row.notification_type === 'collaboration_invite' && data && data.documentOwner && data.documentPermlink) {
                     if (!data.url) {
-                        data.url = `/new?collabAuthor=${data.documentOwner}&permlink=${data.documentPermlink}`;
+                        data.url = `new?collabAuthor=${data.documentOwner}&permlink=${data.documentPermlink}`;
                     }
                 }
                 
