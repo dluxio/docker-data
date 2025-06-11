@@ -6879,20 +6879,31 @@ router.get('/api/onboarding/notifications/:username/merged', async (req, res) =>
             }
 
             // 4. Process local notifications
-            const localNotifications = localNotificationsResult.rows.map(row => ({
-                id: `local_${row.id}`,
-                type: row.notification_type,
-                title: row.title,
-                message: row.message,
-                data: row.data ? (typeof row.data === 'string' ? JSON.parse(row.data) : row.data) : null,
-                status: row.status,
-                priority: row.priority,
-                createdAt: new Date(row.created_at),
-                readAt: row.read_at ? new Date(row.read_at) : null,
-                dismissedAt: row.dismissed_at ? new Date(row.dismissed_at) : null,
-                expiresAt: row.expires_at ? new Date(row.expires_at) : null,
-                source: 'local'
-            }));
+            const localNotifications = localNotificationsResult.rows.map(row => {
+                let data = row.data ? (typeof row.data === 'string' ? JSON.parse(row.data) : row.data) : null;
+                
+                // Ensure collaboration_invite notifications have the URL in the data object
+                if (row.notification_type === 'collaboration_invite' && data && data.documentOwner && data.documentPermlink) {
+                    if (!data.url) {
+                        data.url = `/new?collabAuthor=${data.documentOwner}&permlink=${data.documentPermlink}`;
+                    }
+                }
+                
+                return {
+                    id: `local_${row.id}`,
+                    type: row.notification_type,
+                    title: row.title,
+                    message: row.message,
+                    data: data,
+                    status: row.status,
+                    priority: row.priority,
+                    createdAt: new Date(row.created_at),
+                    readAt: row.read_at ? new Date(row.read_at) : null,
+                    dismissedAt: row.dismissed_at ? new Date(row.dismissed_at) : null,
+                    expiresAt: row.expires_at ? new Date(row.expires_at) : null,
+                    source: 'local'
+                };
+            });
 
             // 5. Process account creation requests (always at top)
             const accountRequests = requestsResult.rows.map(row => ({

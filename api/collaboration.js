@@ -601,7 +601,7 @@ router.post('/api/collaboration/permissions/:owner/:permlink', async (req, res) 
           permissionType,
           grantedBy: account,
           grantedAt: new Date().toISOString(),
-          url: `/new?collabAuthor=${owner}&collabPermlink=${permlink}`
+          url: `/new??collabAuthor=${owner}&permlink=${permlink}`
         }),
         'high'
       ])
