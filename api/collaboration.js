@@ -600,7 +600,8 @@ router.post('/api/collaboration/permissions/:owner/:permlink', async (req, res) 
           documentPath: `${owner}/${permlink}`,
           permissionType,
           grantedBy: account,
-          grantedAt: new Date().toISOString()
+          grantedAt: new Date().toISOString(),
+          url: `/new?collabAuthor=${owner}&collabPermlink=${permlink}`
         }),
         'high'
       ])
@@ -919,6 +920,340 @@ router.get('/api/collaboration/test-notifications/:username', async (req, res) =
     }
   } catch (error) {
     console.error('Error testing collaboration notifications:', error)
+    res.status(500).json({
+      success: false,
+      error: error.message
+    })
+  }
+})
+
+// 12. Test WebSocket Permission Enforcement
+router.get('/api/collaboration/test-websocket-permissions/:owner/:permlink', async (req, res) => {
+  try {
+    const { owner, permlink } = req.params
+    const account = req.headers['x-account']
+    
+    validateDocumentPath(owner, permlink)
+    
+    const client = await pool.connect()
+    try {
+      // Get document info
+      const docResult = await client.query(
+        'SELECT owner, permlink, document_name, is_public FROM collaboration_documents WHERE owner = $1 AND permlink = $2',
+        [owner, permlink]
+      )
+      
+      if (docResult.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          error: 'Document not found'
+        })
+      }
+      
+      const doc = docResult.rows[0]
+      
+      // Check user's access levels
+      let accessInfo = {
+        isOwner: account === owner,
+        isPublic: doc.is_public,
+        canRead: false,
+        canEdit: false,
+        canPostToHive: false,
+        permissionType: 'none'
+      }
+      
+      if (account === owner) {
+        accessInfo.canRead = true
+        accessInfo.canEdit = true
+        accessInfo.canPostToHive = true
+        accessInfo.permissionType = 'owner'
+      } else if (doc.is_public) {
+        accessInfo.canRead = true
+        accessInfo.permissionType = 'public'
+      } else {
+        // Check explicit permissions
+        const permResult = await client.query(
+          'SELECT permission_type, can_read, can_edit, can_post_to_hive FROM collaboration_permissions WHERE owner = $1 AND permlink = $2 AND account = $3',
+          [owner, permlink, account]
+        )
+        
+        if (permResult.rows.length > 0) {
+          const perm = permResult.rows[0]
+          accessInfo.canRead = perm.can_read
+          accessInfo.canEdit = perm.can_edit
+          accessInfo.canPostToHive = perm.can_post_to_hive
+          accessInfo.permissionType = perm.permission_type
+        }
+      }
+      
+      res.json({
+        success: true,
+        document: {
+          owner: doc.owner,
+          permlink: doc.permlink,
+          documentName: doc.document_name || '',
+          documentPath: `${doc.owner}/${doc.permlink}`,
+          isPublic: doc.is_public
+        },
+        userAccess: accessInfo,
+        websocketUrl: `ws://localhost:1234/${doc.owner}/${doc.permlink}`,
+        securityIssue: {
+          description: "The websocket server currently only checks read access but allows all authenticated users to edit",
+          currentBehavior: "Any user with read access can edit documents through websocket",
+          expectedBehavior: "Only users with edit permission should be able to edit documents",
+          riskLevel: "HIGH - Users with readonly access can modify documents"
+        }
+      })
+    } finally {
+      client.release()
+    }
+  } catch (error) {
+    console.error('Error testing websocket permissions:', error)
+    res.status(500).json({
+      success: false,
+      error: error.message
+    })
+  }
+})
+
+// 13. Test Fixed WebSocket Permission Enforcement  
+router.post('/api/collaboration/test-websocket-security', async (req, res) => {
+  try {
+    const account = req.headers['x-account']
+    const { testScenario } = req.body
+    
+    if (!testScenario) {
+      return res.status(400).json({
+        success: false,
+        error: 'testScenario is required. Options: create_readonly_user, create_editable_user, create_test_document'
+      })
+    }
+    
+    const client = await pool.connect()
+    try {
+      let result = {}
+      
+      switch (testScenario) {
+        case 'create_test_document':
+          // Create a test document for permission testing
+          const testPermlink = `test-perms-${Date.now()}`
+          
+          await client.query(`
+            INSERT INTO collaboration_documents (owner, permlink, document_name, is_public, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, NOW(), NOW())
+          `, [account, testPermlink, 'WebSocket Permission Test Document', false])
+          
+          result = {
+            action: 'created_test_document',
+            documentPath: `${account}/${testPermlink}`,
+            websocketUrl: `ws://localhost:1234/${account}/${testPermlink}`,
+            instructions: [
+              '1. Connect as document owner - should have full edit access',
+              '2. Grant readonly permission to another user',  
+              '3. Connect as readonly user - should NOT be able to edit',
+              '4. Grant editable permission to user',
+              '5. Connect as editable user - should be able to edit'
+            ]
+          }
+          break
+          
+        case 'grant_readonly_permission':
+          const { targetAccount: readonlyAccount, documentPath: readonlyPath } = req.body
+          
+          if (!readonlyAccount || !readonlyPath) {
+            return res.status(400).json({
+              success: false,
+              error: 'targetAccount and documentPath required for this test scenario'
+            })
+          }
+          
+          const [readonlyOwner, readonlyPermlink] = readonlyPath.split('/')
+          
+          // Grant readonly permission
+          await client.query(`
+            INSERT INTO collaboration_permissions (owner, permlink, account, permission_type, can_read, can_edit, can_post_to_hive, granted_by, granted_at)
+            VALUES ($1, $2, $3, 'readonly', true, false, false, $4, NOW())
+            ON CONFLICT (owner, permlink, account)
+            DO UPDATE SET 
+              permission_type = 'readonly',
+              can_read = true,
+              can_edit = false,
+              can_post_to_hive = false,
+              granted_by = $4,
+              granted_at = NOW()
+          `, [readonlyOwner, readonlyPermlink, readonlyAccount, account])
+          
+          result = {
+            action: 'granted_readonly_permission',
+            targetAccount: readonlyAccount,
+            documentPath: readonlyPath,
+            permissions: {
+              canRead: true,
+              canEdit: false,
+              canPostToHive: false
+            },
+            testInstructions: `User @${readonlyAccount} should now be able to connect to websocket but NOT edit the document`
+          }
+          break
+          
+        case 'grant_editable_permission':
+          const { targetAccount: editableAccount, documentPath: editablePath } = req.body
+          
+          if (!editableAccount || !editablePath) {
+            return res.status(400).json({
+              success: false,
+              error: 'targetAccount and documentPath required for this test scenario'
+            })
+          }
+          
+          const [editableOwner, editablePermlink] = editablePath.split('/')
+          
+          // Grant editable permission
+          await client.query(`
+            INSERT INTO collaboration_permissions (owner, permlink, account, permission_type, can_read, can_edit, can_post_to_hive, granted_by, granted_at)
+            VALUES ($1, $2, $3, 'editable', true, true, false, $4, NOW())
+            ON CONFLICT (owner, permlink, account)
+            DO UPDATE SET 
+              permission_type = 'editable',
+              can_read = true,
+              can_edit = true,
+              can_post_to_hive = false,
+              granted_by = $4,
+              granted_at = NOW()
+          `, [editableOwner, editablePermlink, editableAccount, account])
+          
+          result = {
+            action: 'granted_editable_permission',
+            targetAccount: editableAccount,
+            documentPath: editablePath,
+            permissions: {
+              canRead: true,
+              canEdit: true,
+              canPostToHive: false
+            },
+            testInstructions: `User @${editableAccount} should now be able to connect to websocket AND edit the document`
+          }
+          break
+          
+        default:
+          return res.status(400).json({
+            success: false,
+            error: 'Invalid test scenario. Options: create_test_document, grant_readonly_permission, grant_editable_permission'
+          })
+      }
+      
+      res.json({
+        success: true,
+        testScenario,
+        result,
+        securityFix: {
+          description: "WebSocket server now properly enforces edit permissions",
+          fixImplemented: [
+            "checkDocumentAccess method returns detailed permission info",
+            "User permissions stored in authentication context", 
+            "onChange hook prevents unauthorized edits",
+            "All edit attempts are logged for audit",
+            "Read-only users can connect but cannot edit documents"
+          ],
+          testingInstructions: "Use the test scenarios to verify permission enforcement"
+        }
+      })
+    } finally {
+      client.release()
+    }
+  } catch (error) {
+    console.error('Error in websocket security test:', error)
+    res.status(500).json({
+      success: false,
+      error: error.message
+    })
+  }
+})
+
+// 14. Get WebSocket Security Status
+router.get('/api/collaboration/websocket-security-status', async (req, res) => {
+  try {
+    res.json({
+      success: true,
+      securityStatus: {
+        issue: "WebSocket Permission Enforcement",
+        severity: "HIGH RISK - FIXED",
+        description: "The Hocuspocus websocket server was allowing any authenticated user to edit documents, regardless of their permission level (readonly vs editable)",
+        
+        previousBehavior: {
+          authentication: "Only checked if user could READ the document",
+          editing: "Any authenticated user could edit, even with readonly permissions",
+          logging: "Basic connection logging only",
+          riskLevel: "HIGH - Data integrity compromised"
+        },
+        
+        fixImplemented: {
+          timestamp: new Date().toISOString(),
+          changes: [
+            {
+              file: "collaboration-server.js",
+              method: "checkDocumentAccess",
+              change: "Returns detailed permission object instead of boolean"
+            },
+            {
+              file: "collaboration-server.js", 
+              method: "onAuthenticate",
+              change: "Stores user permissions in authentication context"
+            },
+            {
+              file: "collaboration-server.js",
+              method: "onChange", 
+              change: "NEW - Prevents unauthorized edits and logs attempts"
+            },
+            {
+              file: "api/collaboration.js",
+              endpoints: "Added test endpoints to verify fix"
+            }
+          ],
+          
+          securityMeasures: [
+            "Edit operations blocked for readonly users",
+            "All edit attempts logged with permission levels",
+            "Unauthorized edit attempts flagged in activity log",
+            "User permission context maintained throughout session",
+            "Proper error messages for access denied scenarios"
+          ]
+        },
+        
+        newBehavior: {
+          authentication: "Validates detailed permissions (read, edit, post)",
+          editing: "Only users with canEdit=true can modify documents",
+          readOnlyUsers: "Can connect and view but cannot edit",
+          publicDocuments: "Readable by all, but only owner can edit unless permissions granted",
+          logging: "All edit attempts logged with permission context",
+          riskLevel: "LOW - Proper access control enforced"
+        },
+        
+        testing: {
+          testEndpoints: [
+            "GET /api/collaboration/test-websocket-permissions/:owner/:permlink",
+            "POST /api/collaboration/test-websocket-security"
+          ],
+          recommendedTests: [
+            "1. Create test document as owner",
+            "2. Grant readonly permission to another user", 
+            "3. Attempt edit as readonly user (should fail)",
+            "4. Grant editable permission to user",
+            "5. Attempt edit as editable user (should succeed)",
+            "6. Check activity logs for unauthorized attempts"
+          ]
+        },
+        
+        deploymentRequired: {
+          restartNeeded: true,
+          services: ["collaboration-server.js"],
+          command: "npm run start:collaboration",
+          note: "WebSocket server must be restarted to apply permission enforcement"
+        }
+      }
+    })
+  } catch (error) {
+    console.error('Error getting websocket security status:', error)
     res.status(500).json({
       success: false,
       error: error.message

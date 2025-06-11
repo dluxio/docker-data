@@ -71,22 +71,25 @@ class HiveAuthExtension {
       }
       
       // Check document permissions
-      const hasAccess = await this.checkDocumentAccess(account, owner, permlink)
-      if (!hasAccess) {
+      const permissions = await this.checkDocumentAccess(account, owner, permlink)
+      if (!permissions.hasAccess) {
         throw new Error('Access denied to document')
       }
       
       // Log connection activity
       await this.logActivity(owner, permlink, account, 'connect', {
         socketId: data.socketId,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        permissions: permissions.permissionType
       })
       
       return {
         user: {
           id: account,
           name: account,
-          color: this.generateUserColor(account)
+          color: this.generateUserColor(account),
+          // Store permissions in user context for later use
+          permissions: permissions
         }
       }
     } catch (error) {
@@ -98,28 +101,57 @@ class HiveAuthExtension {
   async checkDocumentAccess(account, owner, permlink) {
     const client = await pool.connect()
     try {
-      // Owner always has access
+      // Owner always has full access
       if (account === owner) {
-        return true
+        return {
+          hasAccess: true,
+          canRead: true,
+          canEdit: true,
+          canPostToHive: true,
+          permissionType: 'owner'
+        }
       }
       
-      // Check if document is public
+      // Check if document is public (public users can only read)
       const docResult = await client.query(
         'SELECT is_public FROM collaboration_documents WHERE owner = $1 AND permlink = $2',
         [owner, permlink]
       )
       
       if (docResult.rows.length > 0 && docResult.rows[0].is_public) {
-        return true
+        return {
+          hasAccess: true,
+          canRead: true,
+          canEdit: false,
+          canPostToHive: false,
+          permissionType: 'public'
+        }
       }
       
       // Check explicit permissions
       const permResult = await client.query(
-        'SELECT can_read FROM collaboration_permissions WHERE owner = $1 AND permlink = $2 AND account = $3',
+        'SELECT permission_type, can_read, can_edit, can_post_to_hive FROM collaboration_permissions WHERE owner = $1 AND permlink = $2 AND account = $3',
         [owner, permlink, account]
       )
       
-      return permResult.rows.length > 0 && permResult.rows[0].can_read
+      if (permResult.rows.length > 0) {
+        const perm = permResult.rows[0]
+        return {
+          hasAccess: perm.can_read,
+          canRead: perm.can_read,
+          canEdit: perm.can_edit,
+          canPostToHive: perm.can_post_to_hive,
+          permissionType: perm.permission_type
+        }
+      }
+      
+      return {
+        hasAccess: false,
+        canRead: false,
+        canEdit: false,
+        canPostToHive: false,
+        permissionType: 'none'
+      }
     } finally {
       client.release()
     }
@@ -185,6 +217,37 @@ const server = new Server({
   // Authentication
   async onAuthenticate(data) {
     return await hiveAuth.onAuthenticate(data)
+  },
+  
+  // Prevent unauthorized changes
+  async onChange(data) {
+    const { documentName, context, update } = data
+    
+    // Check if user has edit permissions
+    if (context.user && context.user.permissions) {
+      const permissions = context.user.permissions
+      
+      if (!permissions.canEdit) {
+        // Log unauthorized edit attempt
+        const [owner, permlink] = documentName.split('/')
+        await hiveAuth.logActivity(owner, permlink, context.user.name, 'unauthorized_edit_attempt', {
+          timestamp: new Date().toISOString(),
+          permissionType: permissions.permissionType,
+          updateSize: update.length
+        })
+        
+        // Reject the change
+        throw new Error(`Access denied: User ${context.user.name} has ${permissions.permissionType} access but attempted to edit document`)
+      }
+      
+      // Log successful edit for audit
+      const [owner, permlink] = documentName.split('/')
+      await hiveAuth.logActivity(owner, permlink, context.user.name, 'document_edit', {
+        timestamp: new Date().toISOString(),
+        permissionType: permissions.permissionType,
+        updateSize: update.length
+      })
+    }
   },
   
   // Connection management
