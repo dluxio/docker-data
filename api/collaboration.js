@@ -544,6 +544,16 @@ router.post('/api/collaboration/permissions/:owner/:permlink', async (req, res) 
     
     const client = await pool.connect()
     try {
+      // Get document name for notification
+      const docResult = await client.query(
+        'SELECT document_name FROM collaboration_documents WHERE owner = $1 AND permlink = $2',
+        [owner, permlink]
+      )
+      
+      const documentName = docResult.rows.length > 0 && docResult.rows[0].document_name 
+        ? docResult.rows[0].document_name 
+        : permlink // fallback to permlink if no name
+      
       // Set capabilities based on permission type
       const capabilities = {
         readonly: { can_read: true, can_edit: false, can_post_to_hive: false },
@@ -571,7 +581,7 @@ router.post('/api/collaboration/permissions/:owner/:permlink', async (req, res) 
       await client.query(`
         INSERT INTO collaboration_activity (owner, permlink, account, activity_type, activity_data)
         VALUES ($1, $2, $3, 'permission_granted', $4)
-      `, [owner, permlink, account, JSON.stringify({ targetAccount, permissionType })])
+      `, [owner, permlink, account, JSON.stringify({ targetAccount, permissionType, documentName })])
       
       // Create notification for the user being granted access
       await client.query(`
@@ -582,10 +592,11 @@ router.post('/api/collaboration/permissions/:owner/:permlink', async (req, res) 
         targetAccount,
         'collaboration_invite',
         'Document Collaboration Invite',
-        `@${account} invited you to collaborate on their document "${permlink}"`,
+        `@${account} invited you to collaborate on "${documentName}"`,
         JSON.stringify({
           documentOwner: owner,
           documentPermlink: permlink,
+          documentName: documentName,
           documentPath: `${owner}/${permlink}`,
           permissionType,
           grantedBy: account,
@@ -634,6 +645,16 @@ router.delete('/api/collaboration/permissions/:owner/:permlink/:targetAccount', 
     
     const client = await pool.connect()
     try {
+      // Get document name for notification before deleting permission
+      const docResult = await client.query(
+        'SELECT document_name FROM collaboration_documents WHERE owner = $1 AND permlink = $2',
+        [owner, permlink]
+      )
+      
+      const documentName = docResult.rows.length > 0 && docResult.rows[0].document_name 
+        ? docResult.rows[0].document_name 
+        : permlink // fallback to permlink if no name
+      
       const result = await client.query(
         'DELETE FROM collaboration_permissions WHERE owner = $1 AND permlink = $2 AND account = $3',
         [owner, permlink, targetAccount]
@@ -650,7 +671,7 @@ router.delete('/api/collaboration/permissions/:owner/:permlink/:targetAccount', 
       await client.query(`
         INSERT INTO collaboration_activity (owner, permlink, account, activity_type, activity_data)
         VALUES ($1, $2, $3, 'permission_revoked', $4)
-      `, [owner, permlink, account, JSON.stringify({ targetAccount })])
+      `, [owner, permlink, account, JSON.stringify({ targetAccount, documentName })])
       
       // Dismiss/mark as read any collaboration invite notifications for this document
       await client.query(`
@@ -672,10 +693,11 @@ router.delete('/api/collaboration/permissions/:owner/:permlink/:targetAccount', 
         targetAccount,
         'collaboration_removed',
         'Document Access Removed',
-        `@${account} removed your access to their document "${permlink}"`,
+        `@${account} removed your access to "${documentName}"`,
         JSON.stringify({
           documentOwner: owner,
           documentPermlink: permlink,
+          documentName: documentName,
           documentPath: `${owner}/${permlink}`,
           removedBy: account,
           removedAt: new Date().toISOString()
