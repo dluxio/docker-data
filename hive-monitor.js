@@ -9,13 +9,14 @@ class HiveMonitor {
         this.isRunning = false;
         this.operationHandlers = new Map();
         this.hasListeners = false;
-        this.retryDelay = 1000; // Initial retry delay in ms
-        this.maxRetryDelay = 30000; // Maximum retry delay in ms
+        this.retryDelay = 3000; // Increased initial retry delay in ms
+        this.maxRetryDelay = 30000; // Increased maximum retry delay in ms
         this.apiHealth = {
             status: 'healthy',
             lastError: null,
             errorCount: 0,
-            lastSuccess: Date.now()
+            lastSuccess: Date.now(),
+            consecutiveErrors: 0
         };
     }
 
@@ -41,7 +42,7 @@ class HiveMonitor {
     async start() {
         if (this.isRunning || !this.hasListeners) return;
         this.isRunning = true;
-        this.retryDelay = 1000; // Reset retry delay on start
+        this.retryDelay = 3000; // Reset retry delay on start
         
         try {
             await this.initialize();
@@ -52,20 +53,63 @@ class HiveMonitor {
         }
     }
 
+    async safeApiCall(method, ...args) {
+        try {
+            const result = await method.apply(this.client.api, args);
+            
+            // Validate response
+            if (result === null || result === undefined) {
+                throw new Error('API returned null or undefined response');
+            }
+
+            // Reset error counters on success
+            this.apiHealth.consecutiveErrors = 0;
+            this.apiHealth.status = 'healthy';
+            this.apiHealth.lastSuccess = Date.now();
+            
+            return result;
+        } catch (error) {
+            this.apiHealth.consecutiveErrors++;
+            this.apiHealth.lastError = error;
+            
+            // Handle specific error types
+            if (error.message.includes('429') || error.message.includes('Too Many Requests')) {
+                this.apiHealth.status = 'rate_limited';
+                // Increase delay more aggressively for consecutive rate limits
+                this.retryDelay = Math.min(this.retryDelay * 1.5, this.maxRetryDelay);
+                console.warn(`Rate limit hit, waiting ${this.retryDelay}ms (consecutive errors: ${this.apiHealth.consecutiveErrors})`);
+            } else if (error.message.includes('JSON')) {
+                this.apiHealth.status = 'parse_error';
+                console.error('JSON parsing error:', error);
+            } else {
+                this.apiHealth.status = 'error';
+                console.error('API error:', error);
+            }
+            
+            throw error;
+        }
+    }
+
     async processBlocks() {
         while (this.isRunning && this.hasListeners) {
             try {
-                const currentBlock = await this.client.api.getDynamicGlobalPropertiesAsync();
+                const currentBlock = await this.safeApiCall(this.client.api.getDynamicGlobalPropertiesAsync);
                 const headBlock = currentBlock.head_block_number;
 
                 if (this.lastProcessedBlock < headBlock) {
-                    // Process blocks in batches of 100
-                    const batchSize = 100;
+                    // Process blocks in smaller batches when having issues
+                    const batchSize = this.apiHealth.consecutiveErrors > 0 ? 20 : 100;
                     const endBlock = Math.min(this.lastProcessedBlock + batchSize, headBlock);
 
                     for (let blockNum = this.lastProcessedBlock + 1; blockNum <= endBlock; blockNum++) {
                         try {
-                            const block = await this.client.api.getBlockAsync(blockNum);
+                            const block = await this.safeApiCall(this.client.api.getBlockAsync, blockNum);
+                            
+                            if (!block || !block.transactions) {
+                                console.warn(`Invalid block data received for block ${blockNum}`);
+                                continue;
+                            }
+
                             await this.processBlock(block);
                             this.lastProcessedBlock = blockNum;
                             
@@ -73,41 +117,36 @@ class HiveMonitor {
                             await pool.query('UPDATE hive_state SET last_block = $1 WHERE id = 1', [blockNum]);
                             
                             // Reset retry delay on success
-                            this.retryDelay = 1000;
-                            this.apiHealth.status = 'healthy';
-                            this.apiHealth.lastSuccess = Date.now();
+                            this.retryDelay = 5000;
                             this.apiHealth.errorCount = 0;
                         } catch (error) {
                             if (error.message.includes('429') || error.message.includes('Too Many Requests')) {
-                                console.warn(`Rate limit hit at block ${blockNum}, waiting ${this.retryDelay}ms`);
-                                this.apiHealth.status = 'rate_limited';
-                                this.apiHealth.lastError = error;
-                                this.apiHealth.errorCount++;
-                                
-                                // Exponential backoff
-                                this.retryDelay = Math.min(this.retryDelay * 2, this.maxRetryDelay);
                                 await new Promise(resolve => setTimeout(resolve, this.retryDelay));
                                 break; // Break the loop to retry the current block
                             } else {
                                 console.error(`Error processing block ${blockNum}:`, error);
-                                this.apiHealth.status = 'error';
-                                this.apiHealth.lastError = error;
                                 this.apiHealth.errorCount++;
+                                
+                                // If we have too many consecutive errors, take a longer break
+                                if (this.apiHealth.consecutiveErrors > 5) {
+                                    console.warn('Too many consecutive errors, taking a longer break');
+                                    await new Promise(resolve => setTimeout(resolve, this.maxRetryDelay));
+                                    this.apiHealth.consecutiveErrors = 0;
+                                }
                             }
                         }
                     }
                 }
 
-                // Wait a bit before next batch
-                await new Promise(resolve => setTimeout(resolve, 1000));
+                // Adaptive delay based on API health
+                const delay = this.apiHealth.status === 'healthy' ? 1000 : this.retryDelay;
+                await new Promise(resolve => setTimeout(resolve, delay));
             } catch (error) {
                 console.error('Error processing blocks:', error);
-                this.apiHealth.status = 'error';
-                this.apiHealth.lastError = error;
                 this.apiHealth.errorCount++;
                 
                 // Wait longer on error before retrying
-                await new Promise(resolve => setTimeout(resolve, 5000));
+                await new Promise(resolve => setTimeout(resolve, this.retryDelay));
             }
         }
     }
@@ -189,7 +228,15 @@ hiveMonitor.registerOperationHandler('custom_json', async (opData, block) => {
     if (id === 'notify') {
         try {
             const account = required_posting_auths[0] || required_auths[0];
-            const [action, data] = JSON.parse(json);
+            let parsedJson;
+            try {
+                parsedJson = JSON.parse(json);
+            } catch (error) {
+                console.error('Error parsing notification JSON:', error, json);
+                return;
+            }
+            
+            const [action, data] = parsedJson;
             
             if (action === 'setLastRead' && data.date && data.dlux) {
                 const readDate = new Date(data.date);
