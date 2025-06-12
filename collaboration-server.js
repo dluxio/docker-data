@@ -219,8 +219,8 @@ const server = new Server({
     return await hiveAuth.onAuthenticate(data)
   },
   
-  // Prevent unauthorized changes
-  async onChange(data) {
+  // Prevent unauthorized changes BEFORE they are applied
+  async beforeHandleMessage(data) {
     const { documentName, context, update } = data
     
     // Check if user has edit permissions
@@ -236,15 +236,23 @@ const server = new Server({
           updateSize: update.length
         })
         
-        // Reject the change
+        // Throw error to close connection for unauthorized users
+        console.log(`[beforeHandleMessage] Blocking unauthorized edit: User ${context.user.name} has ${permissions.permissionType} access but attempted to edit document ${documentName}`)
         throw new Error(`Access denied: User ${context.user.name} has ${permissions.permissionType} access but attempted to edit document`)
       }
-      
-      // Log successful edit for audit
+    }
+  },
+  
+  // Log successful changes after they are applied
+  async onChange(data) {
+    const { documentName, context, update } = data
+    
+    // Log successful edit for audit
+    if (context.user && context.user.permissions) {
       const [owner, permlink] = documentName.split('/')
       await hiveAuth.logActivity(owner, permlink, context.user.name, 'document_edit', {
         timestamp: new Date().toISOString(),
-        permissionType: permissions.permissionType,
+        permissionType: context.user.permissions.permissionType,
         updateSize: update.length
       })
     }
