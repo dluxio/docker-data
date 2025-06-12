@@ -3,7 +3,7 @@ const { pool } = require('./index');
 
 class HiveMonitor {
     constructor() {
-        this.client = new Client(['https://api.hive.blog', 'https://api.hivekings.com', 'https://anyx.io']);
+        this.client = new Client(['https://hive-api.dlux.io']);
         this.lastProcessedBlock = 0;
         this.isRunning = false;
         this.operationHandlers = new Map();
