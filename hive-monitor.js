@@ -43,7 +43,7 @@ class HiveMonitor {
     async processBlocks() {
         while (this.isRunning && this.hasListeners) {
             try {
-                const currentBlock = await this.client.database.getDynamicGlobalProperties();
+                const currentBlock = await this.client.api.getDynamicGlobalPropertiesAsync();
                 const headBlock = currentBlock.head_block_number;
 
                 if (this.lastProcessedBlock < headBlock) {
@@ -52,7 +52,7 @@ class HiveMonitor {
                     const endBlock = Math.min(this.lastProcessedBlock + batchSize, headBlock);
 
                     for (let blockNum = this.lastProcessedBlock + 1; blockNum <= endBlock; blockNum++) {
-                        const block = await this.client.database.getBlock(blockNum);
+                        const block = await this.client.api.getBlockAsync(blockNum);
                         await this.processBlock(block);
                         this.lastProcessedBlock = blockNum;
                         
