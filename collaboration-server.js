@@ -200,6 +200,7 @@ const server = new Server({
       'http://www.dlux.io',
       'http://localhost:3001',
       'http://localhost:5508',
+      'http://localhost:5509',
       // Add any other origins you need
     ],
     credentials: false, // Set to false since client works better with credentials: 'omit'
