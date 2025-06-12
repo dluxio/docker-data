@@ -1,9 +1,10 @@
-const { Client } = require('@hiveio/hive-js');
+const hive = require('@hiveio/hive-js');
 const { pool } = require('./index');
 
 class HiveMonitor {
     constructor() {
-        this.client = new Client(['https://hive-api.dlux.io']);
+        this.client = hive;
+        this.client.api.setOptions({ url: 'https://hive-api.dlux.io' });
         this.lastProcessedBlock = 0;
         this.isRunning = false;
         this.operationHandlers = new Map();
