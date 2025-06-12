@@ -6871,7 +6871,7 @@ router.get('/api/onboarding/notifications/:username/merged', async (req, res) =>
                         source: 'hive_bridge'
                     }));
                 } else {
-                    console.error('Error fetching HIVE notifications:', hiveResult);
+                    console.error('Error fetching HIVE notifications:', username, hiveResult);
                 }
             } catch (hiveError) {
                 console.error('Error fetching HIVE notifications:', hiveError);
