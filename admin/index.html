@@ -193,6 +193,13 @@
                                 </a>
                             </li>
                             <li class="nav-item">
+                                <a class="nav-link" :class="{ active: currentView === 'blockchain-monitor' }" 
+                                   @click="setView('blockchain-monitor')">
+                                    <i class="bi bi-graph-up-arrow"></i>
+                                    Blockchain Monitor
+                                </a>
+                            </li>
+                            <li class="nav-item">
                                 <a class="nav-link" :class="{ active: currentView === 'channels' }" 
                                    @click="setView('channels')">
                                     <i class="bi bi-credit-card"></i>
@@ -507,6 +514,11 @@
                                             @loading="setLoading">
                     </blockchain-status-view>
 
+                    <blockchain-monitor-view v-if="currentView === 'blockchain-monitor'" 
+                                            :api-client="apiClient" 
+                                            @loading="setLoading">
+                    </blockchain-monitor-view>
+
                     <payment-channels-view v-if="currentView === 'channels'" 
                                          :api-client="apiClient"
                                          :admin-account-info="adminAccountInfo"
@@ -545,6 +557,7 @@
     <script src="js/components/act-status.js"></script>
     <script src="js/components/rc-costs.js"></script>
     <script src="js/components/blockchain-status.js"></script>
+    <script src="js/components/blockchain-monitor.js"></script>
     <script src="js/components/payment-channels.js"></script>
     <script src="js/components/crypto-addresses.js"></script>
     <script src="js/components/admin-users.js"></script>

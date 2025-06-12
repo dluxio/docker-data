@@ -9,6 +9,14 @@ class HiveMonitor {
         this.isRunning = false;
         this.operationHandlers = new Map();
         this.hasListeners = false;
+        this.retryDelay = 1000; // Initial retry delay in ms
+        this.maxRetryDelay = 30000; // Maximum retry delay in ms
+        this.apiHealth = {
+            status: 'healthy',
+            lastError: null,
+            errorCount: 0,
+            lastSuccess: Date.now()
+        };
     }
 
     async initialize() {
@@ -30,6 +38,7 @@ class HiveMonitor {
     async start() {
         if (this.isRunning || !this.hasListeners) return;
         this.isRunning = true;
+        this.retryDelay = 1000; // Reset retry delay on start
         
         try {
             await this.initialize();
@@ -52,12 +61,37 @@ class HiveMonitor {
                     const endBlock = Math.min(this.lastProcessedBlock + batchSize, headBlock);
 
                     for (let blockNum = this.lastProcessedBlock + 1; blockNum <= endBlock; blockNum++) {
-                        const block = await this.client.api.getBlockAsync(blockNum);
-                        await this.processBlock(block);
-                        this.lastProcessedBlock = blockNum;
-                        
-                        // Update last processed block in database
-                        await pool.query('UPDATE hive_state SET last_block = $1 WHERE id = 1', [blockNum]);
+                        try {
+                            const block = await this.client.api.getBlockAsync(blockNum);
+                            await this.processBlock(block);
+                            this.lastProcessedBlock = blockNum;
+                            
+                            // Update last processed block in database
+                            await pool.query('UPDATE hive_state SET last_block = $1 WHERE id = 1', [blockNum]);
+                            
+                            // Reset retry delay on success
+                            this.retryDelay = 1000;
+                            this.apiHealth.status = 'healthy';
+                            this.apiHealth.lastSuccess = Date.now();
+                            this.apiHealth.errorCount = 0;
+                        } catch (error) {
+                            if (error.message.includes('429') || error.message.includes('Too Many Requests')) {
+                                console.warn(`Rate limit hit at block ${blockNum}, waiting ${this.retryDelay}ms`);
+                                this.apiHealth.status = 'rate_limited';
+                                this.apiHealth.lastError = error;
+                                this.apiHealth.errorCount++;
+                                
+                                // Exponential backoff
+                                this.retryDelay = Math.min(this.retryDelay * 2, this.maxRetryDelay);
+                                await new Promise(resolve => setTimeout(resolve, this.retryDelay));
+                                break; // Break the loop to retry the current block
+                            } else {
+                                console.error(`Error processing block ${blockNum}:`, error);
+                                this.apiHealth.status = 'error';
+                                this.apiHealth.lastError = error;
+                                this.apiHealth.errorCount++;
+                            }
+                        }
                     }
                 }
 
@@ -65,6 +99,10 @@ class HiveMonitor {
                 await new Promise(resolve => setTimeout(resolve, 1000));
             } catch (error) {
                 console.error('Error processing blocks:', error);
+                this.apiHealth.status = 'error';
+                this.apiHealth.lastError = error;
+                this.apiHealth.errorCount++;
+                
                 // Wait longer on error before retrying
                 await new Promise(resolve => setTimeout(resolve, 5000));
             }
@@ -125,6 +163,16 @@ class HiveMonitor {
 
     async stop() {
         this.isRunning = false;
+    }
+
+    getStatus() {
+        return {
+            isRunning: this.isRunning,
+            lastProcessedBlock: this.lastProcessedBlock,
+            activeListeners: this.operationHandlers.size,
+            apiHealth: this.apiHealth,
+            retryDelay: this.retryDelay
+        };
     }
 }
 
