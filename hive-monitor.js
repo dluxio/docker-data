@@ -24,7 +24,7 @@ class HiveMonitor {
             // Get the last processed block from database
             const result = await pool.query('SELECT last_block FROM hive_state WHERE id = 1');
             if (result.rows.length > 0) {
-                this.lastProcessedBlock = result.rows[0].last_block;
+                this.lastProcessedBlock = result.rows[0].last_block > 96726250 ? result.rows[0].last_block : 96726250;
             } else {
                 // Initialize state with specific block number
                 const initialBlock = 96726250;
