@@ -112,23 +112,7 @@ class HiveAuthExtension {
         }
       }
       
-      // Check if document is public (public users can only read)
-      const docResult = await client.query(
-        'SELECT is_public FROM collaboration_documents WHERE owner = $1 AND permlink = $2',
-        [owner, permlink]
-      )
-      
-      if (docResult.rows.length > 0 && docResult.rows[0].is_public) {
-        return {
-          hasAccess: true,
-          canRead: true,
-          canEdit: false,
-          canPostToHive: false,
-          permissionType: 'public'
-        }
-      }
-      
-      // Check explicit permissions
+      // Check explicit permissions first (higher priority than public access)
       const permResult = await client.query(
         'SELECT permission_type, can_read, can_edit, can_post_to_hive FROM collaboration_permissions WHERE owner = $1 AND permlink = $2 AND account = $3',
         [owner, permlink, account]
@@ -142,6 +126,22 @@ class HiveAuthExtension {
           canEdit: perm.can_edit,
           canPostToHive: perm.can_post_to_hive,
           permissionType: perm.permission_type
+        }
+      }
+      
+      // Check if document is public (lower priority than explicit permissions)
+      const docResult = await client.query(
+        'SELECT is_public FROM collaboration_documents WHERE owner = $1 AND permlink = $2',
+        [owner, permlink]
+      )
+      
+      if (docResult.rows.length > 0 && docResult.rows[0].is_public) {
+        return {
+          hasAccess: true,
+          canRead: true,
+          canEdit: false,
+          canPostToHive: false,
+          permissionType: 'public'
         }
       }
       

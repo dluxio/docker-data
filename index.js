@@ -29,6 +29,7 @@ const { testWebSocketIntegration } = require('./api/test-device-websocket');
 const { testMessageDirection } = require('./api/test-message-direction');
 const { getProtocolSummary } = require('./api/device-protocol-summary');
 const { createAuthMiddleware } = require('./api/onboarding');
+const hiveMonitor = require('./hive-monitor');
 
 // Trust proxy setting for real client IP detection
 // This is required when running behind Docker/nginx/load balancer
@@ -42,6 +43,23 @@ async function initializeDatabase() {
     
     // Set up device connection tables
     await setupDeviceDatabase();
+
+    // Set up Hive state table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS hive_state (
+        id INTEGER PRIMARY KEY,
+        last_block BIGINT NOT NULL DEFAULT 0,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Initialize hive_state if not exists
+    await pool.query(`
+      INSERT INTO hive_state (id, last_block)
+      VALUES (1, 0)
+      ON CONFLICT (id) DO NOTHING
+    `);
 
   } catch (error) {
     console.error('Failed to initialize database:', error);
@@ -106,15 +124,20 @@ http.listen(config.port, async function () {
   // Initialize the full onboarding service including blockchain monitoring
   await initializeOnboardingService();
   
+  // Start Hive blockchain monitoring
+  await hiveMonitor.start();
+  
   // Graceful shutdown
-  process.on('SIGTERM', () => {
+  process.on('SIGTERM', async () => {
+    await hiveMonitor.stop();
     wsMonitor.shutdown();
     http.close(() => {
       process.exit(0);
     });
   });
   
-  process.on('SIGINT', () => {
+  process.on('SIGINT', async () => {
+    await hiveMonitor.stop();
     wsMonitor.shutdown();
     http.close(() => {
       process.exit(0);

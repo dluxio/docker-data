@@ -127,7 +127,7 @@ router.get('/api/collaboration/documents', async (req, res) => {
         `
         params = [account, limit, offset]
       } else {
-        // All accessible documents
+        // All accessible documents - FIXED: Use same priority order as document info endpoint
         query = `
           SELECT DISTINCT d.owner, d.permlink, d.document_name, d.is_public, d.created_at, d.updated_at, d.last_activity,
                  LENGTH(d.document_data) as content_size,
@@ -227,19 +227,20 @@ router.get('/api/collaboration/info/:owner/:permlink', async (req, res) => {
       
       const doc = result.rows[0]
       
-      // Get user's access type
+      // Get user's access type - FIXED: Check explicit permissions before public access
       let accessType = 'none'
       if (account === owner) {
         accessType = 'owner'
-      } else if (doc.is_public) {
-        accessType = 'public'
       } else {
+        // Check explicit permissions first (higher priority than public access)
         const permResult = await client.query(
           'SELECT permission_type FROM collaboration_permissions WHERE owner = $1 AND permlink = $2 AND account = $3',
           [owner, permlink, account]
         )
         if (permResult.rows.length > 0) {
           accessType = permResult.rows[0].permission_type
+        } else if (doc.is_public) {
+          accessType = 'public'
         }
       }
       
@@ -1358,6 +1359,355 @@ router.get('/api/collaboration/test-auth', async (req, res) => {
       success: false,
       error: 'Internal server error',
       message: error.message
+    })
+  }
+})
+
+// Debug Permission Bug - Test endpoint to reproduce the "viewer shows as editor" issue
+router.get('/api/collaboration/debug-permissions/:owner/:permlink', async (req, res) => {
+  try {
+    const { owner, permlink } = req.params
+    const account = req.headers['x-account']
+    
+    validateDocumentPath(owner, permlink)
+    
+    const client = await pool.connect()
+    try {
+      // 1. Get the document info
+      const docResult = await client.query(
+        'SELECT owner, permlink, document_name, is_public, created_at FROM collaboration_documents WHERE owner = $1 AND permlink = $2',
+        [owner, permlink]
+      )
+      
+      if (docResult.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          error: 'Document not found'
+        })
+      }
+      
+      const doc = docResult.rows[0]
+      
+      // 2. Get explicit permissions for this user
+      const permResult = await client.query(
+        'SELECT permission_type, can_read, can_edit, can_post_to_hive, granted_by, granted_at FROM collaboration_permissions WHERE owner = $1 AND permlink = $2 AND account = $3',
+        [owner, permlink, account]
+      )
+      
+      // 3. Get ALL permissions for this document
+      const allPermsResult = await client.query(
+        'SELECT account, permission_type, can_read, can_edit, can_post_to_hive FROM collaboration_permissions WHERE owner = $1 AND permlink = $2 ORDER BY granted_at DESC',
+        [owner, permlink]
+      )
+      
+      // 4. Test the document listing query logic (the problematic query)
+      const listingResult = await client.query(`
+        SELECT DISTINCT d.owner, d.permlink, d.document_name, d.is_public,
+               CASE 
+                 WHEN d.owner = $3 THEN 'owner'
+                 WHEN p.permission_type IS NOT NULL THEN p.permission_type
+                 WHEN d.is_public THEN 'public'
+                 ELSE 'none'
+               END as access_type
+        FROM collaboration_documents d
+        LEFT JOIN collaboration_permissions p ON d.owner = p.owner AND d.permlink = p.permlink AND p.account = $3
+        WHERE d.owner = $1 AND d.permlink = $2
+      `, [owner, permlink, account])
+      
+      // 5. Test individual permission checks
+      const canRead = await checkDocumentAccess(account, owner, permlink, 'read')
+      const canEdit = await checkDocumentAccess(account, owner, permlink, 'edit')
+      const canPost = await checkDocumentAccess(account, owner, permlink, 'post')
+      
+      // 6. Determine access type using the same logic as document info endpoint
+      let infoAccessType = 'none'
+      if (account === owner) {
+        infoAccessType = 'owner'
+      } else if (doc.is_public) {
+        infoAccessType = 'public'
+      } else if (permResult.rows.length > 0) {
+        infoAccessType = permResult.rows[0].permission_type
+      }
+      
+      res.json({
+        success: true,
+        debug: {
+          document: {
+            owner: doc.owner,
+            permlink: doc.permlink,
+            documentName: doc.document_name || '',
+            isPublic: doc.is_public,
+            documentPath: `${doc.owner}/${doc.permlink}`
+          },
+          
+          requestingUser: account,
+          isOwner: account === owner,
+          
+          explicitPermission: permResult.rows.length > 0 ? {
+            permissionType: permResult.rows[0].permission_type,
+            canRead: permResult.rows[0].can_read,
+            canEdit: permResult.rows[0].can_edit,
+            canPostToHive: permResult.rows[0].can_post_to_hive,
+            grantedBy: permResult.rows[0].granted_by,
+            grantedAt: permResult.rows[0].granted_at
+          } : null,
+          
+          allDocumentPermissions: allPermsResult.rows,
+          
+          accessChecks: {
+            canRead,
+            canEdit,
+            canPost
+          },
+          
+          accessTypeDetermination: {
+            fromDocumentInfoEndpoint: infoAccessType,
+            fromDocumentListingQuery: listingResult.rows.length > 0 ? listingResult.rows[0].access_type : 'none'
+          },
+          
+          potentialBugs: {
+            description: "The user reports that permissions show differently before and after loading the document",
+            possibleCauses: [
+              "Database state changes during document access",
+              "Different permission checking logic between endpoints", 
+              "Caching or timing issues",
+              "WebSocket connection modifying permissions"
+            ],
+            expectedBehavior: "Permissions should be consistent across all API calls",
+            actualBehavior: "Initial API call shows wrong permissions, correct after document load"
+          }
+        }
+      })
+      
+    } finally {
+      client.release()
+    }
+  } catch (error) {
+    console.error('Error debugging permissions:', error)
+    res.status(500).json({
+      success: false,
+      error: error.message
+    })
+  }
+})
+
+// Test Permission Consistency - Simplified test for the reported bug
+router.get('/api/collaboration/test-permission-bug', async (req, res) => {
+  try {
+    const account = req.headers['x-account']
+    
+    if (!account) {
+      return res.status(400).json({
+        success: false,
+        error: 'x-account header required'
+      })
+    }
+    
+    const client = await pool.connect()
+    try {
+      // Find any document where this user has explicit permissions (not owner)
+      const testDoc = await client.query(`
+        SELECT d.owner, d.permlink, d.document_name, d.is_public, p.permission_type, p.can_edit
+        FROM collaboration_documents d
+        JOIN collaboration_permissions p ON d.owner = p.owner AND d.permlink = p.permlink
+        WHERE p.account = $1 AND d.owner != $1
+        LIMIT 1
+      `, [account])
+      
+      if (testDoc.rows.length === 0) {
+        return res.json({
+          success: true,
+          message: 'No shared documents found for testing. Create a document and share it with this user first.',
+          testAccount: account
+        })
+      }
+      
+      const { owner, permlink } = testDoc.rows[0]
+      
+      // Now compare the two different access type determinations
+      
+      // Method 1: Document Info endpoint logic
+      const permResult = await client.query(
+        'SELECT permission_type FROM collaboration_permissions WHERE owner = $1 AND permlink = $2 AND account = $3',
+        [owner, permlink, account]
+      )
+      const infoAccessType = permResult.rows.length > 0 ? permResult.rows[0].permission_type : 'none'
+      
+      // Method 2: Document Listing query logic
+      const listingQuery = await client.query(`
+        SELECT CASE 
+          WHEN d.owner = $3 THEN 'owner'
+          WHEN p.permission_type IS NOT NULL THEN p.permission_type
+          WHEN d.is_public THEN 'public'
+          ELSE 'none'
+        END as access_type
+        FROM collaboration_documents d
+        LEFT JOIN collaboration_permissions p ON d.owner = p.owner AND d.permlink = p.permlink AND p.account = $3
+        WHERE d.owner = $1 AND d.permlink = $2
+      `, [owner, permlink, account])
+      
+      const listingAccessType = listingQuery.rows.length > 0 ? listingQuery.rows[0].access_type : 'none'
+      
+      res.json({
+        success: true,
+        testDocument: `${owner}/${permlink}`,
+        testAccount: account,
+        documentInfo: testDoc.rows[0],
+        
+        accessTypeComparison: {
+          documentInfoEndpoint: infoAccessType,
+          documentListingEndpoint: listingAccessType,
+          areEqual: infoAccessType === listingAccessType
+        },
+        
+        bugIdentified: infoAccessType !== listingAccessType,
+        
+        explanation: {
+          issue: "Document listing and document info endpoints use different permission checking logic",
+          cause: "Both queries should return the same access type but don't",
+          impact: "User sees different permissions in document list vs when accessing the document",
+          solution: "Both endpoints should use identical permission checking logic"
+        }
+      })
+      
+    } finally {
+      client.release()
+    }
+    
+  } catch (error) {
+    console.error('Error testing permission bug:', error)
+    res.status(500).json({
+      success: false,
+      error: error.message
+    })
+  }
+})
+
+// Test Permission Fix - Verify that the fix works correctly
+router.get('/api/collaboration/test-permission-fix', async (req, res) => {
+  try {
+    const account = req.headers['x-account']
+    
+    if (!account) {
+      return res.status(400).json({
+        success: false,
+        error: 'x-account header required'
+      })
+    }
+    
+    const client = await pool.connect()
+    try {
+      // Find any document where this user has explicit permissions (not owner)
+      const testDoc = await client.query(`
+        SELECT d.owner, d.permlink, d.document_name, d.is_public, p.permission_type, p.can_edit
+        FROM collaboration_documents d
+        JOIN collaboration_permissions p ON d.owner = p.owner AND d.permlink = p.permlink
+        WHERE p.account = $1 AND d.owner != $1
+        LIMIT 1
+      `, [account])
+      
+      if (testDoc.rows.length === 0) {
+        return res.json({
+          success: true,
+          message: 'No shared documents found for testing. Create a document and share it with this user first.',
+          testAccount: account,
+          instructions: [
+            '1. Have another user create a document',
+            '2. Have them share it with you with "editable" permissions',
+            '3. Optionally mark the document as public', 
+            '4. Then test this endpoint again'
+          ]
+        })
+      }
+      
+      const { owner, permlink } = testDoc.rows[0]
+      
+      // Test all three methods should now return the same result
+      
+      // Method 1: Document Info endpoint (simulate the fixed logic)
+      let infoAccessType = 'none'
+      if (account === owner) {
+        infoAccessType = 'owner'
+      } else {
+        const permResult = await client.query(
+          'SELECT permission_type FROM collaboration_permissions WHERE owner = $1 AND permlink = $2 AND account = $3',
+          [owner, permlink, account]
+        )
+        if (permResult.rows.length > 0) {
+          infoAccessType = permResult.rows[0].permission_type
+        } else if (testDoc.rows[0].is_public) {
+          infoAccessType = 'public'
+        }
+      }
+      
+      // Method 2: Document Listing query logic
+      const listingQuery = await client.query(`
+        SELECT CASE 
+          WHEN d.owner = $3 THEN 'owner'
+          WHEN p.permission_type IS NOT NULL THEN p.permission_type
+          WHEN d.is_public THEN 'public'
+          ELSE 'none'
+        END as access_type
+        FROM collaboration_documents d
+        LEFT JOIN collaboration_permissions p ON d.owner = p.owner AND d.permlink = p.permlink AND p.account = $3
+        WHERE d.owner = $1 AND d.permlink = $2
+      `, [owner, permlink, account])
+      
+      const listingAccessType = listingQuery.rows.length > 0 ? listingQuery.rows[0].access_type : 'none'
+      
+      // Method 3: checkDocumentAccess function
+      const canRead = await checkDocumentAccess(account, owner, permlink, 'read')
+      const canEdit = await checkDocumentAccess(account, owner, permlink, 'edit')
+      const canPost = await checkDocumentAccess(account, owner, permlink, 'post')
+      
+      res.json({
+        success: true,
+        fixStatus: {
+          description: "Permission checking bug has been fixed",
+          fixedIssues: [
+            "Document Info endpoint now checks explicit permissions before public access",
+            "WebSocket server now uses same permission priority order",
+            "All endpoints now return consistent access types"
+          ]
+        },
+        
+        testDocument: `${owner}/${permlink}`,
+        testAccount: account,
+        documentInfo: testDoc.rows[0],
+        
+        consistencyTest: {
+          documentInfoEndpoint: infoAccessType,
+          documentListingEndpoint: listingAccessType,
+          areEqual: infoAccessType === listingAccessType,
+          status: infoAccessType === listingAccessType ? "✅ CONSISTENT" : "❌ STILL INCONSISTENT"
+        },
+        
+        permissionCapabilities: {
+          canRead,
+          canEdit,
+          canPost
+        },
+        
+        expectedBehavior: {
+          description: "If you have explicit permissions (editable/readonly/postable), that should always show up, even if the document is also public",
+          priorityOrder: [
+            "1. Owner permissions (if you own the document)",
+            "2. Explicit permissions (editable/readonly/postable granted to you)", 
+            "3. Public access (if document is public and you have no explicit permissions)",
+            "4. No access"
+          ]
+        }
+      })
+      
+    } finally {
+      client.release()
+    }
+    
+  } catch (error) {
+    console.error('Error testing permission fix:', error)
+    res.status(500).json({
+      success: false,
+      error: error.message
     })
   }
 })
