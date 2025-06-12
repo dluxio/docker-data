@@ -6848,7 +6848,7 @@ router.get('/api/onboarding/notifications/:username/merged', async (req, res) =>
 
                 const hiveResult = await hiveResponse.json();
 
-                if (hiveResult.result && Array.isArray(hiveResult.result)) {
+                if (hiveResult?.result && Array.isArray(hiveResult.result)) {
                     hiveNotifications = hiveResult.result.map((notification, index) => ({
                         id: `hive_${notification.id}`,
                         type: 'hive_notification',
