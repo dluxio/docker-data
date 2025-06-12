@@ -26,8 +26,11 @@ class HiveMonitor {
             if (result.rows.length > 0) {
                 this.lastProcessedBlock = result.rows[0].last_block;
             } else {
-                // Initialize state if not exists
-                await pool.query('INSERT INTO hive_state (id, last_block) VALUES (1, 0)');
+                // Initialize state with specific block number
+                const initialBlock = 96726250;
+                await pool.query('INSERT INTO hive_state (id, last_block) VALUES (1, $1)', [initialBlock]);
+                this.lastProcessedBlock = initialBlock;
+                console.log(`Initialized Hive monitor starting at block ${initialBlock}`);
             }
         } catch (error) {
             console.error('Failed to initialize Hive monitor:', error);
