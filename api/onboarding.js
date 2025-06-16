@@ -7793,7 +7793,111 @@ router.post('/api/onboarding/admin/build-account', adminAuthMiddleware, async (r
     }
 });
 
-// 17. Admin endpoint - Complete keychain account creation
+// 17. Admin endpoint - Get blockchain monitor status
+router.get('/api/onboarding/admin/blockchain-monitor-status', adminAuthMiddleware, async (req, res) => {
+    try {
+        const hiveMonitor = require('../hive-monitor');
+        
+        // Get current head block from Hive API
+        let currentBlock = 0;
+        try {
+            const response = await fetch(config.clientURL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    jsonrpc: '2.0',
+                    method: 'condenser_api.get_dynamic_global_properties',
+                    params: [],
+                    id: 1
+                })
+            });
+            
+            const result = await response.json();
+            if (result.result && result.result.head_block_number) {
+                currentBlock = result.result.head_block_number;
+            }
+        } catch (error) {
+            console.warn('Could not fetch current block number:', error);
+        }
+        
+        const status = hiveMonitor.getStatus();
+        
+        res.json({
+            success: true,
+            data: {
+                currentBlock: currentBlock,
+                lastProcessedBlock: status.lastProcessedBlock,
+                isRunning: status.isRunning,
+                activeListeners: status.activeListeners,
+                apiHealth: status.apiHealth,
+                retryDelay: status.retryDelay,
+                blocksRemaining: currentBlock - status.lastProcessedBlock,
+                processingProgress: currentBlock > 0 ? ((status.lastProcessedBlock / currentBlock) * 100) : 0
+            }
+        });
+        
+    } catch (error) {
+        console.error('Error getting blockchain monitor status:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to get blockchain monitor status',
+            details: error.message
+        });
+    }
+});
+
+// 18. Admin endpoint - Start/Stop blockchain monitor
+router.post('/api/onboarding/admin/blockchain-monitor/:action', adminAuthMiddleware, async (req, res) => {
+    try {
+        const { action } = req.params;
+        const hiveMonitor = require('../hive-monitor');
+        
+        if (action === 'start') {
+            if (hiveMonitor.isRunning) {
+                return res.json({
+                    success: true,
+                    message: 'Blockchain monitor is already running'
+                });
+            }
+            
+            await hiveMonitor.start();
+            res.json({
+                success: true,
+                message: 'Blockchain monitor started successfully'
+            });
+            
+        } else if (action === 'stop') {
+            if (!hiveMonitor.isRunning) {
+                return res.json({
+                    success: true,
+                    message: 'Blockchain monitor is already stopped'
+                });
+            }
+            
+            await hiveMonitor.stop();
+            res.json({
+                success: true,
+                message: 'Blockchain monitor stopped successfully'
+            });
+            
+        } else {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid action. Use "start" or "stop"'
+            });
+        }
+        
+    } catch (error) {
+        console.error('Error controlling blockchain monitor:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to control blockchain monitor',
+            details: error.message
+        });
+    }
+});
+
+// 19. Admin endpoint - Complete keychain account creation
 router.post('/api/onboarding/admin/complete-account-creation', adminAuthMiddleware, async (req, res) => {
     try {
         const { channelId, txId, username, creationMethod } = req.body;

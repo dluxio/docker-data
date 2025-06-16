@@ -265,4 +265,63 @@ hiveMonitor.registerOperationHandler('custom_json', async (opData, block) => {
     }
 });
 
+// Register handler for comment operations to capture dApp posts
+hiveMonitor.registerOperationHandler('comment', async (opData, block) => {
+    try {
+        const { author, permlink, parent_author, parent_permlink, json_metadata } = opData;
+        
+        // Only process root level comments (posts, not replies)
+        if (parent_author && parent_author !== '') {
+            return; // This is a reply, not a root level comment
+        }
+        
+        // Parse json_metadata to check for dApp data
+        let metadata;
+        try {
+            metadata = JSON.parse(json_metadata || '{}');
+        } catch (error) {
+            console.warn(`Invalid JSON metadata for @${author}/${permlink}:`, error);
+            return;
+        }
+        
+        // Check if this comment contains dApp data with dappCID
+        if (metadata && metadata.dappCID && metadata.dappCID.trim() !== '') {
+            console.log(`Found dApp post: @${author}/${permlink} with dappCID: ${metadata.dappCID}`);
+            
+            // Determine the type based on metadata
+            let postType = 'dapp';
+            if (metadata.dAppType) {
+                postType = metadata.dAppType.toLowerCase();
+            } else if (metadata.vrHash === 'dapp') {
+                postType = 'dapp';
+            }
+            
+            // Insert into posts database (only if it doesn't already exist)
+            const result = await pool.query(`
+                INSERT INTO posts (author, permlink, type, block, votes, voteweight, promote, paid)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                ON CONFLICT (author, permlink) DO NOTHING
+                RETURNING author, permlink
+            `, [
+                author,
+                permlink,
+                postType,
+                block.block_num || block.block_id,
+                0, // Initial votes
+                0, // Initial voteweight
+                0, // Initial promote
+                false // Initial paid status
+            ]);
+            
+            if (result.rows.length > 0) {
+                console.log(`✓ Stored new dApp post: @${author}/${permlink} (type: ${postType}) in block ${block.block_num || block.block_id}`);
+            } else {
+                console.log(`ℹ dApp post @${author}/${permlink} already exists in database (likely from Layer 2)`);
+            }
+        }
+    } catch (error) {
+        console.error('Error processing comment operation:', error);
+    }
+});
+
 module.exports = hiveMonitor;

@@ -73,6 +73,44 @@ const BlockchainMonitorView = {
                     </div>
                 </div>
             </div>
+
+            <div class="row">
+                <div class="col-md-12 mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5>API Health Status</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-3">
+                                    <h6>API Status</h6>
+                                    <h4 :class="getApiStatusClass(apiHealth.status)">
+                                        {{ formatApiStatus(apiHealth.status) }}
+                                    </h4>
+                                </div>
+                                <div class="col-md-3">
+                                    <h6>Error Count</h6>
+                                    <h4>{{ apiHealth.errorCount || 0 }}</h4>
+                                </div>
+                                <div class="col-md-3">
+                                    <h6>Consecutive Errors</h6>
+                                    <h4>{{ apiHealth.consecutiveErrors || 0 }}</h4>
+                                </div>
+                                <div class="col-md-3">
+                                    <h6>Retry Delay</h6>
+                                    <h4>{{ formatDelay(retryDelay) }}</h4>
+                                </div>
+                            </div>
+                            <div v-if="apiHealth.lastError" class="mt-3">
+                                <h6>Last Error:</h6>
+                                <div class="alert alert-warning">
+                                    <small>{{ apiHealth.lastError.message || apiHealth.lastError }}</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     `,
 
@@ -90,21 +128,23 @@ const BlockchainMonitorView = {
             lastProcessedBlock: 0,
             isRunning: false,
             activeListeners: 0,
+            apiHealth: {},
+            retryDelay: 0,
             refreshInterval: null
         };
     },
 
     computed: {
         blocksRemaining() {
-            return this.currentBlock - this.lastProcessedBlock;
+            return Math.max(0, this.currentBlock - this.lastProcessedBlock);
         },
         processingProgress() {
             if (this.currentBlock === 0) return 0;
-            return (this.lastProcessedBlock / this.currentBlock) * 100;
+            return Math.min(100, (this.lastProcessedBlock / this.currentBlock) * 100);
         },
         processingProgressClass() {
-            if (this.processingProgress > 90) return 'bg-success';
-            if (this.processingProgress > 50) return 'bg-warning';
+            if (this.processingProgress > 95) return 'bg-success';
+            if (this.processingProgress > 80) return 'bg-warning';
             return 'bg-danger';
         }
     },
@@ -113,13 +153,30 @@ const BlockchainMonitorView = {
         async refreshData() {
             this.loading = true;
             try {
-                const data = await this.apiClient.getBlockchainMonitorStatus();
-                this.currentBlock = data.currentBlock;
-                this.lastProcessedBlock = data.lastProcessedBlock;
-                this.isRunning = data.isRunning;
-                this.activeListeners = data.activeListeners;
+                const response = await fetch('/api/onboarding/admin/blockchain-monitor-status', {
+                    headers: this.apiClient.getAuthHeaders()
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const result = await response.json();
+                if (result.success && result.data) {
+                    const data = result.data;
+                    this.currentBlock = data.currentBlock;
+                    this.lastProcessedBlock = data.lastProcessedBlock;
+                    this.isRunning = data.isRunning;
+                    this.activeListeners = data.activeListeners;
+                    this.apiHealth = data.apiHealth || {};
+                    this.retryDelay = data.retryDelay;
+                } else {
+                    throw new Error(result.error || 'Failed to fetch blockchain monitor status');
+                }
             } catch (error) {
                 console.error('Error fetching blockchain monitor status:', error);
+                // Show error to user
+                alert('Error fetching blockchain monitor status: ' + error.message);
             } finally {
                 this.loading = false;
             }
@@ -128,14 +185,26 @@ const BlockchainMonitorView = {
         async toggleMonitor() {
             this.loading = true;
             try {
-                if (this.isRunning) {
-                    await this.apiClient.stopBlockchainMonitor();
-                } else {
-                    await this.apiClient.startBlockchainMonitor();
+                const action = this.isRunning ? 'stop' : 'start';
+                const response = await fetch(`/api/onboarding/admin/blockchain-monitor/${action}`, {
+                    method: 'POST',
+                    headers: this.apiClient.getAuthHeaders()
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                 }
-                await this.refreshData();
+                
+                const result = await response.json();
+                if (result.success) {
+                    await this.refreshData();
+                    alert(result.message);
+                } else {
+                    throw new Error(result.error || 'Failed to toggle blockchain monitor');
+                }
             } catch (error) {
                 console.error('Error toggling blockchain monitor:', error);
+                alert('Error toggling blockchain monitor: ' + error.message);
             } finally {
                 this.loading = false;
             }
@@ -143,6 +212,33 @@ const BlockchainMonitorView = {
 
         formatNumber(num) {
             return new Intl.NumberFormat().format(num);
+        },
+
+        formatApiStatus(status) {
+            const statusMap = {
+                'healthy': 'Healthy',
+                'rate_limited': 'Rate Limited',
+                'parse_error': 'Parse Error',
+                'error': 'Error',
+                'unknown': 'Unknown'
+            };
+            return statusMap[status] || status;
+        },
+
+        getApiStatusClass(status) {
+            const classMap = {
+                'healthy': 'text-success',
+                'rate_limited': 'text-warning',
+                'parse_error': 'text-danger',
+                'error': 'text-danger',
+                'unknown': 'text-muted'
+            };
+            return classMap[status] || 'text-muted';
+        },
+
+        formatDelay(delay) {
+            if (delay < 1000) return `${delay}ms`;
+            return `${(delay / 1000).toFixed(1)}s`;
         }
     },
 
