@@ -3,6 +3,7 @@ const config = require("../config");
 const fetch = require("node-fetch");
 const sharp = require("sharp");
 const vm = require('vm');
+const crypto = require('crypto');
 
 const pool = new Pool({
   connectionString: config.dbcs,
@@ -432,128 +433,247 @@ async function getTickers() {
 
 getTickers();
 
-async function getDetails(uid, script, opt) {
-  if (!RAM[script]) {
-    console.error(`Script ${script} not loaded for getDetails`);
-    return Promise.reject(new Error(`Script ${script} not loaded`));
-  }
-  const context = {
-      console: console
-  };
-  const escapedUid = uid.replace(/'/g, "\\'");
-  const escapedExe = opt.exe ? opt.exe.replace(/'/g, "\\'") : '';
-  const codeToRun = `(//${RAM[script]}
-)('${escapedUid}', ${opt.exe ? `'${escapedExe}'` : 'undefined'})`;
-
+async function getDetails(uid, script, opt, req) {
+  const startTime = Date.now();
+  let scriptHash = null;
+  let executionSuccess = false;
+  let executionError = null;
+  
   try {
-    const NFT = vm.runInNewContext(codeToRun, vm.createContext(context), { timeout: 1000 });
+    if (!RAM[script]) {
+      throw new Error(`Script ${script} not loaded`);
+    }
+    
+    scriptHash = calculateScriptHash(RAM[script]);
+    
+    const whitelistEntry = await checkScriptWhitelist(scriptHash);
+    if (!whitelistEntry) {
+      await addScriptToReview(
+        scriptHash, 
+        RAM[script], 
+        'getDetails', 
+        req?.user?.username || 'anonymous',
+        { uid, opt, script }
+      );
+      
+      throw new Error(`Script not whitelisted. Added to review queue with hash: ${scriptHash}`);
+    }
+    
+    const sanitizedUid = sanitizeInput(uid, 100);
+    const sanitizedExe = opt?.exe ? sanitizeInput(opt.exe, 255) : '';
+    
+    if (!sanitizedUid || (opt?.exe && !sanitizedExe)) {
+      throw new Error('Invalid or potentially dangerous input parameters');
+    }
+    
+    const context = {
+      console: {
+        log: (...args) => console.log('[SANDBOX]', ...args),
+        warn: (...args) => console.warn('[SANDBOX]', ...args),
+        error: (...args) => console.error('[SANDBOX]', ...args)
+      },
+      Math: Math,
+      JSON: JSON,
+      Array: Array,
+      Object: Object,
+      String: String,
+      Number: Number,
+      Boolean: Boolean,
+      Date: Date
+    };
+    
+    const codeToRun = `(function() {
+      const scriptFunc = ${RAM[script]};
+      return scriptFunc(${JSON.stringify(sanitizedUid)}, ${opt?.exe ? JSON.stringify(sanitizedExe) : 'undefined'});
+    })()`;
+
+    const NFT = vm.runInNewContext(codeToRun, vm.createContext(context), { 
+      timeout: 1000,
+      displayErrors: false
+    });
 
     if (!NFT || typeof NFT.attributes === 'undefined' || typeof NFT.set === 'undefined') {
-        console.error(`Invalid NFT object structure returned by script ${script} for UID ${uid}`);
-        return Promise.reject(new Error(`Invalid NFT object structure from script ${script}`));
+        throw new Error(`Invalid NFT object structure from script ${script}`);
     }
+    
+    executionSuccess = true;
     return { attributes: NFT.attributes, set: NFT.set, opt };
+    
   } catch (evalError) {
+    executionError = evalError.message || evalError.toString();
     console.error(`Error evaluating script ${script} for getDetails:`, evalError);
-    return Promise.reject(evalError);
+    throw evalError;
+  } finally {
+    const executionTime = Date.now() - startTime;
+    if (scriptHash) {
+      await logScriptExecution(
+        scriptHash, 
+        req?.user?.username || 'anonymous',
+        { uid, opt, function: 'getDetails' },
+        executionSuccess,
+        executionError,
+        executionTime,
+        req
+      );
+    }
   }
 }
 
-async function makePNG(uid, script, opt) {
-  if (!RAM[script]) {
-      console.error(`Script ${script} not loaded for makePNG`);
-      console.log(`Attempting to load missing script ${script} on demand...`);
-      try {
-          await pop(script, `unknown_set_for_${script}`, 1);
-          if (!RAM[script]) {
-              throw new Error(`Failed to load script ${script} on demand.`);
-          }
-          console.log(`Successfully loaded script ${script} on demand.`);
-      } catch (loadError) {
-          console.error(`Failed to load script ${script} on demand:`, loadError);
-          throw new Error(`Script ${script} is not loaded and could not be fetched.`);
-      }
-  }
-
-  let NFT;
-  const context = {
-      console: console
-  };
-  const escapedUid = uid.replace(/'/g, "\\'");
-  const escapedOpt = opt ? opt.replace(/'/g, "\\'") : '';
-  const codeToRun = `(//${RAM[script]}
-)('${escapedUid}', ${opt ? `'${escapedOpt}'` : 'undefined'})`;
-
+async function makePNG(uid, script, opt, req) {
+  const startTime = Date.now();
+  let scriptHash = null;
+  let executionSuccess = false;
+  let executionError = null;
+  
   try {
-    NFT = vm.runInNewContext(codeToRun, vm.createContext(context), { timeout: 1000 });
+    if (!RAM[script]) {
+        console.error(`Script ${script} not loaded for makePNG`);
+        console.log(`Attempting to load missing script ${script} on demand...`);
+        try {
+            await pop(script, `unknown_set_for_${script}`, 1);
+            if (!RAM[script]) {
+                throw new Error(`Failed to load script ${script} on demand.`);
+            }
+            console.log(`Successfully loaded script ${script} on demand.`);
+        } catch (loadError) {
+            console.error(`Failed to load script ${script} on demand:`, loadError);
+            throw new Error(`Script ${script} is not loaded and could not be fetched.`);
+        }
+    }
+    
+    scriptHash = calculateScriptHash(RAM[script]);
+    
+    const whitelistEntry = await checkScriptWhitelist(scriptHash);
+    if (!whitelistEntry) {
+      await addScriptToReview(
+        scriptHash,
+        RAM[script],
+        'makePNG',
+        req?.user?.username || 'anonymous',
+        { uid, opt, script }
+      );
+      
+      throw new Error(`Script not whitelisted. Added to review queue with hash: ${scriptHash}`);
+    }
+
+    const sanitizedUid = sanitizeInput(uid, 100);
+    const sanitizedOpt = opt ? sanitizeInput(opt, 255) : '';
+    
+    if (!sanitizedUid || (opt && !sanitizedOpt)) {
+      throw new Error('Invalid or potentially dangerous input parameters');
+    }
+
+    const context = {
+      console: {
+        log: (...args) => console.log('[SANDBOX]', ...args),
+        warn: (...args) => console.warn('[SANDBOX]', ...args),
+        error: (...args) => console.error('[SANDBOX]', ...args)
+      },
+      Math: Math,
+      JSON: JSON,
+      Array: Array,
+      Object: Object,
+      String: String,
+      Number: Number,
+      Boolean: Boolean,
+      Date: Date
+    };
+
+    const codeToRun = `(function() {
+      const scriptFunc = ${RAM[script]};
+      return scriptFunc(${JSON.stringify(sanitizedUid)}, ${opt ? JSON.stringify(sanitizedOpt) : 'undefined'});
+    })()`;
+
+    const NFT = vm.runInNewContext(codeToRun, vm.createContext(context), { 
+      timeout: 1000,
+      displayErrors: false
+    });
 
     if (!NFT || typeof NFT.HTML !== 'string') {
         throw new Error(`Script ${script} did not return a valid NFT object with HTML string`);
     }
-  } catch (evalError) {
-      console.error(`Error evaluating script ${script} for makePNG:`, evalError);
-      throw evalError;
-  }
-
-  const htmlContent = NFT.HTML.trim();
-
-  if (htmlContent.startsWith("<svg")) {
-    console.log("Generating PNG from SVG");
-    try {
-      const buffer = await sharp(Buffer.from(htmlContent))
-        .resize(333, 333, {
-          kernel: sharp.kernel.nearest,
-          fit: "contain",
-          background: { r: 0, g: 0, b: 0, alpha: 0 }
-        })
-        .png()
-        .toBuffer();
-      return [buffer, "png"];
-    } catch (svgError) {
-        console.error("Error converting SVG to PNG:", svgError);
-        throw new Error("Failed to convert SVG to PNG");
+    
+    executionSuccess = true;
+    const htmlContent = NFT.HTML.trim();
+    
+    if (htmlContent.length > 1000000) {
+      throw new Error('Generated HTML content exceeds size limit');
     }
-  }
-  else if (htmlContent.includes("data:image/")) {
-      console.log("Generating PNG from composite Base64");
+
+    if (htmlContent.startsWith("<svg")) {
+      console.log("Generating PNG from SVG");
       try {
-        const parts = htmlContent.split('data:image/');
-        if (parts.length < 2) throw new Error("No valid base64 image data found.");
-
-        const basePart = parts[1].split(';base64,');
-        if (basePart.length < 2) throw new Error("Invalid base64 image data format for base image.");
-        const baseImageType = basePart[0];
-        const baseImageData = basePart[1].split('"')[0];
-        const baseBuffer = Buffer.from(baseImageData, "base64");
-
-        const compositeInputs = [];
-        for (let i = 2; i < parts.length; i++) {
-            const layerPart = parts[i].split(';base64,');
-            if (layerPart.length < 2) {
-                console.warn(`Skipping invalid base64 image data format for layer ${i-1}`);
-                continue;
-            }
-            const layerImageData = layerPart[1].split('"')[0];
-            compositeInputs.push({
-                input: Buffer.from(layerImageData, "base64"),
-            });
-        }
-
-        const finalBuffer = await sharp(baseBuffer)
-            .composite(compositeInputs)
-            .png()
-            .toBuffer();
-
-        return [finalBuffer, "png"];
-
-      } catch (compositeError) {
-          console.error("Error composing PNG from Base64:", compositeError);
-          throw new Error("Failed to compose PNG from Base64 data");
+        const buffer = await sharp(Buffer.from(htmlContent))
+          .resize(333, 333, {
+            kernel: sharp.kernel.nearest,
+            fit: "contain",
+            background: { r: 0, g: 0, b: 0, alpha: 0 }
+          })
+          .png()
+          .toBuffer();
+        return [buffer, "png"];
+      } catch (svgError) {
+          console.error("Error converting SVG to PNG:", svgError);
+          throw new Error("Failed to convert SVG to PNG");
       }
-  }
-  else {
-    console.error("Unsupported NFT.HTML format for image generation:", htmlContent.substring(0, 100) + "...");
-    throw new Error("Unsupported format for image generation");
+    }
+    else if (htmlContent.includes("data:image/")) {
+        console.log("Generating PNG from composite Base64");
+        try {
+          const parts = htmlContent.split('data:image/');
+          if (parts.length < 2) throw new Error("No valid base64 image data found.");
+
+          const basePart = parts[1].split(';base64,');
+          if (basePart.length < 2) throw new Error("Invalid base64 image data format for base image.");
+          const baseImageData = basePart[1].split('"')[0];
+          const baseBuffer = Buffer.from(baseImageData, "base64");
+
+          const compositeInputs = [];
+          for (let i = 2; i < parts.length; i++) {
+              const layerPart = parts[i].split(';base64,');
+              if (layerPart.length < 2) {
+                  console.warn(`Skipping invalid base64 image data format for layer ${i-1}`);
+                  continue;
+              }
+              const layerImageData = layerPart[1].split('"')[0];
+              compositeInputs.push({
+                  input: Buffer.from(layerImageData, "base64"),
+              });
+          }
+
+          const finalBuffer = await sharp(baseBuffer)
+              .composite(compositeInputs)
+              .png()
+              .toBuffer();
+
+          return [finalBuffer, "png"];
+
+        } catch (compositeError) {
+            console.error("Error composing PNG from Base64:", compositeError);
+            throw new Error("Failed to compose PNG from Base64 data");
+        }
+    }
+    else {
+      console.error("Unsupported NFT.HTML format for image generation:", htmlContent.substring(0, 100) + "...");
+      throw new Error("Unsupported format for image generation");
+    }
+  } catch(error) {
+    executionError = error.message || error.toString();
+    console.error(`Error in makePNG for script ${script}:`, error);
+    throw error;
+  } finally {
+    const executionTime = Date.now() - startTime;
+    if (scriptHash) {
+      await logScriptExecution(
+        scriptHash,
+        req?.user?.username || 'anonymous',
+        { uid, opt, function: 'makePNG' },
+        executionSuccess,
+        executionError,
+        executionTime,
+        req
+      );
+    }
   }
 }
 
@@ -579,7 +699,7 @@ exports.detailsNFT = async (req, res, next) => {
   }
 
   try {
-    const details = await getDetails(uid, script, { opt, exe });
+    const details = await getDetails(uid, script, { opt, exe }, req);
     res.setHeader("Content-Type", "application/json");
     res.send(JSON.stringify(details, null, 3));
   } catch (e) {
@@ -621,7 +741,7 @@ exports.renderNFT = async (req, res, next) => {
   }
 
   try {
-    const [imgBuffer, imgType] = await makePNG(uid, script, exe);
+    const [imgBuffer, imgType] = await makePNG(uid, script, exe, req);
     res.setHeader("Content-Type", `image/${imgType}`);
     res.send(imgBuffer);
   } catch (e) {
@@ -665,7 +785,7 @@ exports.getPFP = async (req, res, next) => {
       console.log({ user, uid, script, exe });
 
       try {
-        const [imgBuffer, imgType] = await makePNG(uid, script, exe);
+        const [imgBuffer, imgType] = await makePNG(uid, script, exe, req);
         res.setHeader("Content-Type", `image/${imgType}`);
         res.send(imgBuffer);
       } catch (renderError) {
@@ -710,428 +830,6 @@ exports.getPFP = async (req, res, next) => {
       )
     );
   }
-};
-
-function getDBPromotedPosts(amount, offset, bitMask) {
-  return new Promise(async (resolve, reject) => {
-    try {
-        const types = typeMask(bitMask);
-        if (types.length === 0) {
-            resolve([]);
-            return;
-        }
-        const query = `
-            SELECT
-                author,
-                permlink,
-                block,
-                votes,
-                voteweight,
-                promote,
-                paid
-            FROM
-                posts
-            WHERE type = ANY($1) AND
-                promote > 0
-            ORDER BY
-                promote DESC
-            OFFSET $2 ROWS FETCH FIRST $3 ROWS ONLY;`;
-        const params = [types, offset, amount];
-        const res = await executeQuery(query, params, 'Error - Failed to select promoted posts');
-
-        for (const item of res.rows) {
-            item.url = `/dlux/@${item.author}/${item.permlink}`;
-        }
-        resolve(res.rows);
-    } catch (err) {
-      reject(err);
-    }
-  });
-}
-
-exports.getTrendingPosts = async (req, res, next) => {
-  let amt = parseInt(req.query.a) || 50;
-  let off = parseInt(req.query.o) || 0;
-  let bitMask = parseInt(req.query.b) || 255;
-  if (amt < 1) amt = 1;
-  else if (amt > 100) amt = 100;
-  if (off < 0) off = 0;
-
-  res.setHeader("Content-Type", "application/json");
-  try {
-    const results = await getTrendingPostsDB(amt, off, bitMask);
-    res.send(
-      JSON.stringify(
-        {
-          result: results,
-          node: config.username,
-        },
-        null,
-        3
-      )
-    );
-  } catch (e) {
-    console.error("Error getting trending posts:", e);
-    res.status(500).send(JSON.stringify({ error: "Failed to get trending posts", node: config.username }, null, 3));
-  }
-};
-
-function getTrendingPostsDB(amount, offset, bitMask) {
-  return new Promise(async (resolve, reject) => {
-    try {
-      const types = typeMask(bitMask);
-      if (types.length === 0) {
-          resolve([]);
-          return;
-      }
-      const query = `
-          SELECT
-              author,
-              permlink,
-              block,
-              votes,
-              voteweight,
-              promote,
-              paid
-          FROM
-              posts
-          WHERE type = ANY($1) AND
-              paid = false
-          ORDER BY
-              voteweight DESC
-          OFFSET $2 ROWS FETCH FIRST $3 ROWS ONLY;`;
-      const params = [types, offset, amount];
-      const res = await executeQuery(query, params, 'Error - Failed to select trending posts');
-
-      for (const item of res.rows) {
-        item.url = `/dlux/@${item.author}/${item.permlink}`;
-      }
-      resolve(res.rows);
-    } catch (err) {
-      reject(err);
-    }
-  });
-}
-
-function getPost(author, permlink) {
-  return new Promise(async (resolve, reject) => {
-    try {
-      const query = `SELECT * FROM posts WHERE author = $1 AND permlink = $2;`;
-      const params = [author, permlink];
-      const res = await executeQuery(query, params, `Error - Failed to get post @${author}/${permlink}`);
-
-      for (const item of res.rows) {
-        item.url = `/dlux/@${item.author}/${item.permlink}`;
-      }
-      resolve(res.rows);
-    } catch (err) {
-      reject(err);
-    }
-  });
-}
-
-exports.getPost = getPost;
-
-exports.getPostRoute = async (req, res, next) => {
-  const a = req.params.author;
-  const p = req.params.permlink;
-  try {
-    const results = await getPost(a, p);
-    res.send(
-      JSON.stringify(
-        {
-          result: results.length > 0 ? results[0] : null,
-          node: config.username,
-        },
-        null,
-        3
-      )
-    );
-  } catch (e) {
-    console.error(`Error in getPostRoute for @${a}/${p}:`, e);
-    res.status(500).send(JSON.stringify({ error: "Failed to get post", node: config.username }, null, 3));
-  }
-};
-
-exports.getNewPosts = async (req, res, next) => {
-  let amt = parseInt(req.query.a) || 50;
-  let off = parseInt(req.query.o) || 0;
-  let bitMask = parseInt(req.query.b) || 255;
-  if (amt < 1) amt = 1;
-  else if (amt > 100) amt = 100;
-  if (off < 0) off = 0;
-
-  res.setHeader("Content-Type", "application/json");
-  try {
-    const results = await getNewPostsDB(amt, off, bitMask);
-    res.send(
-      JSON.stringify(
-        {
-          result: results,
-          node: config.username,
-        },
-        null,
-        3
-      )
-    );
-  } catch (e) {
-    console.error("Error getting new posts:", e);
-    res.status(500).send(JSON.stringify({ error: "Failed to get new posts", node: config.username }, null, 3));
-  }
-};
-
-function getNewPostsDB(amount, offset, bitMask) {
-  return new Promise(async (resolve, reject) => {
-    try {
-      const types = typeMask(bitMask);
-      if (types.length === 0) {
-          resolve([]);
-          return;
-      }
-      const query = `
-          SELECT *
-          FROM posts
-          WHERE type = ANY($1)
-          ORDER BY block DESC
-          OFFSET $2 ROWS
-          FETCH FIRST $3 ROWS ONLY;`;
-      const params = [types, offset, amount];
-      const res = await executeQuery(query, params, 'Error - Failed to select new posts');
-
-      for (const item of res.rows) {
-        item.url = `/dlux/@${item.author}/${item.permlink}`;
-        item.l2votes = item.votes;
-      }
-      resolve(res.rows);
-    } catch (err) {
-      reject(err);
-    }
-  });
-}
-
-function getAuthorPostsDB(author, amount, offset) {
-  return new Promise(async (resolve, reject) => {
-    try {
-        const query = `
-            SELECT
-                author,
-                permlink,
-                block,
-                votes,
-                voteweight,
-                promote,
-                paid
-            FROM
-                posts
-            WHERE
-                author = $1
-            ORDER BY
-                block DESC
-            OFFSET $2 ROWS FETCH FIRST $3 ROWS ONLY;`;
-        const params = [author, offset, amount];
-        const res = await executeQuery(query, params, `Error - Failed to select posts for author ${author}`);
-
-        for (const item of res.rows) {
-            item.url = `/dlux/@${item.author}/${item.permlink}`;
-        }
-        resolve(res.rows);
-    } catch (err) {
-        reject(err);
-    }
-  });
-}
-
-exports.getAuthorPostsDB = getAuthorPostsDB;
-
-exports.getAuthorPosts = async (req, res, next) => {
-  let amt = parseInt(req.query.a) || 50;
-  let off = parseInt(req.query.o) || 0;
-  const author = req.params.author;
-  if (amt < 1) amt = 1;
-  else if (amt > 100) amt = 100;
-  if (off < 0) off = 0;
-
-  res.setHeader("Content-Type", "application/json");
-  try {
-    const results = await getAuthorPostsDB(author, amt, off);
-    res.send(
-      JSON.stringify(
-        {
-          result: results,
-          node: config.username,
-        },
-        null,
-        3
-      )
-    );
-  } catch (e) {
-    console.error(`Error getting posts for author ${author}:`, e);
-    res.status(500).send(JSON.stringify({ error: "Failed to get author posts", node: config.username }, null, 3));
-  }
-};
-
-exports.https_redirect = (req, res, next) => {
-  if (process.env.NODE_ENV === "production" || process.env.NODE_ENV === "staging") {
-    if (req.headers["x-forwarded-proto"] !== "https") {
-       const host = req.headers.host;
-       if (!host) {
-           console.warn("Missing Host header, cannot perform HTTPS redirect.");
-           return next();
-       }
-      console.log(`Redirecting http://${host}${req.url} to https`);
-      return res.redirect(301, "https://" + host + req.url);
-    } else {
-      return next();
-    }
-  } else {
-    return next();
-  }
-};
-
-exports.hive_api = async (req, res, next) => {
-  const method = `${req.params.api_type}.${req.params.api_call}`;
-  let params = {};
-  let array = false;
-
-  if (req.query.hasOwnProperty('0')) {
-      array = true;
-      params = [];
-      let i = 0;
-      while(req.query.hasOwnProperty(String(i))) {
-          try {
-             params.push(JSON.parse(req.query[String(i)]));
-          } catch (e) {
-             params.push(req.query[String(i)]);
-          }
-          i++;
-      }
-  } else {
-      for (const param in req.query) {
-          try {
-              params[param] = JSON.parse(req.query[param]);
-          } catch(e) {
-              params[param] = req.query[param];
-          }
-      }
-  }
-
-  const body = {
-    jsonrpc: "2.0",
-    method: method,
-    params: array ? params : [params],
-    id: 1,
-  };
-
-  res.setHeader("Content-Type", "application/json");
-  console.log(`Proxying Hive API call: ${method} with params: ${JSON.stringify(body.params)}`);
-
-  try {
-    const hiveResponse = await fetch(config.clientURL, {
-      body: JSON.stringify(body),
-      headers: {
-        "Content-Type": "application/json",
-      },
-      method: "POST",
-    });
-
-    if (!hiveResponse.ok) {
-        throw new Error(`Hive API error: ${hiveResponse.status} ${hiveResponse.statusText}`);
-    }
-
-    const hiveResult = await hiveResponse.json();
-    res.send(JSON.stringify(hiveResult, null, 3));
-
-  } catch (error) {
-    console.error(`Error proxying Hive API call ${method}:`, error);
-    res.status(502).send(JSON.stringify({ error: "Bad Gateway - Failed to proxy Hive API request", details: error.message }, null, 3));
-  }
-};
-
-exports.getpic = async (req, res, next) => {
-    const un = req.params.un || "";
-    if (!un) {
-        return res.status(400).send("Username parameter 'un' is required.");
-    }
-
-    const body = {
-        jsonrpc: "2.0",
-        method: "condenser_api.get_accounts",
-        params: [[un]],
-        id: 1,
-    };
-
-    try {
-        console.log(`Fetching account info for ${un} for profile picture...`);
-        const hiveResponse = await fetch(config.clientURL, {
-            body: JSON.stringify(body),
-            headers: { "Content-Type": "application/json" },
-            method: "POST",
-        });
-
-        if (!hiveResponse.ok) {
-            throw new Error(`Hive API error: ${hiveResponse.status} ${hiveResponse.statusText}`);
-        }
-
-        const r = await hiveResponse.json();
-
-        if (!r.result || r.result.length === 0) {
-            console.log(`Account ${un} not found on Hive.`);
-            return res.status(404).send(`Account ${un} not found.`);
-        }
-
-        const account = r.result[0];
-        let imageUrl = null;
-        let metadataSource = '';
-
-        try {
-            const json_metadata = JSON.parse(account.json_metadata || '{}');
-            imageUrl = json_metadata?.profile?.profile_image;
-            if (imageUrl) metadataSource = 'json_metadata';
-        } catch (e) { console.warn(`Error parsing json_metadata for ${un}`, e); }
-
-        if (!imageUrl) {
-            try {
-                const posting_json_metadata = JSON.parse(account.posting_json_metadata || '{}');
-                imageUrl = posting_json_metadata?.profile?.profile_image;
-                 if (imageUrl) metadataSource = 'posting_json_metadata';
-            } catch (e) { console.warn(`Error parsing posting_json_metadata for ${un}`, e); }
-        }
-
-        if (!imageUrl) {
-            console.log(`No profile image found in metadata for ${un}. Using fallback.`);
-            imageUrl = "https://ipfs.dlux.io/images/user-icon.svg";
-            metadataSource = 'fallback';
-        }
-
-        console.log(`Attempting to fetch profile image for ${un} from ${imageUrl} (source: ${metadataSource})`);
-
-        const imageResponse = await fetch(imageUrl);
-        if (imageResponse.ok) {
-            const contentType = imageResponse.headers.get('content-type') || 'image/svg+xml';
-             res.setHeader('Content-Type', contentType);
-             imageResponse.body.pipe(res);
-        } else {
-            console.error(`Failed to fetch image ${imageUrl} for ${un} (status: ${imageResponse.status}). Trying fallback if not already used.`);
-            if (metadataSource !== 'fallback') {
-                 const fallbackUrl = "https://ipfs.dlux.io/images/user-icon.svg";
-                 console.log(`Attempting fallback image: ${fallbackUrl}`);
-                 const fallbackResponse = await fetch(fallbackUrl);
-                 if (fallbackResponse.ok) {
-                     res.setHeader('Content-Type', fallbackResponse.headers.get('content-type') || 'image/svg+xml');
-                     fallbackResponse.body.pipe(res);
-                 } else {
-                     console.error(`Fallback image fetch also failed (status: ${fallbackResponse.status}).`);
-                     res.status(404).send("Profile image not found or fetch failed.");
-                 }
-            } else {
-                 res.status(404).send("Profile image not found or fetch failed.");
-            }
-        }
-
-    } catch (error) {
-        console.error(`Error fetching profile picture for ${un}:`, error);
-        res.status(500).send(JSON.stringify({ error: "Failed to get profile picture", details: error.message }, null, 3));
-    }
 };
 
 // API endpoints for posts management
@@ -1782,7 +1480,7 @@ exports.reviewFlagReport = async (req, res, next) => {
     return res.status(400).json({ error: 'action and moderator_username are required' });
   }
   
-  if (!['accept', 'reject'].includes(action)) {
+  if (!['accept', 'reject', 'block'].includes(action)) {
     return res.status(400).json({ error: 'action must be "accept" or "reject"' });
   }
   
@@ -1958,6 +1656,313 @@ exports.getUserFlagStats = async (req, res, next) => {
   } catch (error) {
     console.error('Error fetching user flag stats:', error);
     res.status(500).json({ error: 'Failed to fetch user flag statistics' });
+  }
+};
+
+// ===============================
+// SCRIPT SECURITY SYSTEM
+// ===============================
+
+// Enhanced input sanitization
+function sanitizeInput(input, maxLength = 255) {
+  if (!input || typeof input !== 'string') return '';
+  
+  return input
+    .replace(/[`'"\\]/g, '')
+    .replace(/[\r\n\t]/g, '')
+    .replace(/[<>]/g, '')
+    .substring(0, maxLength)
+    .trim();
+}
+
+function calculateScriptHash(script) {
+  return crypto.createHash('sha256').update(script).digest('hex');
+}
+
+function analyzeScriptSafety(script) {
+  const dangerousPatterns = [
+    /require\s*\(/gi, /import\s+/gi, /process\./gi, /global\./gi,
+    /eval\s*\(/gi, /Function\s*\(/gi, /setTimeout|setInterval/gi, /child_process/gi,
+    /fs\.|filesystem/gi, /http\.|https\./gi, /\.prototype\./gi,
+    /constructor/gi, /__proto__/gi, /delete\s+/gi, /with\s*\(/gi,
+    /arguments\.callee/gi,
+  ];
+  
+  const flaggedReasons = [];
+  const riskFactors = [];
+  
+  dangerousPatterns.forEach((pattern, index) => {
+    const patternNames = [
+      'require() calls', 'import statements', 'process access', 'global access',
+      'eval() calls', 'Function constructor', 'timers', 'child_process',
+      'filesystem access', 'network access', 'prototype pollution',
+      'constructor access', 'proto access', 'delete operator',
+      'with statement', 'arguments.callee'
+    ];
+    
+    if (pattern.test(script)) {
+      flaggedReasons.push(patternNames[index]);
+      riskFactors.push(index < 8 ? 'high' : 'medium');
+    }
+  });
+  
+  const riskLevel = riskFactors.includes('high') ? 'critical' : 
+                   riskFactors.includes('medium') ? 'high' : 
+                   riskFactors.length > 0 ? 'medium' : 'low';
+  
+  return { riskLevel, flaggedReasons, isAutoFlagged: riskFactors.length > 0 };
+}
+
+async function checkScriptWhitelist(scriptHash) {
+  try {
+    const query = 'SELECT * FROM script_whitelist WHERE script_hash = $1 AND is_active = true';
+    const result = await executeQuery(query, [scriptHash], 'Error checking script whitelist');
+    return result.rows.length > 0 ? result.rows[0] : null;
+  } catch (error) {
+    console.error('Error checking script whitelist:', error);
+    return null;
+  }
+}
+
+async function addScriptToReview(scriptHash, scriptContent, source, requestedBy, context) {
+  try {
+    const safety = analyzeScriptSafety(scriptContent);
+    const query = `
+      INSERT INTO script_reviews (
+        script_hash, script_content, request_source, requested_by, 
+        request_context, risk_assessment, auto_flagged, flagged_reasons
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      ON CONFLICT (script_hash) DO NOTHING
+      RETURNING id
+    `;
+    const result = await executeQuery(query, [
+      scriptHash, scriptContent, source, requestedBy,
+      JSON.stringify(context), safety.riskLevel, safety.isAutoFlagged, safety.flaggedReasons
+    ], 'Error adding script to review');
+    return result.rows.length > 0 ? result.rows[0].id : null;
+  } catch (error) {
+    console.error('Error adding script to review:', error);
+    throw error;
+  }
+}
+
+async function logScriptExecution(scriptHash, executedBy, context, success, error, executionTime, req) {
+  try {
+    const query = `
+      INSERT INTO script_execution_log (
+        script_hash, executed_by, execution_context, execution_time_ms,
+        success, error_message, ip_address, user_agent
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `;
+    await executeQuery(query, [
+      scriptHash, executedBy, JSON.stringify(context), executionTime,
+      success, error, req?.ip || req?.connection?.remoteAddress, req?.get('User-Agent')
+    ], 'Error logging script execution');
+  } catch (logError) {
+    console.error('Error logging script execution:', logError);
+  }
+}
+
+// ===============================
+// SCRIPT MANAGEMENT API ENDPOINTS
+// ===============================
+
+exports.getScriptStats = async (req, res, next) => {
+  try {
+    const pendingResult = await executeQuery('SELECT COUNT(*) as count FROM script_reviews WHERE status = $1', ['pending']);
+    const whitelistResult = await executeQuery('SELECT COUNT(*) as count FROM script_whitelist WHERE is_active = true');
+    const executionsResult = await executeQuery('SELECT COUNT(*) as count FROM script_execution_log');
+    const successResult = await executeQuery(`
+      SELECT COUNT(*) as total, SUM(CASE WHEN success = true THEN 1 ELSE 0 END) as successful
+      FROM script_execution_log WHERE executed_at >= CURRENT_DATE - INTERVAL '7 days'`);
+    const riskResult = await executeQuery(`
+      SELECT risk_level, COUNT(*) as count FROM script_whitelist WHERE is_active = true GROUP BY risk_level`);
+
+    const successData = successResult.rows[0];
+    const successRate = successData.total > 0 ? Math.round((successData.successful / successData.total) * 100) : 100;
+    const riskDistribution = riskResult.rows.reduce((acc, row) => ({...acc, [row.risk_level]: parseInt(row.count)}), {});
+    
+    res.json({
+      stats: {
+        totalPending: parseInt(pendingResult.rows[0].count),
+        totalWhitelisted: parseInt(whitelistResult.rows[0].count),
+        totalExecutions: parseInt(executionsResult.rows[0].count),
+        executionSuccess: successRate,
+        riskDistribution
+      },
+      node: config.username
+    });
+  } catch (error) {
+    console.error('Error fetching script stats:', error);
+    res.status(500).json({ error: 'Failed to fetch script statistics' });
+  }
+};
+
+exports.getPendingScriptReviews = async (req, res, next) => {
+  const { limit = 50, offset = 0, risk_level } = req.query;
+  try {
+    let whereClause = "WHERE status = 'pending'";
+    const params = [];
+    let paramIndex = 1;
+    if (risk_level) {
+      whereClause += ` AND risk_assessment = $${paramIndex++}`;
+      params.push(risk_level);
+    }
+    const query = `
+      SELECT id, script_hash, script_name, request_source, requested_by,
+             request_context, risk_assessment, auto_flagged, flagged_reasons,
+             LEFT(script_content, 200) as script_preview, created_at
+      FROM script_reviews 
+      ${whereClause}
+      ORDER BY CASE risk_assessment WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END, created_at DESC
+      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+    params.push(parseInt(limit), parseInt(offset));
+    const result = await executeQuery(query, params);
+    const countResult = await executeQuery(`SELECT COUNT(*) as total FROM script_reviews ${whereClause}`, params.slice(0, -2));
+    res.json({
+      reviews: result.rows,
+      totalCount: parseInt(countResult.rows[0].total),
+      limit: parseInt(limit),
+      offset: parseInt(offset)
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch pending script reviews' });
+  }
+};
+
+exports.getScriptReviewDetails = async (req, res, next) => {
+  try {
+    const result = await executeQuery('SELECT * FROM script_reviews WHERE id = $1', [req.params.reviewId]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Script review not found' });
+    const review = result.rows[0];
+    res.json({ review, safety_analysis: analyzeScriptSafety(review.script_content) });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch script review details' });
+  }
+};
+
+exports.reviewScript = async (req, res, next) => {
+  const { reviewId } = req.params;
+  const { action, reviewer_username, review_notes, script_name, risk_level, tags } = req.body;
+  if (!action || !reviewer_username || !['approve', 'reject', 'block'].includes(action)) {
+    return res.status(400).json({ error: 'Invalid request' });
+  }
+  try {
+    const reviewResult = await executeQuery('SELECT * FROM script_reviews WHERE id = $1 AND status = $2', [reviewId, 'pending']);
+    if (reviewResult.rows.length === 0) return res.status(404).json({ error: 'Script review not found or already processed' });
+    const review = reviewResult.rows[0];
+    await executeQuery(`UPDATE script_reviews SET status = $1, reviewed_by = $2, reviewed_at = CURRENT_TIMESTAMP, review_notes = $3 WHERE id = $4`,
+      [action === 'approve' ? 'approved' : action, reviewer_username, review_notes, reviewId]);
+    if (action === 'approve') {
+      await executeQuery(`
+        INSERT INTO script_whitelist (script_hash, script_name, script_content, approved_by, risk_level, description, tags) 
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (script_hash) DO UPDATE SET
+          script_name = EXCLUDED.script_name, approved_by = EXCLUDED.approved_by, risk_level = EXCLUDED.risk_level,
+          description = EXCLUDED.description, tags = EXCLUDED.tags, is_active = true, updated_at = CURRENT_TIMESTAMP`,
+        [review.script_hash, script_name || `Script-${review.script_hash.substring(0, 8)}`, review.script_content,
+         reviewer_username, risk_level || 'medium', review_notes, tags || []]);
+    }
+    res.json({ message: `Script ${action}ed successfully`, whitelisted: action === 'approve' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to review script' });
+  }
+};
+
+exports.getWhitelistedScripts = async (req, res, next) => {
+  const { limit = 50, offset = 0, risk_level, search } = req.query;
+  try {
+    let whereClause = 'WHERE is_active = true';
+    const params = [];
+    let paramIndex = 1;
+    if (risk_level) {
+      whereClause += ` AND risk_level = $${paramIndex++}`;
+      params.push(risk_level);
+    }
+    if (search) {
+      whereClause += ` AND (script_name ILIKE $${paramIndex} OR description ILIKE $${paramIndex})`;
+      params.push(`%${search}%`);
+    }
+    const query = `
+      SELECT script_hash, script_name, approved_by, approved_at, risk_level, description, version, tags, 
+             LEFT(script_content, 200) as script_preview
+      FROM script_whitelist 
+      ${whereClause} ORDER BY approved_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+    params.push(parseInt(limit), parseInt(offset));
+    const result = await executeQuery(query, params);
+    res.json({ scripts: result.rows, totalCount: result.rows.length });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch whitelisted scripts' });
+  }
+};
+
+exports.removeFromWhitelist = async (req, res, next) => {
+  const { remover_username } = req.body;
+  if (!remover_username) return res.status(400).json({ error: 'remover_username is required' });
+  try {
+    const result = await executeQuery('UPDATE script_whitelist SET is_active = false WHERE script_hash = $1 AND is_active = true RETURNING script_name', [req.params.scriptHash]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Script not found or already inactive' });
+    res.json({ message: 'Script removed from whitelist successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to remove script from whitelist' });
+  }
+};
+
+exports.getScriptExecutionLogs = async (req, res, next) => {
+  const { limit = 100, offset = 0, script_hash, success, date_from, date_to } = req.query;
+  try {
+    let whereClause = 'WHERE 1=1';
+    const params = [];
+    let paramIndex = 1;
+    if (script_hash) {
+      whereClause += ` AND sel.script_hash = $${paramIndex++}`;
+      params.push(script_hash);
+    }
+    if (success !== undefined) {
+      whereClause += ` AND sel.success = $${paramIndex++}`;
+      params.push(success === 'true');
+    }
+    if (date_from) {
+      whereClause += ` AND sel.executed_at >= $${paramIndex++}`;
+      params.push(date_from);
+    }
+    if (date_to) {
+      whereClause += ` AND sel.executed_at <= $${paramIndex++}`;
+      params.push(date_to);
+    }
+    const query = `
+      SELECT sel.*, sw.script_name, sw.risk_level
+      FROM script_execution_log sel LEFT JOIN script_whitelist sw ON sel.script_hash = sw.script_hash
+      ${whereClause} ORDER BY sel.executed_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+    params.push(parseInt(limit), parseInt(offset));
+    const result = await executeQuery(query, params);
+    const countResult = await executeQuery(`SELECT COUNT(*) as total FROM script_execution_log sel ${whereClause}`, params.slice(0,-2));
+    res.json({
+      logs: result.rows,
+      totalCount: parseInt(countResult.rows[0].total)
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch script execution logs' });
+  }
+};
+
+exports.testScriptSecurity = async (req, res, next) => {
+  try {
+    const results = await Promise.all([
+      executeQuery('SELECT COUNT(*) as count FROM script_whitelist'),
+      executeQuery('SELECT COUNT(*) as count FROM script_reviews'), 
+      executeQuery('SELECT COUNT(*) as count FROM script_execution_log')
+    ]);
+    res.json({
+      message: 'Script security system is ready',
+      tables: {
+        script_whitelist: parseInt(results[0].rows[0].count),
+        script_reviews: parseInt(results[1].rows[0].count),
+        script_execution_log: parseInt(results[2].rows[0].count)
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Script security system not properly initialized' });
   }
 };
 

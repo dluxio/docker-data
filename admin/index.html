@@ -181,8 +181,15 @@
                             <li class="nav-item">
                                 <a class="nav-link" :class="{ active: currentView === 'rc-costs' }" 
                                    @click="setView('rc-costs')">
-                                    <i class="bi bi-graph-up"></i>
+                                    <i class="bi bi-battery-charging"></i>
                                     RC Costs
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a class="nav-link" :class="{ active: currentView === 'scripts' }"
+                                    @click="setView('scripts')">
+                                    <i class="bi bi-file-code"></i>
+                                    Scripts
                                 </a>
                             </li>
                             <li class="nav-item">
@@ -544,6 +551,14 @@
                                 :api-client="apiClient" 
                                 @loading="setLoading">
                     </flags-view>
+
+                    <div v-if="currentView === 'scripts'">
+                        <scripts-management></scripts-management>
+                    </div>
+
+                    <div v-if="currentView === 'payment-channels'">
+                        <payment-channels></payment-channels>
+                    </div>
                 </main>
             </div>
         </div>
@@ -563,6 +578,7 @@
     <script src="js/components/admin-users.js"></script>
     <script src="js/components/posts-view.js"></script>
     <script src="js/components/flags-view.js"></script>
+    <script src="/js/components/scripts-management.js"></script>
     <script>
         // Mount the app after all components are loaded
         if (window.mountDLUXApp) {

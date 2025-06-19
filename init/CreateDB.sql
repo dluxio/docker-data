@@ -64,3 +64,63 @@ CREATE TABLE statssi (
     string varchar(255) NOT NULL,
     int integer
 );
+
+-- Script security tables
+CREATE TABLE script_whitelist (
+    script_hash varchar(64) PRIMARY KEY,
+    script_name varchar(255) NOT NULL,
+    script_content text NOT NULL,
+    approved_by varchar(16) NOT NULL,
+    approved_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    risk_level varchar(20) DEFAULT 'medium', -- low, medium, high
+    description text,
+    version varchar(50),
+    tags text[], -- array of tags for categorization
+    is_active boolean DEFAULT true,
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE script_reviews (
+    id SERIAL PRIMARY KEY,
+    script_hash varchar(64) NOT NULL,
+    script_name varchar(255),
+    script_content text NOT NULL,
+    request_source varchar(255), -- where the script execution was attempted
+    requested_by varchar(16), -- user who triggered the execution
+    request_context jsonb, -- context data (uid, opt, etc.)
+    status varchar(20) DEFAULT 'pending', -- pending, approved, rejected, blocked
+    reviewed_by varchar(16),
+    reviewed_at timestamp,
+    review_notes text,
+    risk_assessment varchar(20), -- low, medium, high, critical
+    auto_flagged boolean DEFAULT false,
+    flagged_reasons text[],
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(script_hash) -- Prevent duplicate reviews for the same script
+);
+
+CREATE TABLE script_execution_log (
+    id SERIAL PRIMARY KEY,
+    script_hash varchar(64) NOT NULL,
+    executed_by varchar(16),
+    execution_context jsonb,
+    execution_time_ms integer,
+    success boolean,
+    error_message text,
+    resource_usage jsonb, -- memory, timeout, etc.
+    ip_address inet,
+    user_agent text,
+    executed_at timestamp DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Indexes for performance
+CREATE INDEX idx_script_whitelist_hash ON script_whitelist(script_hash);
+CREATE INDEX idx_script_whitelist_active ON script_whitelist(is_active);
+CREATE INDEX idx_script_reviews_status ON script_reviews(status);
+CREATE INDEX idx_script_reviews_hash ON script_reviews(script_hash);
+CREATE INDEX idx_script_reviews_created ON script_reviews(created_at);
+CREATE INDEX idx_script_execution_log_hash ON script_execution_log(script_hash);
+CREATE INDEX idx_script_execution_log_executed_at ON script_execution_log(executed_at);
+CREATE INDEX idx_script_execution_log_success ON script_execution_log(success);
