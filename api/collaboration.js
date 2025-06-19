@@ -1712,6 +1712,260 @@ router.get('/api/collaboration/test-permission-fix', async (req, res) => {
   }
 })
 
+// Debug endpoint for read-only user document sync issues
+router.get('/api/collaboration/debug/readonly-sync/:owner/:permlink', async (req, res) => {
+  try {
+    const { owner, permlink } = req.params
+    const account = req.headers['x-account']
+    
+    if (!owner || !permlink) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid document path format'
+      })
+    }
+    
+    const client = await pool.connect()
+    try {
+      // Check document exists
+      const docResult = await client.query(
+        'SELECT owner, permlink, document_name, is_public, document_data, created_at, updated_at, last_activity FROM collaboration_documents WHERE owner = $1 AND permlink = $2',
+        [owner, permlink]
+      )
+      
+      if (docResult.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          error: 'Document not found'
+        })
+      }
+      
+      const document = docResult.rows[0]
+      
+      // Check user permissions
+      const hasAccess = await checkDocumentAccess(account, owner, permlink, 'read')
+      
+      // Get detailed permission info
+      let permissionDetails = null
+      if (account === owner) {
+        permissionDetails = {
+          type: 'owner',
+          canRead: true,
+          canEdit: true,
+          canPost: true
+        }
+      } else {
+        // Check explicit permissions
+        const permResult = await client.query(
+          'SELECT permission_type, can_read, can_edit, can_post_to_hive FROM collaboration_permissions WHERE owner = $1 AND permlink = $2 AND account = $3',
+          [owner, permlink, account]
+        )
+        
+        if (permResult.rows.length > 0) {
+          const perm = permResult.rows[0]
+          permissionDetails = {
+            type: perm.permission_type,
+            canRead: perm.can_read,
+            canEdit: perm.can_edit,
+            canPost: perm.can_post_to_hive
+          }
+        } else if (document.is_public) {
+          permissionDetails = {
+            type: 'public',
+            canRead: true,
+            canEdit: false,
+            canPost: false
+          }
+        } else {
+          permissionDetails = {
+            type: 'none',
+            canRead: false,
+            canEdit: false,
+            canPost: false
+          }
+        }
+      }
+      
+      // Check recent connection activity for this user/document
+      const activityResult = await client.query(
+        'SELECT activity_type, activity_data, created_at FROM collaboration_activity WHERE owner = $1 AND permlink = $2 AND account = $3 ORDER BY created_at DESC LIMIT 10',
+        [owner, permlink, account]
+      )
+      
+      // Check current active connections
+      const statsResult = await client.query(
+        'SELECT active_users, total_edits, last_activity FROM collaboration_stats WHERE owner = $1 AND permlink = $2',
+        [owner, permlink]
+      )
+      
+      // Analyze document data format and size
+      let documentAnalysis = {
+        hasData: !!document.document_data,
+        dataSize: document.document_data ? document.document_data.length : 0,
+        isValidYjs: false,
+        contentPreview: null
+      }
+      
+      if (document.document_data) {
+        try {
+          // Try to decode as Y.js binary data
+          const Y = require('yjs')
+          const documentBuffer = Buffer.from(document.document_data, 'base64')
+          const uint8Array = new Uint8Array(documentBuffer)
+          
+          const testDoc = new Y.Doc()
+          Y.applyUpdate(testDoc, uint8Array)
+          
+          const yText = testDoc.getText('content')
+          documentAnalysis.isValidYjs = true
+          documentAnalysis.contentPreview = yText.toString().substring(0, 200)
+        } catch (yError) {
+          // Not Y.js format, probably plain text
+          documentAnalysis.isValidYjs = false
+          documentAnalysis.contentPreview = document.document_data.substring(0, 200)
+        }
+      }
+      
+      res.json({
+        success: true,
+        debug: {
+          document: {
+            owner: document.owner,
+            permlink: document.permlink,
+            name: document.document_name,
+            isPublic: document.is_public,
+            createdAt: document.created_at,
+            updatedAt: document.updated_at,
+            lastActivity: document.last_activity
+          },
+          userAccess: {
+            account,
+            hasAccess,
+            permissions: permissionDetails,
+            isReadOnly: permissionDetails && !permissionDetails.canEdit
+          },
+          documentData: documentAnalysis,
+          recentActivity: activityResult.rows,
+          stats: statsResult.rows[0] || null,
+          hocuspocusWebSocketUrl: 'ws://localhost:1234',
+          recommendedAction: !hasAccess 
+            ? 'User lacks read access to document' 
+            : !documentAnalysis.hasData 
+            ? 'Document has no content to sync'
+            : !documentAnalysis.isValidYjs
+            ? 'Document data needs Y.js conversion for proper sync'
+            : permissionDetails && !permissionDetails.canEdit
+            ? 'User has read-only access - check Hocuspocus read-only protocol handling'
+            : 'Full access user - sync should work normally'
+        }
+      })
+    } finally {
+      client.release()
+    }
+  } catch (error) {
+    console.error('Error in readonly-sync debug:', error)
+    res.status(500).json({
+      success: false,
+      error: error.message
+    })
+  }
+})
 
+// Test endpoint for Hocuspocus protocol compliance
+router.get('/api/collaboration/debug/protocol-test/:owner/:permlink', async (req, res) => {
+  try {
+    const { owner, permlink } = req.params
+    const account = req.headers['x-account']
+    
+    // Simulate the exact authentication flow that Hocuspocus uses
+    const { CollaborationAuth } = require('../collaboration-auth')
+    
+    // Check if user can authenticate
+    const accountKeys = await CollaborationAuth.getAccountKeys(account)
+    if (!accountKeys) {
+      return res.status(401).json({
+        success: false,
+        error: 'Account not found on HIVE blockchain',
+        step: 'authentication'
+      })
+    }
+    
+    // Check document access using same logic as server
+    const hasAccess = await checkDocumentAccess(account, owner, permlink, 'read')
+    
+    if (!hasAccess) {
+      return res.status(403).json({
+        success: false,
+        error: 'No read access to document',
+        step: 'authorization'
+      })
+    }
+    
+    // Test document fetch using same logic as Hocuspocus Database extension
+    const client = await pool.connect()
+    try {
+      const result = await client.query(
+        'SELECT document_data FROM collaboration_documents WHERE owner = $1 AND permlink = $2',
+        [owner, permlink]
+      )
+      
+      let documentState = null
+      let documentValid = false
+      
+      if (result.rows.length > 0 && result.rows[0].document_data) {
+        const rawData = result.rows[0].document_data
+        
+        try {
+          // Try to decode as Y.js binary data (same as server)
+          const Y = require('yjs')
+          const documentBuffer = Buffer.from(rawData, 'base64')
+          const uint8Array = new Uint8Array(documentBuffer)
+          
+          // Validate that this is Y.js binary data
+          const testDoc = new Y.Doc()
+          Y.applyUpdate(testDoc, uint8Array)
+          
+          documentState = Array.from(uint8Array) // Convert to array for JSON
+          documentValid = true
+        } catch (yError) {
+          console.log('Document not in Y.js format, conversion needed:', yError.message)
+          documentValid = false
+        }
+      }
+      
+      res.json({
+        success: true,
+        protocolTest: {
+          step1_authentication: 'PASS - Account exists on HIVE',
+          step2_authorization: 'PASS - User has read access',
+          step3_documentFetch: documentState ? 'PASS - Document loaded' : 'FAIL - No document data',
+          step4_yjsValidation: documentValid ? 'PASS - Valid Y.js format' : 'FAIL - Needs Y.js conversion',
+          documentPath: `${owner}/${permlink}`,
+          websocketUrl: `ws://localhost:1234`,
+          authTokenExample: JSON.stringify({
+            account,
+            challenge: Math.floor(Date.now() / 1000).toString(),
+            pubkey: 'STM7BWmXwvuKHr8FpSPmj8knJspFMPKt3vcetAKKjZ2W2HoRgdkEg',
+            signature: '2021d0d63d340b6d963e9761c0cbe8096c65a94ba9cec69aed35b2f1fe891576b83680e82b1bc8018c1c819e02c63bf49386ffb4475cb67d3eadaf3115367877c4'
+          }),
+          issues: [
+            ...(documentState ? [] : ['Document has no content to sync']),
+            ...(documentValid ? [] : ['Document data is not in Y.js format - server will attempt conversion']),
+            ...(!hasAccess ? ['User lacks read permission'] : [])
+          ]
+        }
+      })
+    } finally {
+      client.release()
+    }
+  } catch (error) {
+    console.error('Error in protocol test:', error)
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      step: 'server_error'
+    })
+  }
+})
 
 module.exports = router 
