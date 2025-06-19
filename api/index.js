@@ -62,6 +62,15 @@ async function startApp() {
 
 startApp();
 
+// HTTPS redirect middleware (missing function that was causing the error)
+exports.https_redirect = (req, res, next) => {
+  // In production, redirect HTTP to HTTPS
+  if (req.header('x-forwarded-proto') !== 'https' && process.env.NODE_ENV === 'production') {
+    return res.redirect(`https://${req.header('host')}${req.url}`)
+  }
+  next()
+}
+
 exports.start = async (array) => {
   console.log('Start loading scripts:', array);
   const promises = [];
@@ -1965,5 +1974,59 @@ exports.testScriptSecurity = async (req, res, next) => {
     res.status(500).json({ error: 'Script security system not properly initialized' });
   }
 };
+
+// Missing API route handlers
+exports.hive_api = async (req, res, next) => {
+  try {
+    res.status(501).json({
+      error: 'Hive API endpoint not implemented',
+      requested: `${req.params.api_type}/${req.params.api_call}`
+    })
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+}
+
+exports.getPostRoute = async (req, res, next) => {
+  try {
+    res.status(501).json({
+      error: 'Get post route not implemented',
+      requested: `@${req.params.author}/${req.params.permlink}`
+    })
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+}
+
+exports.getAuthorPosts = async (req, res, next) => {
+  try {
+    res.status(501).json({
+      error: 'Get author posts not implemented',
+      requested: `@${req.params.author}`
+    })
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+}
+
+exports.getNewPosts = async (req, res, next) => {
+  try {
+    res.status(501).json({
+      error: 'Get new posts not implemented'
+    })
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+}
+
+exports.getTrendingPosts = async (req, res, next) => {
+  try {
+    res.status(501).json({
+      error: 'Get trending posts not implemented'
+    })
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+}
 
 
