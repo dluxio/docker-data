@@ -2029,4 +2029,49 @@ exports.getTrendingPosts = async (req, res, next) => {
   }
 }
 
+// Endpoint to test Y.js update type detection (for debugging)
+exports.test_yjs_update_type = async (req, res, next) => {
+  try {
+    const { updateHex } = req.body
+    
+    if (!updateHex) {
+      return res.status(400).json({ error: 'updateHex is required' })
+    }
+    
+    // Convert hex string back to binary
+    const update = new Uint8Array(Buffer.from(updateHex, 'hex'))
+    
+    // Test content change detection
+    const Y = require('yjs')
+    const testDoc = new Y.Doc()
+    const yText = testDoc.getText('content')
+    
+    const initialContent = yText.toString()
+    const initialLength = yText.length
+    
+    Y.applyUpdate(testDoc, update)
+    
+    const finalContent = yText.toString()
+    const finalLength = yText.length
+    
+    const contentChanged = initialContent !== finalContent || initialLength !== finalLength
+    
+    res.json({
+      isDocumentContentUpdate: contentChanged,
+      analysis: {
+        initialContent,
+        finalContent,
+        initialLength,
+        finalLength,
+        contentChanged,
+        updateSize: update.length,
+        updateHex: updateHex.substring(0, 100) + (updateHex.length > 100 ? '...' : '')
+      }
+    })
+  } catch (error) {
+    console.error('Error testing Y.js update type:', error)
+    res.status(500).json({ error: error.message })
+  }
+}
+
 

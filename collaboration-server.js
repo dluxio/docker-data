@@ -184,6 +184,34 @@ class HiveAuthExtension {
     return `hsl(${hue}, 70%, 60%)`
   }
 
+  // Helper function to determine if an update modifies document content
+  isDocumentContentUpdate(update) {
+    try {
+      // Create a test document and apply the update to see if content changes
+      const testDoc = new Y.Doc()
+      const yText = testDoc.getText('content')
+      
+      // Record initial content
+      const initialContent = yText.toString()
+      const initialLength = yText.length
+      
+      // Apply the update
+      Y.applyUpdate(testDoc, update)
+      
+      // Check if content changed
+      const finalContent = yText.toString()
+      const finalLength = yText.length
+      
+      const contentChanged = initialContent !== finalContent || initialLength !== finalLength
+      
+      return contentChanged
+    } catch (error) {
+      // If we can't safely determine, assume it's a document update (safer)
+      console.log('Error analyzing update, assuming document content update:', error.message)
+      return true
+    }
+  }
+
   // Helper function to decode Y.js update for debugging
   decodeUpdateForDebug(update) {
     try {
@@ -262,26 +290,35 @@ const server = new Server({
       const permissions = context.user.permissions
       
       if (!permissions.canEdit) {
-        // Decode the update to see what the user is trying to change
-        const updateInfo = hiveAuth.decodeUpdateForDebug(update)
+        // First check if this update actually modifies document content
+        // Allow awareness updates (cursor position, presence) to pass through
+        const isContentUpdate = hiveAuth.isDocumentContentUpdate(update)
         
-        // Log unauthorized edit attempt
-        const [owner, permlink] = documentName.split('/')
-        await hiveAuth.logActivity(owner, permlink, context.user.name, 'unauthorized_edit_attempt', {
-          timestamp: new Date().toISOString(),
-          permissionType: permissions.permissionType,
-          updateSize: update.length,
-          attemptedChanges: updateInfo
-        })
-        
-        // Enhanced logging with decoded update
-        console.log(`[beforeHandleMessage] Blocking unauthorized edit:`)
-        console.log(`  User: ${context.user.name}`)
-        console.log(`  Permission: ${permissions.permissionType}`)
-        console.log(`  Document: ${documentName}`)
-        console.log(`  Update info:`, JSON.stringify(updateInfo, null, 2))
-        
-        throw new Error(`Access denied: User ${context.user.name} has ${permissions.permissionType} access but attempted to edit document`)
+        if (isContentUpdate) {
+          // Decode the update to see what the user is trying to change
+          const updateInfo = hiveAuth.decodeUpdateForDebug(update)
+          
+          // Log unauthorized edit attempt
+          const [owner, permlink] = documentName.split('/')
+          await hiveAuth.logActivity(owner, permlink, context.user.name, 'unauthorized_edit_attempt', {
+            timestamp: new Date().toISOString(),
+            permissionType: permissions.permissionType,
+            updateSize: update.length,
+            attemptedChanges: updateInfo
+          })
+          
+          // Enhanced logging with decoded update
+          console.log(`[beforeHandleMessage] Blocking unauthorized document edit:`)
+          console.log(`  User: ${context.user.name}`)
+          console.log(`  Permission: ${permissions.permissionType}`)
+          console.log(`  Document: ${documentName}`)
+          console.log(`  Update info:`, JSON.stringify(updateInfo, null, 2))
+          
+          throw new Error(`Access denied: User ${context.user.name} has ${permissions.permissionType} access but attempted to edit document content`)
+        } else {
+          // This is an awareness update (cursor, presence), allow it
+          console.log(`[beforeHandleMessage] Allowing awareness update for read-only user: ${context.user.name}`)
+        }
       }
     }
   },
