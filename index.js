@@ -235,6 +235,11 @@ api.get("/api/device/test-websocket", testWebSocketIntegration);
 api.get("/api/device/test-message-direction", testMessageDirection);
 api.get("/api/device/protocol-summary", getProtocolSummary);
 
+// Collaboration monitoring endpoints
+api.get("/api/collaboration/activity/:owner/:permlink", API.getCollaborationActivity);
+api.get("/api/collaboration/stats/:owner/:permlink", API.getCollaborationStats);
+api.get("/api/collaboration/test-awareness", API.getCollaborationTestInfo);
+
 api.get("/api/:api_type/:api_call", API.hive_api);
 api.get("/dapps/@:author/:permlink", API.getPostRoute);
 api.get("/dapps/@:author", API.getAuthorPosts);

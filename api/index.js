@@ -2074,7 +2074,7 @@ exports.test_yjs_update_type = async (req, res, next) => {
   }
 }
 
-app.get('/collaboration/activity/:owner/:permlink', async (req, res) => {
+exports.getCollaborationActivity = async (req, res, next) => {
   try {
     const { owner, permlink } = req.params
     const { limit = 50 } = req.query
@@ -2108,9 +2108,9 @@ app.get('/collaboration/activity/:owner/:permlink', async (req, res) => {
       error: 'Failed to fetch collaboration activity'
     })
   }
-})
+}
 
-app.get('/collaboration/stats/:owner/:permlink', async (req, res) => {
+exports.getCollaborationStats = async (req, res, next) => {
   try {
     const { owner, permlink } = req.params
     
@@ -2180,9 +2180,9 @@ app.get('/collaboration/stats/:owner/:permlink', async (req, res) => {
       error: 'Failed to fetch collaboration stats'
     })
   }
-})
+}
 
-app.get('/collaboration/test-awareness', async (req, res) => {
+exports.getCollaborationTestInfo = async (req, res, next) => {
   try {
     const testInfo = {
       message: 'Collaboration server awareness test endpoint',
@@ -2221,6 +2221,6 @@ app.get('/collaboration/test-awareness', async (req, res) => {
       error: 'Test endpoint error'
     })
   }
-})
+}
 
 
