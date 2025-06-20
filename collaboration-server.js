@@ -183,6 +183,39 @@ class HiveAuthExtension {
     const hue = Math.abs(hash) % 360
     return `hsl(${hue}, 70%, 60%)`
   }
+
+  // Helper function to decode Y.js update for debugging
+  decodeUpdateForDebug(update) {
+    try {
+      // Create a temporary Y.js document to apply the update
+      const tempDoc = new Y.Doc()
+      const yText = tempDoc.getText('content')
+      
+      // Apply the update to see what changes it contains
+      Y.applyUpdate(tempDoc, update)
+      
+      // Get the resulting text content
+      const content = yText.toString()
+      
+      // Also try to analyze the update structure
+      const updateInfo = {
+        size: update.length,
+        content: content,
+        contentLength: content.length,
+        updateHex: Buffer.from(update).toString('hex').substring(0, 100) + '...' // First 50 bytes as hex
+      }
+      
+      return updateInfo
+    } catch (error) {
+      // If we can't decode it, at least show some basic info
+      return {
+        size: update.length,
+        error: error.message,
+        updateHex: Buffer.from(update).toString('hex').substring(0, 100) + '...',
+        firstBytes: Array.from(update.slice(0, 20)).map(b => b.toString(16).padStart(2, '0')).join(' ')
+      }
+    }
+  }
 }
 
 // Initialize extensions
@@ -229,17 +262,26 @@ const server = new Server({
       const permissions = context.user.permissions
       
       if (!permissions.canEdit) {
+        // Decode the update to see what the user is trying to change
+        const updateInfo = hiveAuth.decodeUpdateForDebug(update)
+        
         // Log unauthorized edit attempt
         const [owner, permlink] = documentName.split('/')
         await hiveAuth.logActivity(owner, permlink, context.user.name, 'unauthorized_edit_attempt', {
           timestamp: new Date().toISOString(),
           permissionType: permissions.permissionType,
-          updateSize: update.length
+          updateSize: update.length,
+          attemptedChanges: updateInfo
         })
         
-        // Throw error to close connection for unauthorized users
-        console.log(`[beforeHandleMessage] Blocking unauthorized edit: User ${context.user.name} has ${permissions.permissionType} access but attempted to edit document ${documentName}`, update)
-        throw new Error(`Access denied: User ${context.user.name} has ${permissions.permissionType} access but attempted to edit document`, update)
+        // Enhanced logging with decoded update
+        console.log(`[beforeHandleMessage] Blocking unauthorized edit:`)
+        console.log(`  User: ${context.user.name}`)
+        console.log(`  Permission: ${permissions.permissionType}`)
+        console.log(`  Document: ${documentName}`)
+        console.log(`  Update info:`, JSON.stringify(updateInfo, null, 2))
+        
+        throw new Error(`Access denied: User ${context.user.name} has ${permissions.permissionType} access but attempted to edit document`)
       }
     }
   },
