@@ -46,13 +46,37 @@ class HiveAuthExtension {
         throw new Error('Missing authentication headers')
       }
       
-      // Validate challenge timestamp (must be within 1 hour for WebSocket)
+      // Validate challenge timestamp (must be within 24 hours for WebSocket)
       const challengeTime = parseInt(challenge)
       const now = Math.floor(Date.now() / 1000)
-      const maxAge = 24 * 60 * 60 // 1 hour in seconds
+      const maxAge = 24 * 60 * 60 // 24 hours in seconds
+      const ageDifference = now - challengeTime
+      const isFromFuture = challengeTime > (now + 300)
       
-      if (isNaN(challengeTime) || (now - challengeTime) > maxAge || challengeTime > (now + 300)) {
-        throw new Error('Invalid challenge timestamp')
+      if (isNaN(challengeTime)) {
+        console.error(`[onAuthenticate] Invalid challenge format:`, { challenge, account })
+        throw new Error('Challenge must be a valid timestamp')
+      }
+      
+      if (ageDifference > maxAge) {
+        console.error(`[onAuthenticate] Challenge too old:`, { 
+          challenge: challengeTime, 
+          now, 
+          ageDifference, 
+          maxAge,
+          account 
+        })
+        throw new Error(`Challenge timestamp too old (${Math.floor(ageDifference / 3600)} hours old, max 24 hours)`)
+      }
+      
+      if (isFromFuture) {
+        console.error(`[onAuthenticate] Challenge from future:`, { 
+          challenge: challengeTime, 
+          now, 
+          futureBy: challengeTime - now,
+          account 
+        })
+        throw new Error('Challenge timestamp cannot be from the future (max 5 minutes ahead)')
       }
       
       // Get account keys from HIVE blockchain
