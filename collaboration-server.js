@@ -202,7 +202,7 @@ class HiveAuthExtension {
         size: update.length,
         content: content,
         contentLength: content.length,
-        updateHex: Buffer.from(update).toString('hex').substring(0, 100) + '...' // First 50 bytes as hex
+        updateHex: Buffer.from(update).toString('hex') // First 50 bytes as hex
       }
       
       return updateInfo
@@ -211,7 +211,7 @@ class HiveAuthExtension {
       return {
         size: update.length,
         error: error.message,
-        updateHex: Buffer.from(update).toString('hex').substring(0, 100) + '...',
+        updateHex: Buffer.from(update).toString('hex'),
         firstBytes: Array.from(update.slice(0, 20)).map(b => b.toString(16).padStart(2, '0')).join(' ')
       }
     }
