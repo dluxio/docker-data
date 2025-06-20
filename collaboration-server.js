@@ -238,7 +238,7 @@ const server = new Server({
         })
         
         // Throw error to close connection for unauthorized users
-        console.log(`[beforeHandleMessage] Blocking unauthorized edit: User ${context.user.name} has ${permissions.permissionType} access but attempted to edit document ${documentName}`)
+        console.log(`[beforeHandleMessage] Blocking unauthorized edit: User ${context.user.name} has ${permissions.permissionType} access but attempted to edit document ${documentName}`, update)
         throw new Error(`Access denied: User ${context.user.name} has ${permissions.permissionType} access but attempted to edit document`, update)
       }
     }
