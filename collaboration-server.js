@@ -19,6 +19,21 @@ const sha256 = (data) => {
 
 // Custom Hive authentication for WebSocket connections
 class HiveAuthExtension {
+  // Protocol messages that should ALWAYS be allowed regardless of permissions
+  static PROTOCOL_MESSAGE_TYPES = [
+    'awareness',
+    'sync',
+    'queryAwareness',
+    'awarenessUpdate'
+  ]
+
+  // Y.js update types that are awareness-only (not document content)
+  static AWARENESS_UPDATE_TYPES = new Set([
+    0,  // Sync step 1
+    1,  // Sync step 2  
+    2   // Update (but could be awareness only)
+  ])
+
   async onAuthenticate(data) {
     const { token, documentName } = data
     try {
@@ -87,9 +102,11 @@ class HiveAuthExtension {
         user: {
           id: account,
           name: account,
-          color: this.generateUserColor(account),
+          color: this.generateUserColor(account, permissions.permissionType),
           // Store permissions in user context for later use
-          permissions: permissions
+          permissions: permissions,
+          // Add connection timestamp for grace period handling
+          connectedAt: Date.now()
         }
       }
     } catch (error) {
@@ -173,7 +190,7 @@ class HiveAuthExtension {
     }
   }
   
-  generateUserColor(account) {
+  generateUserColor(account, permissionType = 'owner') {
     // Generate a consistent color for the user based on their account name
     const hash = account.split('').reduce((a, b) => {
       a = ((a << 5) - a) + b.charCodeAt(0)
@@ -181,34 +198,106 @@ class HiveAuthExtension {
     }, 0)
     
     const hue = Math.abs(hash) % 360
+    
+    // Slightly muted colors for read-only users
+    if (permissionType === 'public') {
+      return `hsl(${hue}, 50%, 65%)`
+    }
+    
     return `hsl(${hue}, 70%, 60%)`
+  }
+
+  // Enhanced function to determine if an update is awareness-only or contains document content
+  isAwarenessOnlyUpdate(update) {
+    try {
+      // Create test documents to analyze the update
+      const beforeDoc = new Y.Doc()
+      const afterDoc = new Y.Doc()
+      
+      // Get initial state
+      const beforeText = beforeDoc.getText('content')
+      const beforeContent = beforeText.toString()
+      const beforeLength = beforeText.length
+      
+      // Apply update
+      Y.applyUpdate(afterDoc, update)
+      const afterText = afterDoc.getText('content')
+      const afterContent = afterText.toString()
+      const afterLength = afterText.length
+      
+      // Check if document content changed
+      const contentChanged = beforeContent !== afterContent || beforeLength !== afterLength
+      
+      // If content didn't change, this is likely an awareness-only update
+      if (!contentChanged) {
+        return true
+      }
+      
+      // Additional check: see if this is a small update that might be cursor positioning
+      // Awareness updates are typically small (< 100 bytes)
+      if (update.length < 100) {
+        // Analyze the update structure to see if it contains only awareness data
+        const updateArray = Array.from(update)
+        
+        // Y.js awareness updates often start with specific byte patterns
+        // This is a heuristic check - Y.js internal structure may vary
+        const hasAwarenessPattern = updateArray.length < 50 && (
+          updateArray[0] === 0 || // Common sync protocol start
+          updateArray[0] === 1 || // Sync step
+          updateArray[0] === 2    // Update that might be awareness
+        )
+        
+        if (hasAwarenessPattern) {
+          console.log(`[isAwarenessOnlyUpdate] Small update detected (${update.length} bytes), likely awareness`)
+          return true
+        }
+      }
+      
+      return false
+    } catch (error) {
+      // If we can't analyze safely, assume it contains document content (safer)
+      console.log('Error analyzing update for awareness, assuming document content:', error.message)
+      return false
+    }
   }
 
   // Helper function to determine if an update modifies document content
   isDocumentContentUpdate(update) {
+    return !this.isAwarenessOnlyUpdate(update)
+  }
+
+  // Check if user is in grace period (first 10 seconds after connection)
+  isInGracePeriod(user) {
+    if (!user || !user.connectedAt) return false
+    const gracePeriodMs = 10000 // 10 seconds
+    return (Date.now() - user.connectedAt) < gracePeriodMs
+  }
+
+  // Enhanced Y.js sync protocol handling
+  isSyncProtocolMessage(update) {
     try {
-      // Create a test document and apply the update to see if content changes
-      const testDoc = new Y.Doc()
-      const yText = testDoc.getText('content')
+      // Check if this is a Y.js sync protocol message
+      const updateArray = Array.from(update)
       
-      // Record initial content
-      const initialContent = yText.toString()
-      const initialLength = yText.length
+      // Y.js sync messages typically start with specific bytes
+      // Step 1 (SyncStep1): requests document state
+      // Step 2 (SyncStep2): sends document state
+      // These should be allowed regardless of permissions
       
-      // Apply the update
-      Y.applyUpdate(testDoc, update)
+      if (updateArray.length > 0) {
+        const messageType = updateArray[0]
+        
+        // Common Y.js protocol message types
+        if (messageType === 0 || messageType === 1) {
+          console.log(`[isSyncProtocolMessage] Detected sync protocol message type ${messageType}`)
+          return true
+        }
+      }
       
-      // Check if content changed
-      const finalContent = yText.toString()
-      const finalLength = yText.length
-      
-      const contentChanged = initialContent !== finalContent || initialLength !== finalLength
-      
-      return contentChanged
+      return false
     } catch (error) {
-      // If we can't safely determine, assume it's a document update (safer)
-      console.log('Error analyzing update, assuming document content update:', error.message)
-      return true
+      console.log('Error checking sync protocol message:', error.message)
+      return false
     }
   }
 
@@ -288,37 +377,63 @@ const server = new Server({
     // Check if user has edit permissions
     if (context.user && context.user.permissions) {
       const permissions = context.user.permissions
+      const user = context.user
       
+      // Allow all updates during grace period for initial sync
+      if (hiveAuth.isInGracePeriod(user)) {
+        console.log(`[beforeHandleMessage] Grace period active for ${user.name}, allowing sync protocol`)
+        return
+      }
+      
+      // Always allow Y.js sync protocol messages regardless of permissions
+      if (hiveAuth.isSyncProtocolMessage(update)) {
+        console.log(`[beforeHandleMessage] Allowing Y.js sync protocol message for ${user.name}`)
+        return
+      }
+      
+      // For users without edit permissions
       if (!permissions.canEdit) {
-        // First check if this update actually modifies document content
-        // Allow awareness updates (cursor position, presence) to pass through
-        const isContentUpdate = hiveAuth.isDocumentContentUpdate(update)
+        // Check if this is an awareness-only update (cursor position, user presence)
+        const isAwarenessOnly = hiveAuth.isAwarenessOnlyUpdate(update)
         
-        if (isContentUpdate) {
-          // Decode the update to see what the user is trying to change
-          const updateInfo = hiveAuth.decodeUpdateForDebug(update)
-          
-          // Log unauthorized edit attempt
-          const [owner, permlink] = documentName.split('/')
-          await hiveAuth.logActivity(owner, permlink, context.user.name, 'unauthorized_edit_attempt', {
-            timestamp: new Date().toISOString(),
-            permissionType: permissions.permissionType,
-            updateSize: update.length,
-            attemptedChanges: updateInfo
-          })
-          
-          // Enhanced logging with decoded update
-          console.log(`[beforeHandleMessage] Blocking unauthorized document edit:`)
-          console.log(`  User: ${context.user.name}`)
-          console.log(`  Permission: ${permissions.permissionType}`)
-          console.log(`  Document: ${documentName}`)
-          console.log(`  Update info:`, JSON.stringify(updateInfo, null, 2))
-          
-          throw new Error(`Access denied: User ${context.user.name} has ${permissions.permissionType} access but attempted to edit document content`)
-        } else {
-          // This is an awareness update (cursor, presence), allow it
-          console.log(`[beforeHandleMessage] Allowing awareness update for read-only user: ${context.user.name}`)
+        if (isAwarenessOnly) {
+          // Allow awareness updates - these are just cursor position and user presence
+          console.log(`[beforeHandleMessage] Allowing awareness update for read-only user: ${user.name}`)
+          return
         }
+        
+        // This is a document content update - block it
+        const updateInfo = hiveAuth.decodeUpdateForDebug(update)
+        
+        // Log unauthorized edit attempt
+        const [owner, permlink] = documentName.split('/')
+        await hiveAuth.logActivity(owner, permlink, user.name, 'unauthorized_edit_attempt', {
+          timestamp: new Date().toISOString(),
+          permissionType: permissions.permissionType,
+          updateSize: update.length,
+          attemptedChanges: updateInfo
+        })
+        
+        // Enhanced logging with decoded update
+        console.log(`[beforeHandleMessage] Blocking unauthorized document edit:`)
+        console.log(`  User: ${user.name}`)
+        console.log(`  Permission: ${permissions.permissionType}`)
+        console.log(`  Document: ${documentName}`)
+        console.log(`  Update size: ${update.length} bytes`)
+        console.log(`  Update info:`, JSON.stringify(updateInfo, null, 2))
+        
+        // Provide clear error message based on user's permission level
+        let errorMessage = `Access denied: User ${user.name} has ${permissions.permissionType} access.`
+        if (permissions.permissionType === 'public') {
+          errorMessage += ' You can view the document and see other users\' cursors, but cannot edit the content.'
+        } else {
+          errorMessage += ' You can only view this document.'
+        }
+        
+        throw new Error(errorMessage)
+      } else {
+        // User has edit permissions - log successful edit capability
+        console.log(`[beforeHandleMessage] User ${user.name} has edit permissions (${permissions.permissionType})`)
       }
     }
   },
@@ -344,6 +459,15 @@ const server = new Server({
     const [owner, permlink] = documentName.split('/')
     
     if (context.user) {
+      const user = context.user
+      const permissions = user.permissions
+      
+      // Log connection with permission info
+      console.log(`[onConnect] User ${user.name} connected to ${documentName}`)
+      console.log(`  Permission: ${permissions.permissionType}`)
+      console.log(`  Can Edit: ${permissions.canEdit}`)
+      console.log(`  Can Read: ${permissions.canRead}`)
+      
       // Update active user count
       try {
         const client = await pool.connect()
@@ -362,6 +486,42 @@ const server = new Server({
         }
       } catch (error) {
         console.error('Error updating active users:', error)
+      }
+      
+      // Log detailed connection activity
+      await hiveAuth.logActivity(owner, permlink, user.name, 'detailed_connect', {
+        timestamp: new Date().toISOString(),
+        permissions: permissions,
+        userAgent: data.request?.headers?.['user-agent'] || 'unknown',
+        ip: data.request?.socket?.remoteAddress || 'unknown'
+      })
+    }
+  },
+  
+  // Handle when document sync is complete for a user
+  async onSynced(data) {
+    const { documentName, context } = data
+    
+    if (context.user) {
+      const user = context.user
+      const permissions = user.permissions
+      const [owner, permlink] = documentName.split('/')
+      
+      console.log(`[onSynced] Document sync completed for ${user.name}`)
+      console.log(`  Permission: ${permissions.permissionType}`)
+      console.log(`  Document: ${documentName}`)
+      
+      // Log sync completion
+      await hiveAuth.logActivity(owner, permlink, user.name, 'sync_completed', {
+        timestamp: new Date().toISOString(),
+        permissionType: permissions.permissionType,
+        canEdit: permissions.canEdit,
+        canRead: permissions.canRead
+      })
+      
+      // For read-only users, ensure they understand their capabilities
+      if (!permissions.canEdit) {
+        console.log(`[onSynced] Read-only user ${user.name} sync completed - awareness enabled, editing disabled`)
       }
     }
   },

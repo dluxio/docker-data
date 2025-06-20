@@ -2074,4 +2074,153 @@ exports.test_yjs_update_type = async (req, res, next) => {
   }
 }
 
+app.get('/collaboration/activity/:owner/:permlink', async (req, res) => {
+  try {
+    const { owner, permlink } = req.params
+    const { limit = 50 } = req.query
+    
+    const result = await pool.query(`
+      SELECT 
+        account,
+        activity_type,
+        activity_data,
+        created_at
+      FROM collaboration_activity 
+      WHERE owner = $1 AND permlink = $2
+      ORDER BY created_at DESC
+      LIMIT $3
+    `, [owner, permlink, parseInt(limit)])
+    
+    res.json({
+      success: true,
+      document: `${owner}/${permlink}`,
+      activity: result.rows.map(row => ({
+        account: row.account,
+        type: row.activity_type,
+        data: row.activity_data,
+        timestamp: row.created_at
+      }))
+    })
+  } catch (error) {
+    console.error('Error fetching collaboration activity:', error)
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch collaboration activity'
+    })
+  }
+})
+
+app.get('/collaboration/stats/:owner/:permlink', async (req, res) => {
+  try {
+    const { owner, permlink } = req.params
+    
+    const [statsResult, docResult, permissionsResult] = await Promise.all([
+      pool.query(`
+        SELECT 
+          active_users,
+          total_edits,
+          last_activity,
+          document_size
+        FROM collaboration_stats 
+        WHERE owner = $1 AND permlink = $2
+      `, [owner, permlink]),
+      
+      pool.query(`
+        SELECT 
+          document_name,
+          is_public,
+          created_at,
+          updated_at
+        FROM collaboration_documents 
+        WHERE owner = $1 AND permlink = $2
+      `, [owner, permlink]),
+      
+      pool.query(`
+        SELECT 
+          account,
+          permission_type,
+          can_read,
+          can_edit,
+          can_post_to_hive,
+          granted_by,
+          granted_at
+        FROM collaboration_permissions 
+        WHERE owner = $1 AND permlink = $2
+        ORDER BY granted_at DESC
+      `, [owner, permlink])
+    ])
+    
+    const stats = statsResult.rows[0] || {
+      active_users: 0,
+      total_edits: 0,
+      last_activity: null,
+      document_size: 0
+    }
+    
+    const document = docResult.rows[0] || null
+    const permissions = permissionsResult.rows
+    
+    res.json({
+      success: true,
+      document: `${owner}/${permlink}`,
+      stats,
+      document_info: document,
+      permissions,
+      permission_summary: {
+        total_permissions: permissions.length,
+        can_edit: permissions.filter(p => p.can_edit).length,
+        can_read_only: permissions.filter(p => p.can_read && !p.can_edit).length,
+        is_public: document?.is_public || false
+      }
+    })
+  } catch (error) {
+    console.error('Error fetching collaboration stats:', error)
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch collaboration stats'
+    })
+  }
+})
+
+app.get('/collaboration/test-awareness', async (req, res) => {
+  try {
+    const testInfo = {
+      message: 'Collaboration server awareness test endpoint',
+      server_improvements: {
+        awareness_handling: 'Read-only users can now send cursor position updates',
+        sync_protocol: 'Y.js sync protocol messages are allowed during grace period',
+        grace_period: '10 seconds after connection for initial sync',
+        message_types: {
+          allowed_for_readonly: [
+            'awareness updates (cursor position)',
+            'sync protocol messages',
+            'user presence updates'
+          ],
+          blocked_for_readonly: [
+            'document content modifications',
+            'text insertions/deletions',
+            'structural changes'
+          ]
+        }
+      },
+      testing_instructions: {
+        step1: 'Connect a read-only user to a collaborative document',
+        step2: 'Verify they can see other users cursors',
+        step3: 'Verify their cursor is visible to other users',
+        step4: 'Verify they cannot edit document content',
+        step5: 'Check activity logs at /collaboration/activity/owner/permlink'
+      },
+      websocket_url: 'ws://localhost:1234',
+      test_document: 'testuser/test-document'
+    }
+    
+    res.json(testInfo)
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'Test endpoint error'
+    })
+  }
+})
+
 
