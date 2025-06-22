@@ -18,6 +18,9 @@ class HiveMonitor {
             lastSuccess: Date.now(),
             consecutiveErrors: 0
         };
+        // State for tracking transactions for read notifications
+        this.pendingReadTransactions = new Map(); // txid -> { username, timestamp, data }
+        this.readTransactionResolvers = new Map(); // txid -> { resolve, reject, timeout }
     }
 
     async initialize() {
@@ -141,6 +144,11 @@ class HiveMonitor {
                 // Adaptive delay based on API health
                 const delay = this.apiHealth.status === 'healthy' ? 1000 : this.retryDelay;
                 await new Promise(resolve => setTimeout(resolve, delay));
+
+                // Clean up old transactions periodically
+                if (Date.now() % 60000 < delay) { // Approximately every minute
+                    this.cleanupOldTransactions();
+                }
             } catch (error) {
                 console.error('Error processing blocks:', error);
                 this.apiHealth.errorCount++;
@@ -155,13 +163,15 @@ class HiveMonitor {
         if (!block || !block.transactions) return;
 
         for (const tx of block.transactions) {
+            const txId = tx.transaction_id;
+            
             // Process regular operations
             for (const op of tx.operations) {
                 const [opType, opData] = op;
                 const handler = this.operationHandlers.get(opType);
                 if (handler) {
                     try {
-                        await handler(opData, block);
+                        await handler(opData, block, txId);
                     } catch (error) {
                         console.error(`Error processing operation ${opType}:`, error);
                     }
@@ -175,7 +185,7 @@ class HiveMonitor {
                     const handler = this.operationHandlers.get(`virtual_${vopType}`);
                     if (handler) {
                         try {
-                            await handler(vopData, block);
+                            await handler(vopData, block, txId);
                         } catch (error) {
                             console.error(`Error processing virtual operation ${vopType}:`, error);
                         }
@@ -213,15 +223,75 @@ class HiveMonitor {
             lastProcessedBlock: this.lastProcessedBlock,
             activeListeners: this.operationHandlers.size,
             apiHealth: this.apiHealth,
-            retryDelay: this.retryDelay
+            retryDelay: this.retryDelay,
+            pendingReadTransactions: this.pendingReadTransactions.size,
+            readTransactionResolvers: this.readTransactionResolvers.size
         };
+    }
+
+    // Add method to wait for a specific transaction to be processed
+    waitForReadTransaction(txId, timeout = 120000) {
+        return new Promise((resolve, reject) => {
+            // Check if transaction is already processed
+            if (this.pendingReadTransactions.has(txId)) {
+                const txData = this.pendingReadTransactions.get(txId);
+                this.pendingReadTransactions.delete(txId);
+                resolve(txData);
+                return;
+            }
+
+            // Set up timeout
+            const timeoutId = setTimeout(() => {
+                if (this.readTransactionResolvers.has(txId)) {
+                    this.readTransactionResolvers.delete(txId);
+                    reject(new Error(`Transaction ${txId} not found within timeout period`));
+                }
+            }, timeout);
+
+            // Store resolver for when transaction is found
+            this.readTransactionResolvers.set(txId, {
+                resolve,
+                reject,
+                timeout: timeoutId
+            });
+        });
+    }
+
+    // Method to process a found read transaction
+    processFoundReadTransaction(txId, username, data) {
+        // Check if someone is waiting for this transaction
+        if (this.readTransactionResolvers.has(txId)) {
+            const resolver = this.readTransactionResolvers.get(txId);
+            clearTimeout(resolver.timeout);
+            this.readTransactionResolvers.delete(txId);
+            resolver.resolve({ username, data, txId });
+        } else {
+            // Store for future API calls
+            this.pendingReadTransactions.set(txId, {
+                username,
+                data,
+                timestamp: Date.now()
+            });
+        }
+    }
+
+    // Clean up old pending transactions (older than 5 minutes)
+    cleanupOldTransactions() {
+        const now = Date.now();
+        const maxAge = 5 * 60 * 1000; // 5 minutes
+        
+        for (const [txId, txData] of this.pendingReadTransactions.entries()) {
+            if (now - txData.timestamp > maxAge) {
+                this.pendingReadTransactions.delete(txId);
+            }
+        }
     }
 }
 
 const hiveMonitor = new HiveMonitor();
 
 // Register handler for custom JSON operation
-hiveMonitor.registerOperationHandler('custom_json', async (opData, block) => {
+hiveMonitor.registerOperationHandler('custom_json', async (opData, block, txId) => {
     const { required_auths, required_posting_auths, id, json } = opData;
     
     // Check if this is our notification operation
@@ -238,26 +308,15 @@ hiveMonitor.registerOperationHandler('custom_json', async (opData, block) => {
             
             const [action, data] = parsedJson;
             
-            if (action === 'setLastRead' && data.date && data.dlux) {
-                const readDate = new Date(data.date);
-                
-                // Update local notifications
-                await pool.query(`
-                    UPDATE user_notifications 
-                    SET read_at = $1, status = 'read'
-                    WHERE username = $2 
-                    AND (read_at IS NULL OR read_at < $1)
-                    AND (expires_at IS NULL OR expires_at > NOW())
-                `, [readDate, account]);
-
-                // Update notification settings for Hive Bridge notifications
-                await pool.query(`
-                    INSERT INTO notification_settings (username, last_read)
-                    VALUES ($1, $2)
-                    ON CONFLICT (username) 
-                    DO UPDATE SET last_read = $2
-                    WHERE notification_settings.last_read < $2
-                `, [account, readDate]);
+            if (action === 'setLastRead' && data.date) {
+                // Store transaction for API processing instead of directly updating database
+                console.log(`Found setLastRead transaction ${txId} for user ${account}`);
+                hiveMonitor.processFoundReadTransaction(txId, account, {
+                    action,
+                    data,
+                    blockNum: block.block_num || block.block_id,
+                    timestamp: block.timestamp
+                });
             }
         } catch (error) {
             console.error('Error processing notification custom_json:', error);
@@ -266,7 +325,7 @@ hiveMonitor.registerOperationHandler('custom_json', async (opData, block) => {
 });
 
 // Register handler for comment operations to capture dApp posts
-hiveMonitor.registerOperationHandler('comment', async (opData, block) => {
+hiveMonitor.registerOperationHandler('comment', async (opData, block, txId) => {
     try {
         const { author, permlink, parent_author, parent_permlink, json_metadata } = opData;
         

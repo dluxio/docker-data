@@ -305,76 +305,111 @@ api.get("/api/collaboration/activity/:owner/:permlink", API.getCollaborationActi
 api.get("/api/collaboration/stats/:owner/:permlink", API.getCollaborationStats);
 api.get("/api/collaboration/test-awareness", API.getCollaborationTestInfo);
 
-api.get('/api/debug/summary', async (req, res) => {
-    try {
-      const systemInfo = {
-        timestamp: new Date().toISOString(),
-        uptime: Math.floor(process.uptime()),
-        memory: {
-          used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
-          total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024)
-        }
+// Debug endpoint removed after troubleshooting session
+
+// Set last read notifications endpoint
+api.post('/api/set-last-read/:txid', async (req, res) => {
+  const { txid } = req.params;
+  
+  if (!txid) {
+    return res.status(400).json({
+      success: false,
+      error: 'Transaction ID is required'
+    });
+  }
+
+  try {
+    // Import hive monitor here to avoid circular dependency
+    const hiveMonitor = require('./hive-monitor');
+    
+    console.log(`Looking for transaction ${txid} for read notification...`);
+    
+    // Wait for the transaction to be processed (2 minute timeout)
+    const txData = await hiveMonitor.waitForReadTransaction(txid, 120000);
+    
+    console.log(`Found transaction ${txid} for user ${txData.username}`);
+    
+    // Now perform the database operations that we removed from the blockchain monitor
+    const readDate = new Date(txData.data.data.date);
+    
+    // Update local notifications
+    const localResult = await pool.query(`
+        UPDATE user_notifications 
+        SET read_at = $1, status = 'read'
+        WHERE username = $2 
+        AND (read_at IS NULL OR read_at < $1)
+        AND (expires_at IS NULL OR expires_at > NOW())
+    `, [readDate, txData.username]);
+
+    // Update notification settings for Hive Bridge notifications
+    const settingsResult = await pool.query(`
+        INSERT INTO notification_settings (username, last_read)
+        VALUES ($1, $2)
+        ON CONFLICT (username) 
+        DO UPDATE SET last_read = $2
+        WHERE notification_settings.last_read < $2
+    `, [txData.username, readDate]);
+    
+    console.log(`Updated notifications for ${txData.username}: ${localResult.rowCount} local notifications, settings updated`);
+    
+    res.json({
+      success: true,
+      message: 'Notifications marked as read',
+      data: {
+        txId: txid,
+        username: txData.username,
+        readDate: readDate,
+        localNotificationsUpdated: localResult.rowCount,
+        settingsUpdated: true,
+        blockNum: txData.data.blockNum
       }
-      
-      // Test database connection
-      let dbStatus = 'unknown'
-      try {
-        const dbTest = await pool.query('SELECT NOW() as current_time')
-        dbStatus = 'connected'
-      } catch (error) {
-        dbStatus = `error: ${error.message}`
-      }
-      
-      // Test HIVE API
-      let hiveApiStatus = 'unknown'
-      let sampleAccountTest = null
-      try {
-        const hiveResponse = await fetch(config.clientURL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            jsonrpc: '2.0',
-            method: 'condenser_api.get_accounts',
-            params: [['disregardfiat']],
-            id: 1
-          })
-        })
-        
-        const hiveResult = await hiveResponse.json()
-        if (hiveResult?.result && hiveResult.result.length > 0) {
-          hiveApiStatus = 'connected'
-          sampleAccountTest = 'success'
-        } else {
-          hiveApiStatus = 'connected but no results'
-        }
-      } catch (error) {
-        hiveApiStatus = `error: ${error.message}`
-      }
-      
-      res.json({
-        success: true,
-        summary: {
-          system: systemInfo,
-          services: {
-            database: dbStatus,
-            hiveApi: {
-              status: hiveApiStatus,
-              url: config.clientURL,
-              sampleTest: sampleAccountTest
-            }
-          }
-        }
-      })
-      
-    } catch (error) {
-      console.error('Error in debug summary:', error)
+    });
+    
+  } catch (error) {
+    console.error(`Error processing set-last-read for ${txid}:`, error);
+    
+    if (error.message.includes('not found within timeout')) {
+      res.status(408).json({
+        success: false,
+        error: 'Transaction not found within timeout period',
+        message: 'The transaction may not exist or has not been processed yet'
+      });
+    } else {
       res.status(500).json({
         success: false,
-        error: 'Debug summary error',
+        error: 'Failed to process read notification',
         message: error.message
-      })
+      });
     }
-  })
+  }
+});
+
+// Debug endpoint to check transaction status
+api.get('/api/debug/read-transactions', async (req, res) => {
+  try {
+    const hiveMonitor = require('./hive-monitor');
+    const status = hiveMonitor.getStatus();
+    
+    res.json({
+      success: true,
+      data: {
+        monitorStatus: status,
+        pendingTransactions: Array.from(hiveMonitor.pendingReadTransactions.entries()).map(([txId, data]) => ({
+          txId,
+          username: data.username,
+          timestamp: new Date(data.timestamp).toISOString(),
+          ageMinutes: Math.round((Date.now() - data.timestamp) / 60000)
+        })),
+        activeResolvers: Array.from(hiveMonitor.readTransactionResolvers.keys())
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
 
 api.get("/api/:api_type/:api_call", API.hive_api);
 api.get("/dapps/@:author/:permlink", API.getPostRoute);
