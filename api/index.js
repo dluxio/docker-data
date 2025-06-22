@@ -575,8 +575,20 @@ async function getDetails(uid, script, opt, req) {
       Date: Date
     };
     
+    // Extract JavaScript from HTML script if needed
+    let scriptContent = RAM[script];
+    if (scriptContent.includes('<!DOCTYPE html>') || scriptContent.includes('<html>')) {
+      // Extract JavaScript from HTML
+      const scriptMatch = scriptContent.match(/<script[^>]*>([\s\S]*?)<\/script>/);
+      if (scriptMatch && scriptMatch[1]) {
+        scriptContent = scriptMatch[1].trim();
+        // Remove HTML comments if present
+        scriptContent = scriptContent.replace(/\/\/<.*?>/g, '').replace(/<!--[\s\S]*?-->/g, '');
+      }
+    }
+
     const codeToRun = `(function() {
-      const scriptFunc = ${RAM[script]};
+      const scriptFunc = ${scriptContent};
       return scriptFunc(${JSON.stringify(sanitizedUid)}, ${opt?.exe ? JSON.stringify(sanitizedExe) : 'undefined'});
     })()`;
 
@@ -673,8 +685,20 @@ async function makePNG(uid, script, opt, req) {
       Date: Date
     };
 
+    // Extract JavaScript from HTML script if needed
+    let scriptContent = RAM[script];
+    if (scriptContent.includes('<!DOCTYPE html>') || scriptContent.includes('<html>')) {
+      // Extract JavaScript from HTML
+      const scriptMatch = scriptContent.match(/<script[^>]*>([\s\S]*?)<\/script>/);
+      if (scriptMatch && scriptMatch[1]) {
+        scriptContent = scriptMatch[1].trim();
+        // Remove HTML comments if present
+        scriptContent = scriptContent.replace(/\/\/<.*?>/g, '').replace(/<!--[\s\S]*?-->/g, '');
+      }
+    }
+
     const codeToRun = `(function() {
-      const scriptFunc = ${RAM[script]};
+      const scriptFunc = ${scriptContent};
       return scriptFunc(${JSON.stringify(sanitizedUid)}, ${opt ? JSON.stringify(sanitizedOpt) : 'undefined'});
     })()`;
 
