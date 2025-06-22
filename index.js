@@ -124,6 +124,43 @@ async function initializeDatabase() {
       CREATE INDEX IF NOT EXISTS idx_script_execution_logs_executed_at ON script_execution_logs(executed_at);
     `);
 
+    // Set up notification tables
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS user_notifications (
+        id SERIAL PRIMARY KEY,
+        username VARCHAR(50) NOT NULL,
+        type VARCHAR(50) NOT NULL,
+        title VARCHAR(255) NOT NULL,
+        message TEXT,
+        data JSONB,
+        status VARCHAR(20) DEFAULT 'unread',
+        read_at TIMESTAMP WITH TIME ZONE,
+        expires_at TIMESTAMP WITH TIME ZONE,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS notification_settings (
+        id SERIAL PRIMARY KEY,
+        username VARCHAR(50) UNIQUE NOT NULL,
+        last_read TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        email_notifications BOOLEAN DEFAULT true,
+        push_notifications BOOLEAN DEFAULT true,
+        notification_frequency VARCHAR(20) DEFAULT 'immediate',
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Create indexes for notification tables
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_user_notifications_username ON user_notifications(username);
+      CREATE INDEX IF NOT EXISTS idx_user_notifications_status ON user_notifications(status);
+      CREATE INDEX IF NOT EXISTS idx_user_notifications_created ON user_notifications(created_at);
+      CREATE INDEX IF NOT EXISTS idx_notification_settings_username ON notification_settings(username);
+    `);
+
     console.log('Database initialization completed successfully');
 
   } catch (error) {
