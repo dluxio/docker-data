@@ -62,6 +62,70 @@ async function initializeDatabase() {
       ON CONFLICT (id) DO NOTHING
     `);
 
+    // Set up script security tables
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS script_whitelist (
+        id SERIAL PRIMARY KEY,
+        script_hash VARCHAR(64) UNIQUE NOT NULL,
+        script_name VARCHAR(255),
+        description TEXT,
+        whitelisted_by VARCHAR(50) NOT NULL,
+        whitelisted_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        is_active BOOLEAN DEFAULT true,
+        risk_level VARCHAR(20) DEFAULT 'medium',
+        usage_count INTEGER DEFAULT 0,
+        last_used TIMESTAMP WITH TIME ZONE,
+        notes TEXT
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS script_reviews (
+        id SERIAL PRIMARY KEY,
+        script_hash VARCHAR(64) UNIQUE NOT NULL,
+        script_content TEXT NOT NULL,
+        request_source VARCHAR(50) NOT NULL,
+        requested_by VARCHAR(50) NOT NULL,
+        request_context JSONB,
+        risk_assessment JSONB,
+        auto_flagged BOOLEAN DEFAULT false,
+        flagged_reasons TEXT[],
+        status VARCHAR(20) DEFAULT 'pending',
+        reviewed_by VARCHAR(50),
+        reviewed_at TIMESTAMP WITH TIME ZONE,
+        reviewer_notes TEXT,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS script_execution_logs (
+        id SERIAL PRIMARY KEY,
+        script_hash VARCHAR(64) NOT NULL,
+        executed_by VARCHAR(50) NOT NULL,
+        execution_context JSONB,
+        success BOOLEAN NOT NULL,
+        error_message TEXT,
+        execution_time_ms INTEGER,
+        request_ip INET,
+        user_agent TEXT,
+        executed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Create indexes for script security tables
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_script_whitelist_hash ON script_whitelist(script_hash);
+      CREATE INDEX IF NOT EXISTS idx_script_whitelist_active ON script_whitelist(is_active);
+      CREATE INDEX IF NOT EXISTS idx_script_reviews_hash ON script_reviews(script_hash);
+      CREATE INDEX IF NOT EXISTS idx_script_reviews_status ON script_reviews(status);
+      CREATE INDEX IF NOT EXISTS idx_script_execution_logs_hash ON script_execution_logs(script_hash);
+      CREATE INDEX IF NOT EXISTS idx_script_execution_logs_executed_at ON script_execution_logs(executed_at);
+    `);
+
+    console.log('Database initialization completed successfully');
+
   } catch (error) {
     console.error('Failed to initialize database:', error);
     process.exit(1);
