@@ -777,6 +777,36 @@ async function setupCollaborationDatabase() {
         CREATE INDEX IF NOT EXISTS idx_collab_stats_owner_permlink ON collaboration_stats(owner, permlink);
       `)
       
+      // Create script_review_queue table
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS script_review_queue (
+          id SERIAL PRIMARY KEY,
+          script_hash VARCHAR(64) UNIQUE NOT NULL,
+          script_content TEXT NOT NULL,
+          status VARCHAR(20) DEFAULT 'pending',
+          source VARCHAR(255),
+          requested_by VARCHAR(50),
+          context JSONB,
+          created_at TIMESTAMP DEFAULT NOW(),
+          updated_at TIMESTAMP DEFAULT NOW()
+        )
+      `)
+
+      // Create script_execution_log table
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS script_execution_log (
+          id SERIAL PRIMARY KEY,
+          script_hash VARCHAR(64) NOT NULL,
+          executed_by VARCHAR(50),
+          execution_context JSONB,
+          execution_time_ms INTEGER,
+          success BOOLEAN,
+          error_message TEXT,
+          ip_address VARCHAR(45),
+          user_agent TEXT,
+          created_at TIMESTAMP DEFAULT NOW()
+        )
+      `)
 
     } finally {
       client.release()
