@@ -411,6 +411,33 @@ api.get('/api/debug/read-transactions', async (req, res) => {
   }
 });
 
+// Test endpoint to simulate a read transaction for testing
+api.post('/api/debug/simulate-read-transaction', async (req, res) => {
+  try {
+    const { username = 'testuser', txid = 'test-' + Date.now() } = req.body;
+    const hiveMonitor = require('./hive-monitor');
+    
+    // Simulate finding a read transaction
+    hiveMonitor.processFoundReadTransaction(txid, username, {
+      action: 'setLastRead',
+      data: { date: new Date().toISOString() },
+      blockNum: 12345,
+      timestamp: new Date().toISOString()
+    });
+    
+    res.json({
+      success: true,
+      message: 'Simulated read transaction stored',
+      data: { txid, username }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 api.get("/api/:api_type/:api_call", API.hive_api);
 api.get("/dapps/@:author/:permlink", API.getPostRoute);
 api.get("/dapps/@:author", API.getAuthorPosts);
