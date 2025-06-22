@@ -241,7 +241,78 @@ api.get("/api/collaboration/activity/:owner/:permlink", API.getCollaborationActi
 api.get("/api/collaboration/stats/:owner/:permlink", API.getCollaborationStats);
 api.get("/api/collaboration/test-awareness", API.getCollaborationTestInfo);
 
-// Content and search routes
+api.get('/api/debug/summary', async (req, res) => {
+    try {
+      const systemInfo = {
+        timestamp: new Date().toISOString(),
+        uptime: Math.floor(process.uptime()),
+        memory: {
+          used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+          total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024)
+        }
+      }
+      
+      // Test database connection
+      let dbStatus = 'unknown'
+      try {
+        const dbTest = await pool.query('SELECT NOW() as current_time')
+        dbStatus = 'connected'
+      } catch (error) {
+        dbStatus = `error: ${error.message}`
+      }
+      
+      // Test HIVE API
+      let hiveApiStatus = 'unknown'
+      let sampleAccountTest = null
+      try {
+        const hiveResponse = await fetch(config.clientURL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'condenser_api.get_accounts',
+            params: [['disregardfiat']],
+            id: 1
+          })
+        })
+        
+        const hiveResult = await hiveResponse.json()
+        if (hiveResult?.result && hiveResult.result.length > 0) {
+          hiveApiStatus = 'connected'
+          sampleAccountTest = 'success'
+        } else {
+          hiveApiStatus = 'connected but no results'
+        }
+      } catch (error) {
+        hiveApiStatus = `error: ${error.message}`
+      }
+      
+      res.json({
+        success: true,
+        summary: {
+          system: systemInfo,
+          services: {
+            database: dbStatus,
+            hiveApi: {
+              status: hiveApiStatus,
+              url: config.clientURL,
+              sampleTest: sampleAccountTest
+            }
+          }
+        }
+      })
+      
+    } catch (error) {
+      console.error('Error in debug summary:', error)
+      res.status(500).json({
+        success: false,
+        error: 'Debug summary error',
+        message: error.message
+      })
+    }
+  })
+
+api.get("/api/:api_type/:api_call", API.hive_api);
 api.get("/dapps/@:author/:permlink", API.getPostRoute);
 api.get("/dapps/@:author", API.getAuthorPosts);
 api.get("/new", API.getNewPosts);
@@ -256,9 +327,6 @@ api.get("/img/details/:set/:uid", API.detailsNFT);
 api.get("/render/:script/:uid", API.renderNFT);
 api.get("/img/render/:set/:uid", API.renderNFT);
 api.get("/hc/tickers", API.tickers);
-
-// Generic API route (should be last among GET routes with similar paths)
-api.get("/api/:api_type/:api_call", API.hive_api);
 
 http.listen(config.port, async function () {
 

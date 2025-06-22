@@ -242,6 +242,89 @@ function typeMask(bitMask) {
   return arr;
 }
 
+function getNewPosts(amt, off, bitMask) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const types = typeMask(bitMask);
+      if (types.length === 0) {
+        resolve([]);
+        return;
+      }
+      const query = `
+        SELECT *
+        FROM posts
+        WHERE type = ANY($1)
+        ORDER BY block DESC
+        OFFSET $2 ROWS FETCH FIRST $3 ROWS ONLY;`;
+      const params = [types, off, amt];
+      const res = await executeQuery(query, params, 'Error - Failed to get new posts');
+
+      for (const item of res.rows) {
+        item.url = `/dlux/@${item.author}/${item.permlink}`;
+      }
+      resolve(res.rows);
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+function getTrendingPosts(amt, off, bitMask) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const types = typeMask(bitMask);
+      if (types.length === 0) {
+        resolve([]);
+        return;
+      }
+      // Order by votes or some trending metric if available, otherwise by recent activity
+      const query = `
+        SELECT *
+        FROM posts
+        WHERE type = ANY($1)
+        ORDER BY votes DESC, block DESC
+        OFFSET $2 ROWS FETCH FIRST $3 ROWS ONLY;`;
+      const params = [types, off, amt];
+      const res = await executeQuery(query, params, 'Error - Failed to get trending posts');
+
+      for (const item of res.rows) {
+        item.url = `/dlux/@${item.author}/${item.permlink}`;
+      }
+      resolve(res.rows);
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+function getDBPromotedPosts(amt, off, bitMask) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const types = typeMask(bitMask);
+      if (types.length === 0) {
+        resolve([]);
+        return;
+      }
+      // Order by some promotion metric if available, otherwise by votes
+      const query = `
+        SELECT *
+        FROM posts
+        WHERE type = ANY($1)
+        ORDER BY promoted DESC, votes DESC, block DESC
+        OFFSET $2 ROWS FETCH FIRST $3 ROWS ONLY;`;
+      const params = [types, off, amt];
+      const res = await executeQuery(query, params, 'Error - Failed to get promoted posts');
+
+      for (const item of res.rows) {
+        item.url = `/dlux/@${item.author}/${item.permlink}`;
+      }
+      resolve(res.rows);
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
 exports.getPromotedPosts = async (req, res, next) => {
   let amt = parseInt(req.query.a) || 50;
   let off = parseInt(req.query.o) || 0;
@@ -2010,22 +2093,24 @@ exports.getAuthorPosts = async (req, res, next) => {
 }
 
 exports.getNewPosts = async (req, res, next) => {
+  const { amt = 50, off = 0, bitMask = 255 } = req.query;
   try {
-    res.status(501).json({
-      error: 'Get new posts not implemented'
-    })
+    const results = await getNewPosts(parseInt(amt), parseInt(off), parseInt(bitMask));
+    res.send(JSON.stringify({ result: results, node: config.username }, null, 3));
   } catch (error) {
-    res.status(500).json({ error: error.message })
+    console.error("Error in getNewPosts:", error);
+    res.status(500).send(JSON.stringify({ error: "Failed to get new posts", node: config.username }, null, 3));
   }
 }
 
 exports.getTrendingPosts = async (req, res, next) => {
+  const { amt = 50, off = 0, bitMask = 255 } = req.query;
   try {
-    res.status(501).json({
-      error: 'Get trending posts not implemented'
-    })
+    const results = await getTrendingPosts(parseInt(amt), parseInt(off), parseInt(bitMask));
+    res.send(JSON.stringify({ result: results, node: config.username }, null, 3));
   } catch (error) {
-    res.status(500).json({ error: error.message })
+    console.error("Error in getTrendingPosts:", error);
+    res.status(500).send(JSON.stringify({ error: "Failed to get trending posts", node: config.username }, null, 3));
   }
 }
 
