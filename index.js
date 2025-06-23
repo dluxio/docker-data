@@ -175,6 +175,27 @@ var http = require("http").Server(api);
 const wsMonitor = initializeWebSocketMonitor(http);
 
 // Non-authenticated system endpoints (MUST BE FIRST - before any auth middleware)
+
+// Debug endpoint for blockchain status (no auth)
+api.get("/api/debug/blockchain-status", async (req, res) => {
+  try {
+    const hiveMonitor = require('./hive-monitor');
+    const status = hiveMonitor.getStatus();
+    
+    res.json({
+      success: true,
+      blockchainStatus: status,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      stack: error.stack
+    });
+  }
+});
+
 api.get('/api/system/versions', async (req, res) => {
   try {
     // Get package.json to read versions
@@ -351,6 +372,8 @@ api.post("/api/scripts/review/:reviewId/action", scriptAuthMiddleware, API.revie
 api.get("/api/scripts/whitelist", scriptAuthMiddleware, API.getWhitelistedScripts);
 api.delete("/api/scripts/whitelist/:scriptHash", scriptAuthMiddleware, API.removeFromWhitelist);
 api.get("/api/scripts/logs", scriptAuthMiddleware, API.getScriptExecutionLogs);
+
+
 
 
 
