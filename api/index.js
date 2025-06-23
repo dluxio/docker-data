@@ -1933,7 +1933,7 @@ exports.getPendingScriptReviews = async (req, res, next) => {
     const params = [];
     let paramIndex = 1;
     if (risk_level) {
-      whereClause += ` AND risk_assessment = $${paramIndex++}`;
+      whereClause += ` AND risk_assessment->>'riskLevel' = $${paramIndex++}`;
       params.push(risk_level);
     }
     const query = `
@@ -1942,7 +1942,7 @@ exports.getPendingScriptReviews = async (req, res, next) => {
              LEFT(script_content, 200) as script_preview, created_at
       FROM script_reviews 
       ${whereClause}
-      ORDER BY CASE risk_assessment WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END, created_at DESC
+      ORDER BY CASE risk_assessment->>'riskLevel' WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END, created_at DESC
       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
     params.push(parseInt(limit), parseInt(offset));
     const result = await executeQuery(query, params);
@@ -2012,10 +2012,10 @@ exports.getWhitelistedScripts = async (req, res, next) => {
       params.push(`%${search}%`);
     }
     const query = `
-      SELECT script_hash, script_name, approved_by, approved_at, risk_level, description, version, tags, 
-             LEFT(script_content, 200) as script_preview
+      SELECT script_hash, script_name, whitelisted_by as approved_by, whitelisted_at as approved_at, risk_level, description, notes, 
+             'No content preview' as script_preview
       FROM script_whitelist 
-      ${whereClause} ORDER BY approved_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+      ${whereClause} ORDER BY whitelisted_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
     params.push(parseInt(limit), parseInt(offset));
     const result = await executeQuery(query, params);
     res.json({ scripts: result.rows, totalCount: result.rows.length });
