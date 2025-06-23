@@ -342,14 +342,15 @@ api.get("/api/collaboration/activity/:owner/:permlink", API.getCollaborationActi
 api.get("/api/collaboration/stats/:owner/:permlink", API.getCollaborationStats);
 api.get("/api/collaboration/test-awareness", API.getCollaborationTestInfo);
 
-// Script management endpoints
-api.get("/api/scripts/stats", API.getScriptStats);
-api.get("/api/scripts/pending", API.getPendingScriptReviews);
-api.get("/api/scripts/review/:reviewId", API.getScriptReviewDetails);
-api.post("/api/scripts/review/:reviewId/action", API.reviewScript);
-api.get("/api/scripts/whitelist", API.getWhitelistedScripts);
-api.delete("/api/scripts/whitelist/:scriptHash", API.removeFromWhitelist);
-api.get("/api/scripts/logs", API.getScriptExecutionLogs);
+// Script management endpoints (with authentication)
+const scriptAuthMiddleware = createAuthMiddleware(false, false);
+api.get("/api/scripts/stats", scriptAuthMiddleware, API.getScriptStats);
+api.get("/api/scripts/pending", scriptAuthMiddleware, API.getPendingScriptReviews);
+api.get("/api/scripts/review/:reviewId", scriptAuthMiddleware, API.getScriptReviewDetails);
+api.post("/api/scripts/review/:reviewId/action", scriptAuthMiddleware, API.reviewScript);
+api.get("/api/scripts/whitelist", scriptAuthMiddleware, API.getWhitelistedScripts);
+api.delete("/api/scripts/whitelist/:scriptHash", scriptAuthMiddleware, API.removeFromWhitelist);
+api.get("/api/scripts/logs", scriptAuthMiddleware, API.getScriptExecutionLogs);
 
 // Debug endpoint removed after troubleshooting session
 

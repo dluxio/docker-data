@@ -1233,4 +1233,8 @@ window.DLUX_COMPONENTS['payment-channels-view'] = {
             }
         }
     }
-}; 
+};
+
+// Register both component names for compatibility
+window.DLUX_COMPONENTS = window.DLUX_COMPONENTS || {};
+window.DLUX_COMPONENTS['payment-channels'] = window.DLUX_COMPONENTS['payment-channels-view']; 

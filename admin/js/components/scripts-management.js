@@ -1,4 +1,10 @@
 const ScriptsManagement = {
+  props: {
+    apiClient: {
+      type: Object,
+      required: true
+    }
+  },
   template: `
     <div class="container-fluid">
       <div class="row">
@@ -214,12 +220,12 @@ const ScriptsManagement = {
                       {{ selectedReview.safety_analysis.riskLevel }}
                     </span>
                   </p>
-                  <p v-if="selectedReview.safety_analysis.isAutoFlagged">
-                    <strong>Flagged Reasons:</strong>
+                  <div v-if="selectedReview.safety_analysis.isAutoFlagged">
+                    <p><strong>Flagged Reasons:</strong></p>
                     <ul>
                       <li v-for="reason in selectedReview.safety_analysis.flaggedReasons" :key="reason">{{ reason }}</li>
                     </ul>
-                  </p>
+                  </div>
                 </div>
                 <div class="col-md-6">
                   <h4>Script Content</h4>
@@ -296,10 +302,8 @@ const ScriptsManagement = {
       }
     },
     async fetchStats() {
-      const response = await fetch('/api/scripts/stats');
-      if (!response.ok) throw new Error('Failed to fetch stats');
-      const data = await response.json();
-      this.stats = data.stats;
+      const data = await this.apiClient.get('/api/scripts/stats');
+      this.stats = data.stats || {};
     },
     async fetchCurrentViewData() {
       const offset = (this.currentPage - 1) * this.itemsPerPage;
@@ -312,9 +316,7 @@ const ScriptsManagement = {
       const endpoint = endpoints[this.currentView];
       if (!endpoint) return;
 
-      const response = await fetch(endpoint);
-      if (!response.ok) throw new Error(`Failed to fetch ${this.currentView}`);
-      const data = await response.json();
+      const data = await this.apiClient.get(endpoint);
       this[this.currentView] = data;
     },
     setView(view) {
@@ -345,9 +347,7 @@ const ScriptsManagement = {
     },
     async viewReviewDetails(reviewId) {
       try {
-        const response = await fetch(`/api/scripts/review/${reviewId}`);
-        if (!response.ok) throw new Error('Failed to fetch review details');
-        this.selectedReview = await response.json();
+        this.selectedReview = await this.apiClient.get(`/api/scripts/review/${reviewId}`);
         this.reviewAction.script_name = `Script-${this.selectedReview.review.script_hash.substring(0, 8)}`;
         this.reviewAction.risk_level = this.selectedReview.safety_analysis.riskLevel;
         this.openModal();
@@ -360,20 +360,11 @@ const ScriptsManagement = {
       if (!confirm(`Are you sure you want to ${action} this script?`)) return;
 
       try {
-        const response = await fetch(`/api/scripts/review/${this.selectedReview.review.id}/action`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: action,
-            reviewer_username: this.$root.user.name, // Assuming user is in root
-            ...this.reviewAction
-          })
+        await this.apiClient.post(`/api/scripts/review/${this.selectedReview.review.id}/action`, {
+          action: action,
+          reviewer_username: this.$parent.currentUser, // Use parent's currentUser 
+          ...this.reviewAction
         });
-        
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.error || 'Failed to process review');
-        }
         
         alert(`Script ${action}ed successfully.`);
         this.closeModal();

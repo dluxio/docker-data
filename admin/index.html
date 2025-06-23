@@ -553,7 +553,7 @@
                     </flags-view>
 
                     <div v-if="currentView === 'scripts'">
-                        <scripts-management></scripts-management>
+                        <scripts-management :api-client="apiClient"></scripts-management>
                     </div>
 
                     <div v-if="currentView === 'payment-channels'">

@@ -154,7 +154,7 @@ const BlockchainMonitorView = {
             this.loading = true;
             try {
                 const response = await fetch('/api/onboarding/admin/blockchain-monitor-status', {
-                    headers: this.apiClient.getAuthHeaders()
+                    headers: this.apiClient.headers
                 });
                 
                 if (!response.ok) {
@@ -188,7 +188,7 @@ const BlockchainMonitorView = {
                 const action = this.isRunning ? 'stop' : 'start';
                 const response = await fetch(`/api/onboarding/admin/blockchain-monitor/${action}`, {
                     method: 'POST',
-                    headers: this.apiClient.getAuthHeaders()
+                    headers: this.apiClient.headers
                 });
                 
                 if (!response.ok) {
