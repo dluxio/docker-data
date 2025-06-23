@@ -255,5 +255,6 @@ const BlockchainMonitorView = {
     }
 };
 
-// Register the component
-Vue.createApp(BlockchainMonitorView).mount('#blockchain-monitor'); 
+// Register component with the global DLUX_COMPONENTS object
+window.DLUX_COMPONENTS = window.DLUX_COMPONENTS || {};
+window.DLUX_COMPONENTS['blockchain-monitor-view'] = BlockchainMonitorView; 

@@ -342,6 +342,15 @@ api.get("/api/collaboration/activity/:owner/:permlink", API.getCollaborationActi
 api.get("/api/collaboration/stats/:owner/:permlink", API.getCollaborationStats);
 api.get("/api/collaboration/test-awareness", API.getCollaborationTestInfo);
 
+// Script management endpoints
+api.get("/api/scripts/stats", API.getScriptStats);
+api.get("/api/scripts/pending", API.getPendingScriptReviews);
+api.get("/api/scripts/review/:reviewId", API.getScriptReviewDetails);
+api.post("/api/scripts/review/:reviewId/action", API.reviewScript);
+api.get("/api/scripts/whitelist", API.getWhitelistedScripts);
+api.delete("/api/scripts/whitelist/:scriptHash", API.removeFromWhitelist);
+api.get("/api/scripts/logs", API.getScriptExecutionLogs);
+
 // Debug endpoint removed after troubleshooting session
 
 // Set last read notifications endpoint
@@ -439,33 +448,6 @@ api.get('/api/debug/read-transactions', async (req, res) => {
         })),
         activeResolvers: Array.from(hiveMonitor.readTransactionResolvers.keys())
       }
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-// Test endpoint to simulate a read transaction for testing
-api.post('/api/debug/simulate-read-transaction', async (req, res) => {
-  try {
-    const { username = 'testuser', txid = 'test-' + Date.now() } = req.body;
-    const hiveMonitor = require('./hive-monitor');
-    
-    // Simulate finding a read transaction
-    hiveMonitor.processFoundReadTransaction(txid, username, {
-      action: 'setLastRead',
-      data: { date: new Date().toISOString() },
-      blockNum: 12345,
-      timestamp: new Date().toISOString()
-    });
-    
-    res.json({
-      success: true,
-      message: 'Simulated read transaction stored',
-      data: { txid, username }
     });
   } catch (error) {
     res.status(500).json({

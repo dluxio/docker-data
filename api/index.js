@@ -1862,7 +1862,7 @@ async function addScriptToReview(scriptHash, scriptContent, source, requestedBy,
     `;
     const result = await executeQuery(query, [
       scriptHash, scriptContent, source, requestedBy,
-      JSON.stringify(context), safety.riskLevel, safety.isAutoFlagged, safety.flaggedReasons
+      JSON.stringify(context), JSON.stringify({ riskLevel: safety.riskLevel }), safety.isAutoFlagged, safety.flaggedReasons
     ], 'Error adding script to review');
     return result.rows.length > 0 ? result.rows[0].id : null;
   } catch (error) {
@@ -1899,10 +1899,10 @@ exports.getScriptStats = async (req, res, next) => {
   try {
     const pendingResult = await executeQuery('SELECT COUNT(*) as count FROM script_reviews WHERE status = $1', ['pending']);
     const whitelistResult = await executeQuery('SELECT COUNT(*) as count FROM script_whitelist WHERE is_active = true');
-    const executionsResult = await executeQuery('SELECT COUNT(*) as count FROM script_execution_log');
+    const executionsResult = await executeQuery('SELECT COUNT(*) as count FROM script_execution_logs');
     const successResult = await executeQuery(`
       SELECT COUNT(*) as total, SUM(CASE WHEN success = true THEN 1 ELSE 0 END) as successful
-      FROM script_execution_log WHERE executed_at >= CURRENT_DATE - INTERVAL '7 days'`);
+      FROM script_execution_logs WHERE executed_at >= CURRENT_DATE - INTERVAL '7 days'`);
     const riskResult = await executeQuery(`
       SELECT risk_level, COUNT(*) as count FROM script_whitelist WHERE is_active = true GROUP BY risk_level`);
 
@@ -2060,11 +2060,11 @@ exports.getScriptExecutionLogs = async (req, res, next) => {
     }
     const query = `
       SELECT sel.*, sw.script_name, sw.risk_level
-      FROM script_execution_log sel LEFT JOIN script_whitelist sw ON sel.script_hash = sw.script_hash
+      FROM script_execution_logs sel LEFT JOIN script_whitelist sw ON sel.script_hash = sw.script_hash
       ${whereClause} ORDER BY sel.executed_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
     params.push(parseInt(limit), parseInt(offset));
     const result = await executeQuery(query, params);
-    const countResult = await executeQuery(`SELECT COUNT(*) as total FROM script_execution_log sel ${whereClause}`, params.slice(0,-2));
+    const countResult = await executeQuery(`SELECT COUNT(*) as total FROM script_execution_logs sel ${whereClause}`, params.slice(0,-2));
     res.json({
       logs: result.rows,
       totalCount: parseInt(countResult.rows[0].total)
@@ -2079,14 +2079,14 @@ exports.testScriptSecurity = async (req, res, next) => {
     const results = await Promise.all([
       executeQuery('SELECT COUNT(*) as count FROM script_whitelist'),
       executeQuery('SELECT COUNT(*) as count FROM script_reviews'), 
-      executeQuery('SELECT COUNT(*) as count FROM script_execution_log')
+      executeQuery('SELECT COUNT(*) as count FROM script_execution_logs')
     ]);
     res.json({
       message: 'Script security system is ready',
       tables: {
         script_whitelist: parseInt(results[0].rows[0].count),
         script_reviews: parseInt(results[1].rows[0].count),
-        script_execution_log: parseInt(results[2].rows[0].count)
+        script_execution_logs: parseInt(results[2].rows[0].count)
       }
     });
   } catch (error) {
