@@ -182,9 +182,69 @@ api.get("/api/debug/blockchain-status", async (req, res) => {
     const hiveMonitor = require('./hive-monitor');
     const status = hiveMonitor.getStatus();
     
+    // Get current block from Hive API for comparison
+    const fetch = require('node-fetch');
+    const hiveResponse = await fetch('https://api.hive.blog', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        method: "condenser_api.get_dynamic_global_properties",
+        params: [],
+        id: 1
+      })
+    });
+    const hiveData = await hiveResponse.json();
+    const currentBlock = hiveData.result.head_block_number;
+    const blocksBehind = currentBlock - parseInt(status.lastProcessedBlock);
+    
     res.json({
       success: true,
       blockchainStatus: status,
+      currentHiveBlock: currentBlock,
+      blocksBehind: blocksBehind,
+      isHealthy: blocksBehind < 100,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      stack: error.stack
+    });
+  }
+});
+
+// Emergency blockchain catch-up endpoint (no auth for now)
+api.post("/api/debug/blockchain-catchup", async (req, res) => {
+  try {
+    const hiveMonitor = require('./hive-monitor');
+    
+    // Update the last processed block to current - 100 to catch up quickly
+    const fetch = require('node-fetch');
+    const hiveResponse = await fetch('https://api.hive.blog', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        method: "condenser_api.get_dynamic_global_properties",
+        params: [],
+        id: 1
+      })
+    });
+    const hiveData = await hiveResponse.json();
+    const currentBlock = hiveData.result.head_block_number;
+    const catchupBlock = currentBlock - 100; // Only go back 100 blocks
+    
+    // Update database to the catch-up block
+    await pool.query('UPDATE hive_state SET last_block = $1 WHERE id = 1', [catchupBlock]);
+    
+    res.json({
+      success: true,
+      message: 'Blockchain monitor catch-up initiated',
+      previousBlock: hiveMonitor.getStatus().lastProcessedBlock,
+      newBlock: catchupBlock,
+      currentBlock: currentBlock,
       timestamp: new Date().toISOString()
     });
   } catch (error) {
