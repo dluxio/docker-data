@@ -364,14 +364,14 @@ api.get("/api/debug/script-pending", async (req, res) => {
       whereClause += ` AND risk_assessment->>'riskLevel' = $${paramIndex++}`;
       params.push(risk_level);
     }
-    const query = `
-      SELECT id, script_hash, script_name, request_source, requested_by,
-             request_context, risk_assessment, auto_flagged, flagged_reasons,
-             LEFT(script_content, 200) as script_preview, created_at
-      FROM script_reviews 
-      ${whereClause}
-      ORDER BY CASE risk_assessment->>'riskLevel' WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END, created_at DESC
-      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+         const query = `
+       SELECT id, script_hash, request_source, requested_by,
+              request_context, risk_assessment, auto_flagged, flagged_reasons,
+              LEFT(script_content, 200) as script_preview, created_at
+       FROM script_reviews 
+       ${whereClause}
+       ORDER BY CASE risk_assessment->>'riskLevel' WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END, created_at DESC
+       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
     params.push(parseInt(limit), parseInt(offset));
     
     const result = await pool.query(query, params);

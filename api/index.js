@@ -1937,7 +1937,7 @@ exports.getPendingScriptReviews = async (req, res, next) => {
       params.push(risk_level);
     }
     const query = `
-      SELECT id, script_hash, script_name, request_source, requested_by,
+      SELECT id, script_hash, request_source, requested_by,
              request_context, risk_assessment, auto_flagged, flagged_reasons,
              LEFT(script_content, 200) as script_preview, created_at
       FROM script_reviews 
