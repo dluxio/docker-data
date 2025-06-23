@@ -352,27 +352,43 @@ api.get("/api/scripts/whitelist", scriptAuthMiddleware, API.getWhitelistedScript
 api.delete("/api/scripts/whitelist/:scriptHash", scriptAuthMiddleware, API.removeFromWhitelist);
 api.get("/api/scripts/logs", scriptAuthMiddleware, API.getScriptExecutionLogs);
 
-// Test endpoint for admin UI debugging (to be removed after testing)
-api.get("/api/scripts/test-status", async (req, res) => {
+// Debug endpoint to check database tables
+api.get("/api/debug/script-tables", async (req, res) => {
   try {
+    // Check if tables exist and their structure
+    const tables = await pool.query(`
+      SELECT table_name, column_name, data_type 
+      FROM information_schema.columns 
+      WHERE table_name IN ('script_reviews', 'script_whitelist', 'script_execution_logs')
+      ORDER BY table_name, ordinal_position
+    `);
+    
+    // Check row counts
+    const counts = await Promise.all([
+      pool.query('SELECT COUNT(*) as count FROM script_reviews'),
+      pool.query('SELECT COUNT(*) as count FROM script_whitelist'), 
+      pool.query('SELECT COUNT(*) as count FROM script_execution_logs')
+    ]);
+    
     res.json({
       success: true,
-      message: "Script management system is operational",
-      timestamp: new Date().toISOString(),
-      endpoints: [
-        "GET /api/scripts/stats - Script statistics",
-        "GET /api/scripts/pending - Pending script reviews", 
-        "GET /api/scripts/whitelist - Whitelisted scripts",
-        "GET /api/scripts/logs - Script execution logs"
-      ]
+      tables: tables.rows,
+      counts: {
+        script_reviews: parseInt(counts[0].rows[0].count),
+        script_whitelist: parseInt(counts[1].rows[0].count),
+        script_execution_logs: parseInt(counts[2].rows[0].count)
+      }
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
+      detail: error.detail
     });
   }
 });
+
+
 
 // Debug endpoint removed after troubleshooting session
 
