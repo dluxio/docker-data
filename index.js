@@ -352,6 +352,28 @@ api.get("/api/scripts/whitelist", scriptAuthMiddleware, API.getWhitelistedScript
 api.delete("/api/scripts/whitelist/:scriptHash", scriptAuthMiddleware, API.removeFromWhitelist);
 api.get("/api/scripts/logs", scriptAuthMiddleware, API.getScriptExecutionLogs);
 
+// Test endpoint for admin UI debugging (to be removed after testing)
+api.get("/api/scripts/test-status", async (req, res) => {
+  try {
+    res.json({
+      success: true,
+      message: "Script management system is operational",
+      timestamp: new Date().toISOString(),
+      endpoints: [
+        "GET /api/scripts/stats - Script statistics",
+        "GET /api/scripts/pending - Pending script reviews", 
+        "GET /api/scripts/whitelist - Whitelisted scripts",
+        "GET /api/scripts/logs - Script execution logs"
+      ]
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // Debug endpoint removed after troubleshooting session
 
 // Set last read notifications endpoint
