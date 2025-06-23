@@ -352,6 +352,19 @@ api.get("/api/scripts/whitelist", scriptAuthMiddleware, API.getWhitelistedScript
 api.delete("/api/scripts/whitelist/:scriptHash", scriptAuthMiddleware, API.removeFromWhitelist);
 api.get("/api/scripts/logs", scriptAuthMiddleware, API.getScriptExecutionLogs);
 
+// Debug endpoint for script pending (without auth)
+api.get("/api/debug/script-pending", async (req, res) => {
+  try {
+    const result = await API.getPendingScriptReviews(req, res, () => {});
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      stack: error.stack
+    });
+  }
+});
+
 // Debug endpoint to check database tables
 api.get("/api/debug/script-tables", async (req, res) => {
   try {
