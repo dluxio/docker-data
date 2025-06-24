@@ -2012,10 +2012,10 @@ exports.getWhitelistedScripts = async (req, res, next) => {
       params.push(`%${search}%`);
     }
     const query = `
-      SELECT script_hash, script_name, whitelisted_by as approved_by, created_at as approved_at, risk_level, description, notes, 
+      SELECT script_hash, script_name, whitelisted_by as approved_by, whitelisted_at as approved_at, risk_level, description, notes, 
              'No content preview' as script_preview
       FROM script_whitelist 
-      ${whereClause} ORDER BY created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+      ${whereClause} ORDER BY whitelisted_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
     params.push(parseInt(limit), parseInt(offset));
     const result = await executeQuery(query, params);
     res.json({ scripts: result.rows, totalCount: result.rows.length });
