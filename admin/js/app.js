@@ -294,7 +294,7 @@ const app = createApp({
                 const [actStatusData, channelsData, blockchainStatusData, adminAccountData] = await Promise.all([
                     this.apiClient.get('/api/onboarding/admin/act-status'),
                     this.apiClient.get('/api/onboarding/admin/channels?limit=10'),
-                    this.apiClient.get('/api/onboarding/status').catch(() => ({ success: false })), // Use public endpoint as fallback
+                    this.apiClient.get('/api/onboarding/admin/blockchain-monitor-status').catch(() => ({ success: false })), // Get blockchain monitor status
                     this.apiClient.get('/api/onboarding/admin/account-info').catch(() => ({ success: false }))
                 ]);
 
@@ -342,7 +342,7 @@ const app = createApp({
 
                 // Process blockchain monitoring data
                 if (blockchainStatusData.success) {
-                    this.dashboardData.blockchainMonitoring = blockchainStatusData.services?.blockchainMonitor || null;
+                    this.dashboardData.blockchainMonitoring = blockchainStatusData.data || null;
                 }
 
                 // Verify pending channels
