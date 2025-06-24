@@ -29,6 +29,7 @@
     "hive-tx": "^4.3.0",
     "hocuspocus-extension-postgres": "^0.1.1",
     "joi": "^17.13.3",
+    "lib0": "^0.2.109",
     "monero-javascript": "^0.8.4",
     "monero-ts": "^0.9.2",
     "node-fetch": "^2.6.1",

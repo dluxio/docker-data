@@ -6,6 +6,8 @@ const config = require('./config')
 const { CollaborationAuth } = require('./collaboration-auth')
 const { createHash } = require('crypto')
 const Y = require('yjs')
+const { decoding } = require('lib0')
+const awarenessProtocol = require('y-protocols/awareness')
 
 // Initialize database pool
 const pool = new Pool({
@@ -231,58 +233,38 @@ class HiveAuthExtension {
     return `hsl(${hue}, 70%, 60%)`
   }
 
-  // Enhanced function to determine if an update is awareness-only or contains document content
-  isAwarenessOnlyUpdate(update) {
+  // Properly detect Y.js awareness protocol messages
+  isAwarenessProtocolMessage(update) {
     try {
-      // Create test documents to analyze the update
-      const beforeDoc = new Y.Doc()
-      const afterDoc = new Y.Doc()
+      // In Hocuspocus, the message format is:
+      // [messageType, ...data]
+      // Where messageType 1 = Awareness (from Hocuspocus MessageType enum)
+      const updateArray = new Uint8Array(update)
+      if (updateArray.length === 0) return false
       
-      // Get initial state
-      const beforeText = beforeDoc.getText('content')
-      const beforeContent = beforeText.toString()
-      const beforeLength = beforeText.length
+      const messageType = updateArray[0]
       
-      // Apply update
-      Y.applyUpdate(afterDoc, update)
-      const afterText = afterDoc.getText('content')
-      const afterContent = afterText.toString()
-      const afterLength = afterText.length
-      
-      // Check if document content changed
-      const contentChanged = beforeContent !== afterContent || beforeLength !== afterLength
-      
-      // If content didn't change, this is likely an awareness-only update
-      if (!contentChanged) {
-        return true
-      }
-      
-      // Additional check: see if this is a small update that might be cursor positioning
-      // Awareness updates are typically small (< 100 bytes)
-      if (update.length < 100) {
-        // Analyze the update structure to see if it contains only awareness data
-        const updateArray = Array.from(update)
-        
-        // Y.js awareness updates often start with specific byte patterns
-        // This is a heuristic check - Y.js internal structure may vary
-        const hasAwarenessPattern = updateArray.length < 50 && (
-          updateArray[0] === 0 || // Common sync protocol start
-          updateArray[0] === 1 || // Sync step
-          updateArray[0] === 2    // Update that might be awareness
-        )
-        
-        if (hasAwarenessPattern) {
-          console.log(`[isAwarenessOnlyUpdate] Small update detected (${update.length} bytes), likely awareness`)
+      // Hocuspocus MessageType.Awareness = 1
+      if (messageType === 1) {
+        // Additional validation: awareness messages should have specific structure
+        // They contain awareness update data after the message type
+        if (updateArray.length > 1) {
+          console.log(`[isAwarenessProtocolMessage] Detected Hocuspocus awareness message (type ${messageType}, size ${updateArray.length})`)
           return true
         }
       }
       
       return false
     } catch (error) {
-      // If we can't analyze safely, assume it contains document content (safer)
-      console.log('Error analyzing update for awareness, assuming document content:', error.message)
+      console.error('[isAwarenessProtocolMessage] Error:', error)
       return false
     }
+  }
+
+  // Legacy method kept for backwards compatibility but deprecated
+  isAwarenessOnlyUpdate(update) {
+    // Use the new protocol-based detection
+    return this.isAwarenessProtocolMessage(update)
   }
 
   // Helper function to determine if an update modifies document content
@@ -301,18 +283,15 @@ class HiveAuthExtension {
   isSyncProtocolMessage(update) {
     try {
       // Check if this is a Y.js sync protocol message
-      const updateArray = Array.from(update)
-      
-      // Y.js sync messages typically start with specific bytes
-      // Step 1 (SyncStep1): requests document state
-      // Step 2 (SyncStep2): sends document state
-      // These should be allowed regardless of permissions
+      const updateArray = new Uint8Array(update)
       
       if (updateArray.length > 0) {
         const messageType = updateArray[0]
         
-        // Common Y.js protocol message types
-        if (messageType === 0 || messageType === 1) {
+        // Hocuspocus MessageType enum:
+        // Sync = 0 (includes both sync step 1 and 2)
+        // SyncReply = 4 (same as Sync but won't trigger another SyncStep1)
+        if (messageType === 0 || messageType === 4) {
           console.log(`[isSyncProtocolMessage] Detected sync protocol message type ${messageType}`)
           return true
         }
@@ -355,6 +334,29 @@ class HiveAuthExtension {
         updateHex: Buffer.from(update).toString('hex'),
         firstBytes: Array.from(update.slice(0, 20)).map(b => b.toString(16).padStart(2, '0')).join(' ')
       }
+    }
+  }
+  
+  // Debug helper to identify message types
+  debugMessageType(update) {
+    const updateArray = new Uint8Array(update)
+    const messageType = updateArray.length > 0 ? updateArray[0] : -1
+    
+    const typeNames = {
+      0: 'Sync Step 1',
+      1: 'Awareness',
+      2: 'Auth',
+      3: 'Query Awareness',
+      // Add other known types as needed
+    }
+    
+    return {
+      type: messageType,
+      typeName: typeNames[messageType] || 'Unknown',
+      size: update.length,
+      isAwareness: this.isAwarenessProtocolMessage(update),
+      isSync: this.isSyncProtocolMessage(update),
+      firstBytes: Array.from(updateArray.slice(0, 10)).map(b => b.toString(16).padStart(2, '0')).join(' ')
     }
   }
 }
@@ -417,21 +419,24 @@ const server = new Server({
       
       // For users without edit permissions
       if (!permissions.canEdit) {
-        // Check if this is an awareness-only update (cursor position, user presence)
-        const isAwarenessOnly = hiveAuth.isAwarenessOnlyUpdate(update)
+        // Allow awareness updates for all authenticated users
+        if (hiveAuth.isAwarenessProtocolMessage(update)) {
+          console.log(`[beforeHandleMessage] Allowing awareness update from read-only user: ${user.name}`)
+          return // Allow awareness to be broadcast
+        }
         
-        if (isAwarenessOnly) {
-          // Allow awareness updates - these are just cursor position and user presence
-          console.log(`[beforeHandleMessage] Allowing awareness update for read-only user: ${user.name}`)
+        // Allow sync protocol messages (already implemented)
+        if (hiveAuth.isSyncProtocolMessage(update)) {
+          console.log(`[beforeHandleMessage] Allowing sync protocol message for ${user.name}`)
           return
         }
         
         // This is a document content update - block it
         const updateInfo = hiveAuth.decodeUpdateForDebug(update)
         
-        // Log unauthorized edit attempt
+        // Log as document edit attempt (not unauthorized_edit_attempt for clarity)
         const [owner, permlink] = documentName.split('/')
-        await hiveAuth.logActivity(owner, permlink, user.name, 'unauthorized_edit_attempt', {
+        await hiveAuth.logActivity(owner, permlink, user.name, 'blocked_document_edit', {
           timestamp: new Date().toISOString(),
           permissionType: permissions.permissionType,
           updateSize: update.length,
@@ -439,19 +444,17 @@ const server = new Server({
         })
         
         // Enhanced logging with decoded update
-        console.log(`[beforeHandleMessage] Blocking unauthorized document edit:`)
+        console.log(`[beforeHandleMessage] Blocking document edit from read-only user:`)
         console.log(`  User: ${user.name}`)
         console.log(`  Permission: ${permissions.permissionType}`)
         console.log(`  Document: ${documentName}`)
         console.log(`  Update size: ${update.length} bytes`)
         console.log(`  Update info:`, JSON.stringify(updateInfo, null, 2))
         
-        // Provide clear error message based on user's permission level
-        let errorMessage = `Access denied: User ${user.name} has ${permissions.permissionType} access.`
-        if (permissions.permissionType === 'public') {
-          errorMessage += ' You can view the document and see other users\' cursors, but cannot edit the content.'
-        } else {
-          errorMessage += ' You can only view this document.'
+        // Clear error message
+        let errorMessage = `Document editing not allowed. User ${user.name} has ${permissions.permissionType} access.`
+        if (permissions.permissionType === 'public' || permissions.permissionType === 'readonly') {
+          errorMessage += ' You can view the document and see other users\' cursors, but cannot edit content.'
         }
         
         throw new Error(errorMessage)
