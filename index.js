@@ -174,87 +174,82 @@ var http = require("http").Server(api);
 // Initialize WebSocket monitor AFTER HTTP server is created
 const wsMonitor = initializeWebSocketMonitor(http);
 
+// Debug endpoint for script review action
+api.post("/api/debug/script-review/:reviewId", async (req, res) => {
+  try {
+    const { reviewId } = req.params;
+    const { action, reviewer_username, review_notes, script_name, risk_level, tags } = req.body;
+    
+    console.log('Debug script review request:', { reviewId, action, reviewer_username, body: req.body });
+    
+    if (!action || !reviewer_username || !['approve', 'reject', 'block'].includes(action)) {
+      return res.status(400).json({ error: 'Invalid request parameters' });
+    }
+    
+    // Check if review exists
+    const reviewResult = await pool.query('SELECT * FROM script_reviews WHERE id = $1 AND status = $2', [reviewId, 'pending']);
+    if (reviewResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Script review not found or already processed' });
+    }
+    
+    const review = reviewResult.rows[0];
+    console.log('Found review:', review);
+    
+    // Update review status
+    await pool.query(`UPDATE script_reviews SET status = $1, reviewed_by = $2, reviewed_at = CURRENT_TIMESTAMP, reviewer_notes = $3 WHERE id = $4`,
+      [action === 'approve' ? 'approved' : action, reviewer_username, review_notes, reviewId]);
+    
+    if (action === 'approve') {
+      console.log('Attempting to add to whitelist...');
+      // Check if script_whitelist has script_content column
+      const columnCheck = await pool.query(`
+        SELECT column_name FROM information_schema.columns 
+        WHERE table_name = 'script_whitelist' AND column_name = 'script_content'
+      `);
+      
+      console.log('script_content column exists:', columnCheck.rows.length > 0);
+      
+      if (columnCheck.rows.length > 0) {
+        // Table has script_content column
+        await pool.query(`
+          INSERT INTO script_whitelist (script_hash, script_name, script_content, whitelisted_by, risk_level, description) 
+          VALUES ($1, $2, $3, $4, $5, $6)
+          ON CONFLICT (script_hash) DO UPDATE SET
+            script_name = EXCLUDED.script_name, whitelisted_by = EXCLUDED.whitelisted_by, risk_level = EXCLUDED.risk_level,
+            description = EXCLUDED.description, is_active = true, whitelisted_at = CURRENT_TIMESTAMP`,
+          [review.script_hash, script_name || `Script-${review.script_hash.substring(0, 8)}`, review.script_content,
+           reviewer_username, risk_level || 'medium', review_notes]);
+      } else {
+        // Table doesn't have script_content column
+        await pool.query(`
+          INSERT INTO script_whitelist (script_hash, script_name, whitelisted_by, risk_level, description) 
+          VALUES ($1, $2, $3, $4, $5)
+          ON CONFLICT (script_hash) DO UPDATE SET
+            script_name = EXCLUDED.script_name, whitelisted_by = EXCLUDED.whitelisted_by, risk_level = EXCLUDED.risk_level,
+            description = EXCLUDED.description, is_active = true, whitelisted_at = CURRENT_TIMESTAMP`,
+          [review.script_hash, script_name || `Script-${review.script_hash.substring(0, 8)}`,
+           reviewer_username, risk_level || 'medium', review_notes]);
+      }
+    }
+    
+    res.json({ 
+      success: true,
+      message: `Script ${action}ed successfully`, 
+      whitelisted: action === 'approve' 
+    });
+  } catch (error) {
+    console.error('Debug script review error:', error);
+    res.status(500).json({ 
+      success: false,
+      error: error.message,
+      stack: error.stack 
+    });
+  }
+});
+
 // Non-authenticated system endpoints (MUST BE FIRST - before any auth middleware)
 
-// Debug endpoint for blockchain status (no auth)
-api.get("/api/debug/blockchain-status", async (req, res) => {
-  try {
-    const hiveMonitor = require('./hive-monitor');
-    const status = hiveMonitor.getStatus();
-    
-    // Get current block from Hive API for comparison
-    const fetch = require('node-fetch');
-    const hiveResponse = await fetch('https://api.hive.blog', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        method: "condenser_api.get_dynamic_global_properties",
-        params: [],
-        id: 1
-      })
-    });
-    const hiveData = await hiveResponse.json();
-    const currentBlock = hiveData.result.head_block_number;
-    const blocksBehind = currentBlock - parseInt(status.lastProcessedBlock);
-    
-    res.json({
-      success: true,
-      blockchainStatus: status,
-      currentHiveBlock: currentBlock,
-      blocksBehind: blocksBehind,
-      isHealthy: blocksBehind < 100,
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message,
-      stack: error.stack
-    });
-  }
-});
 
-// Emergency blockchain catch-up endpoint (no auth for now)
-api.post("/api/debug/blockchain-catchup", async (req, res) => {
-  try {
-    const hiveMonitor = require('./hive-monitor');
-    
-    // Update the last processed block to current - 100 to catch up quickly
-    const fetch = require('node-fetch');
-    const hiveResponse = await fetch('https://api.hive.blog', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        method: "condenser_api.get_dynamic_global_properties",
-        params: [],
-        id: 1
-      })
-    });
-    const hiveData = await hiveResponse.json();
-    const currentBlock = hiveData.result.head_block_number;
-    const catchupBlock = currentBlock - 100; // Only go back 100 blocks
-    
-    // Update database to the catch-up block
-    await pool.query('UPDATE hive_state SET last_block = $1 WHERE id = 1', [catchupBlock]);
-    
-    res.json({
-      success: true,
-      message: 'Blockchain monitor catch-up initiated',
-      previousBlock: hiveMonitor.getStatus().lastProcessedBlock,
-      newBlock: catchupBlock,
-      currentBlock: currentBlock,
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message,
-      stack: error.stack
-    });
-  }
-});
 
 api.get('/api/system/versions', async (req, res) => {
   try {
