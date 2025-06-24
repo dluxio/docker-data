@@ -276,44 +276,6 @@ api.post("/api/debug/script-review/:reviewId", express.json(), async (req, res) 
   }
 });
 
-// Debug blockchain status endpoint  
-api.get("/api/debug/blockchain-simple", async (req, res) => {
-  try {
-    const hiveMonitor = require('./hive-monitor');
-    const status = hiveMonitor.getStatus();
-    
-    // Get current block from Hive API
-    const fetch = require('node-fetch');
-    const response = await fetch('https://api.hive.blog', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        method: 'condenser_api.get_dynamic_global_properties',
-        params: [],
-        id: 1
-      })
-    });
-    const result = await response.json();
-    const currentBlock = result.result?.head_block_number || 0;
-    
-    // Get database last block
-    const dbResult = await pool.query('SELECT last_block FROM hive_state WHERE id = 1');
-    const lastProcessedBlock = dbResult.rows[0]?.last_block || 0;
-    
-    res.json({
-      isRunning: status.isRunning,
-      currentHiveBlock: currentBlock,
-      lastProcessedBlock: lastProcessedBlock,
-      blocksBehind: currentBlock - lastProcessedBlock,
-      processingRate: status.processingRate,
-      errors: status.errors?.slice(-3) || []
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
 // Non-authenticated system endpoints (MUST BE FIRST - before any auth middleware)
 
 
@@ -487,7 +449,7 @@ api.get("/api/collaboration/stats/:owner/:permlink", API.getCollaborationStats);
 api.get("/api/collaboration/test-awareness", API.getCollaborationTestInfo);
 
 // Script management endpoints (with authentication)
-const scriptAuthMiddleware = createAuthMiddleware(false, false);
+const scriptAuthMiddleware = createAuthMiddleware(true, true);
 api.get("/api/scripts/stats", scriptAuthMiddleware, API.getScriptStats);
 api.get("/api/scripts/pending", scriptAuthMiddleware, API.getPendingScriptReviews);
 api.get("/api/scripts/review/:reviewId", scriptAuthMiddleware, API.getScriptReviewDetails);
