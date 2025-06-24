@@ -413,8 +413,8 @@ const hiveAuth = new HiveAuthExtension()
 const server = new Server({
   port: 1234,
   
-  // WebSocket timeout configuration
-  timeout: 300000, // 5 minutes (default is 30 seconds)
+  // WebSocket timeout configuration (CRITICAL: Must align with Y.js awareness timeout)
+  timeout: 30000, // 30 seconds (matches Y.js awareness timeout)
   debounce: 2000,  // 2 seconds debounce for document updates
   maxDebounce: 10000, // 10 seconds max debounce
   quiet: false, // Enable logging to help debug connection issues
@@ -483,11 +483,12 @@ const server = new Server({
       
       // For users without edit permissions
       if (!permissions.canEdit) {
-        // Allow other protocol messages (auth, query awareness, etc.)
-        if (hiveAuth.isProtocolMessage(update) && !hiveAuth.isAwarenessProtocolMessage(update)) {
+        // CRITICAL: Allow ALL Y.js protocol messages (types 0-4, 8) for readonly users
+        // Only reject document content changes (type 0 with actual content)
+        if (hiveAuth.isProtocolMessage(update)) {
           const messageInfo = hiveAuth.debugMessageType(update)
-          console.log(`[beforeHandleMessage] Allowing ${messageInfo.typeName} message from read-only user: ${user.name}`)
-          return
+          console.log(`[beforeHandleMessage] Allowing protocol message (type ${messageInfo.type}: ${messageInfo.typeName}) from read-only user: ${user.name}`)
+          return // Allow all protocol messages: 0-4, 8
         }
         
         // This is a document content update - block it
@@ -543,20 +544,30 @@ const server = new Server({
   
   // Handle awareness updates from all users (including readonly)
   async onAwarenessUpdate(data) {
-    const { documentName, context, connection, added, updated, removed } = data
+    const { documentName, context, connection, added, updated, removed, awareness } = data
+    
+    // CRITICAL: Allow awareness updates for ALL authenticated users (including readonly)
+    // This should NOT reject awareness updates from readonly users
+    
+    // Log awareness activity for debugging (as requested by client)
+    console.log('[onAwarenessUpdate] Awareness update:', { 
+      added: added.length, 
+      updated: updated.length, 
+      removed: removed.length, 
+      userCount: awareness ? awareness.getStates().size : 0 
+    })
     
     if (context.user) {
       const user = context.user
       const permissions = user.permissions
       
-      // Log awareness activity for debugging
-      console.log(`[onAwarenessUpdate] Awareness update from ${user.name} (${permissions.permissionType})`)
-      console.log(`  Added: ${added.length}, Updated: ${updated.length}, Removed: ${removed.length}`)
+      console.log(`[onAwarenessUpdate] From user: ${user.name} (${permissions.permissionType})`)
       
-      // Reset connection activity to prevent timeouts
+      // CRITICAL: Reset connection activity to prevent timeouts
       if (connection) {
         connection.lastActivity = Date.now()
         connection.isAlive = true
+        console.log(`[onAwarenessUpdate] Connection activity reset for ${user.name}`)
       }
       
       // Log awareness activity for monitoring
@@ -566,9 +577,13 @@ const server = new Server({
         permissionType: permissions.permissionType,
         added: added.length,
         updated: updated.length,
-        removed: removed.length
+        removed: removed.length,
+        totalAwarenessUsers: awareness ? awareness.getStates().size : 0
       })
     }
+    
+    // IMPORTANT: Always allow awareness updates - no rejections here
+    return // Allow the awareness update to proceed
   },
 
   // Connection management
