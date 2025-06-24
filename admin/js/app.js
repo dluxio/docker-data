@@ -571,6 +571,27 @@ const app = createApp({
             }
         },
 
+        getBlockLagClass(blocksRemaining) {
+            if (!blocksRemaining) return 'text-success';
+            if (blocksRemaining < 100) return 'text-success';
+            if (blocksRemaining < 1000) return 'text-warning';
+            return 'text-danger';
+        },
+
+        getApiHealthClass(status) {
+            switch (status) {
+                case 'healthy': return 'text-success';
+                case 'warning': return 'text-warning';
+                case 'error': return 'text-danger';
+                default: return 'text-muted';
+            }
+        },
+
+        formatApiHealth(status) {
+            if (!status) return 'Unknown';
+            return status.charAt(0).toUpperCase() + status.slice(1);
+        },
+
         showSuccessMessage(message) {
             // Create temporary alert element
             const alertEl = document.createElement('div');

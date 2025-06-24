@@ -402,7 +402,7 @@
                                     </div>
                                     <div class="card-body">
                                         <div class="row">
-                                            <div class="col-md-3">
+                                            <div class="col-md-2">
                                                 <div class="text-center">
                                                     <h6>Active Monitoring</h6>
                                                     <h4 :class="dashboardData.blockchainMonitoring?.isRunning ? 'text-success' : 'text-danger'">
@@ -410,27 +410,38 @@
                                                     </h4>
                                                 </div>
                                             </div>
-                                            <div class="col-md-3">
+                                            <div class="col-md-2">
                                                 <div class="text-center">
-                                                    <h6>Networks</h6>
-                                                    <h4>{{ dashboardData.blockchainMonitoring?.networks?.length || 0 }}</h4>
+                                                    <h6>Current Block</h6>
+                                                    <h4>{{ formatNumber(dashboardData.blockchainMonitoring?.currentBlock) }}</h4>
                                                 </div>
                                             </div>
-                                            <div class="col-md-3">
+                                            <div class="col-md-2">
                                                 <div class="text-center">
-                                                    <h6>Uptime</h6>
-                                                    <h4>{{ formatUptime(dashboardData.blockchainMonitoring?.uptime) }}</h4>
+                                                    <h6>Last Processed</h6>
+                                                    <h4>{{ formatNumber(dashboardData.blockchainMonitoring?.lastProcessedBlock) }}</h4>
                                                 </div>
                                             </div>
-                                            <div class="col-md-3">
+                                            <div class="col-md-2">
                                                 <div class="text-center">
-                                                    <h6>Configuration</h6>
-                                                    <h4 :class="dashboardData.blockchainMonitoring?.configuration?.isValid ? 'text-success' : 'text-warning'">
-                                                        {{ dashboardData.blockchainMonitoring?.configuration?.isValid ? 'Valid' : 'Issues' }}
+                                                    <h6>Blocks Behind</h6>
+                                                    <h4 :class="getBlockLagClass(dashboardData.blockchainMonitoring?.blocksRemaining)">
+                                                        {{ formatNumber(dashboardData.blockchainMonitoring?.blocksRemaining) }}
                                                     </h4>
-                                                    <small v-if="!dashboardData.blockchainMonitoring?.configuration?.isValid" class="text-muted">
-                                                        {{ dashboardData.blockchainMonitoring?.configuration?.message }}
-                                                    </small>
+                                                </div>
+                                            </div>
+                                            <div class="col-md-2">
+                                                <div class="text-center">
+                                                    <h6>Active Listeners</h6>
+                                                    <h4>{{ dashboardData.blockchainMonitoring?.activeListeners || 0 }}</h4>
+                                                </div>
+                                            </div>
+                                            <div class="col-md-2">
+                                                <div class="text-center">
+                                                    <h6>API Health</h6>
+                                                    <h4 :class="getApiHealthClass(dashboardData.blockchainMonitoring?.apiHealth?.status)">
+                                                        {{ formatApiHealth(dashboardData.blockchainMonitoring?.apiHealth?.status) }}
+                                                    </h4>
                                                 </div>
                                             </div>
                                         </div>

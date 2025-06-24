@@ -2081,6 +2081,33 @@ exports.reactivateScript = async (req, res, next) => {
   }
 };
 
+exports.updateScript = async (req, res, next) => {
+  const { script_name, risk_level, description, notes, is_active, editor_username } = req.body;
+  if (!editor_username) return res.status(400).json({ error: 'editor_username is required' });
+  
+  try {
+    const result = await executeQuery(`
+      UPDATE script_whitelist 
+      SET script_name = $1, risk_level = $2, description = $3, notes = $4, is_active = $5
+      WHERE script_hash = $6 
+      RETURNING script_name, script_hash
+    `, [script_name, risk_level, description, notes, is_active, req.params.scriptHash]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Script not found' });
+    }
+    
+    res.json({ 
+      message: 'Script updated successfully',
+      script: result.rows[0],
+      updatedBy: editor_username
+    });
+  } catch (error) {
+    console.error('Error updating script:', error);
+    res.status(500).json({ error: 'Failed to update script' });
+  }
+};
+
 exports.getScriptExecutionLogs = async (req, res, next) => {
   const { limit = 100, offset = 0, script_hash, success, date_from, date_to } = req.query;
   try {
