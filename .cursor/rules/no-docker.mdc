@@ -7,10 +7,10 @@ When troubleshooting and you want to see backend operations, do not attempt to C
 
 Headers for admin endpoints
 x-account
-disregardfiat
+dlux-io
 x-challenge
-1750720387
+1750720603
 x-pubkey
-STM835DKJRNe5sy8y4KkRqbLSd9KgY6UcNRZYmTnmjQJzXodYiqQ3
+STM6xx6zKv8wYw8B1gk5tG3Hzdhr7Jrj3sJpCTjTC72SW2WmPvq22
 x-signature
-2079d33d07774c1eaf456c01ea1bc4cdd6017016d45a0f0eb65354942ad0692eaf39796749b31bf7009519870a2b884f5d85774d4db4bbbfa9d21bebec5646d886
+1f5e8d0a0cb146d2de0714a72da10ce2767ce2924e29376b112fc23c1ebb7b9da37897a7f055a9b46387541f268ace248b4c9dfc3ec912b0534da32c64878d1e6f
