@@ -177,79 +177,13 @@ const wsMonitor = initializeWebSocketMonitor(http);
 
 
 
-// Temporary debug endpoint for script review troubleshooting
-api.post("/api/debug/script-action/:reviewId", express.json(), async (req, res) => {
+// Debug endpoint for script review (remove after fixing)
+api.post("/api/debug/review-error/:reviewId", express.json(), async (req, res) => {
   try {
     const { reviewId } = req.params;
     const { action, reviewer_username, review_notes, script_name, risk_level } = req.body || {};
     
-    console.log('Debug script action request:', { reviewId, action, reviewer_username, body: req.body });
-    
-    if (!action || !reviewer_username || !['approve', 'reject', 'block'].includes(action)) {
-      return res.status(400).json({ error: 'Invalid request parameters' });
-    }
-    
-    // Check if review exists
-    const reviewResult = await pool.query('SELECT * FROM script_reviews WHERE id = $1 AND status = $2', [reviewId, 'pending']);
-    if (reviewResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Script review not found or already processed' });
-    }
-    
-    const review = reviewResult.rows[0];
-    console.log('Found review:', { id: review.id, status: review.status, script_hash: review.script_hash });
-    
-    // Test whitelist insertion
-    if (action === 'approve') {
-      const testInsert = `
-        INSERT INTO script_whitelist (script_hash, script_name, whitelisted_by, risk_level, description) 
-        VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (script_hash) DO UPDATE SET
-          script_name = EXCLUDED.script_name, whitelisted_by = EXCLUDED.whitelisted_by, 
-          risk_level = EXCLUDED.risk_level, description = EXCLUDED.description, 
-          is_active = true
-        RETURNING *`;
-      
-      console.log('Testing whitelist insert with params:', [
-        review.script_hash, 
-        script_name || `Script-${review.script_hash.substring(0, 8)}`, 
-        reviewer_username, 
-        risk_level || 'medium', 
-        review_notes || 'Approved via debug'
-      ]);
-      
-      const whitelistResult = await pool.query(testInsert, [
-        review.script_hash, 
-        script_name || `Script-${review.script_hash.substring(0, 8)}`, 
-        reviewer_username, 
-        risk_level || 'medium', 
-        review_notes || 'Approved via debug'
-      ]);
-      
-      console.log('Whitelist insert result:', whitelistResult.rows[0]);
-    }
-    
-    res.json({ 
-      success: true,
-      reviewFound: true,
-      reviewStatus: review.status,
-      action: action,
-      message: 'Debug completed successfully' 
-    });
-  } catch (error) {
-    console.error('Debug script action error:', error);
-    res.status(500).json({ 
-      success: false,
-      error: error.message,
-      stack: error.stack 
-    });
-  }
-});
-
-// Temporary debug endpoint for script review troubleshooting
-api.post("/api/debug/script-review/:reviewId", express.json(), async (req, res) => {
-  try {
-    const { reviewId } = req.params;
-    console.log('Debug script review request:', { reviewId, body: req.body });
+    console.log('Debug review error:', { reviewId, body: req.body });
     
     // Check if review exists
     const reviewResult = await pool.query('SELECT * FROM script_reviews WHERE id = $1', [reviewId]);
@@ -258,21 +192,38 @@ api.post("/api/debug/script-review/:reviewId", express.json(), async (req, res) 
     }
     
     const review = reviewResult.rows[0];
-    console.log('Found review:', { id: review.id, status: review.status, script_hash: review.script_hash });
+    console.log('Found review:', review);
     
-    res.json({ 
-      success: true,
-      reviewFound: true,
-      reviewStatus: review.status,
-      reviewData: review 
-    });
+    // Test the actual operation that's failing
+    if (action === 'approve') {
+      const testQuery = `
+        INSERT INTO script_whitelist (script_hash, script_name, whitelisted_by, risk_level, description) 
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (script_hash) DO UPDATE SET
+          script_name = EXCLUDED.script_name, whitelisted_by = EXCLUDED.whitelisted_by, risk_level = EXCLUDED.risk_level,
+          description = EXCLUDED.description, is_active = true`;
+      
+      console.log('Testing query with params:', [
+        review.script_hash, 
+        script_name || `Script-${review.script_hash.substring(0, 8)}`, 
+        reviewer_username, 
+        risk_level || 'medium', 
+        review_notes
+      ]);
+      
+      await pool.query(testQuery, [
+        review.script_hash, 
+        script_name || `Script-${review.script_hash.substring(0, 8)}`, 
+        reviewer_username, 
+        risk_level || 'medium', 
+        review_notes
+      ]);
+    }
+    
+    res.json({ success: true, message: 'Debug test passed' });
   } catch (error) {
-    console.error('Debug script review error:', error);
-    res.status(500).json({ 
-      success: false,
-      error: error.message,
-      stack: error.stack 
-    });
+    console.error('Debug review error:', error);
+    res.status(500).json({ error: error.message, stack: error.stack });
   }
 });
 
