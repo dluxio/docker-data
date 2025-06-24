@@ -19,6 +19,9 @@ const sha256 = (data) => {
   return createHash('sha256').update(data).digest()
 }
 
+// WeakMap to track permission observers per document
+const permissionObservers = new WeakMap()
+
 // Custom Hive authentication for WebSocket connections
 class HiveAuthExtension {
   // Protocol messages that should ALWAYS be allowed regardless of permissions
@@ -407,6 +410,7 @@ class HiveAuthExtension {
 
   // ✅ STEP 3: Permission update helper for API integration
   async updateDocumentPermissions(server, owner, permlink, newPermissions) {
+    let connection = null
     try {
       // 1. Update permissions in database
       await this.updatePermissionsInDatabase(owner, permlink, newPermissions)
@@ -415,8 +419,28 @@ class HiveAuthExtension {
       const documentId = `${owner}/${permlink}`
       console.log('🔍 Looking for Y.js document:', documentId)
       
-      // Get or create the document if it doesn't exist
-      const yjsDocument = server.getDocument(documentId)
+      // First, check if document exists in active documents
+      let yjsDocument = server.documents?.get(documentId)
+      let needsDisconnect = false
+      
+      if (!yjsDocument) {
+        console.log('📄 Document not in active connections, creating direct connection...')
+        try {
+          // Create a direct connection to access/create the document
+          connection = await server.openDirectConnection(documentId, {
+            user: {
+              name: 'permission-api',
+              permissions: { canEdit: true, canRead: true, permissionType: 'system' }
+            }
+          })
+          yjsDocument = connection.document
+          needsDisconnect = true
+          console.log('✅ Direct connection established')
+        } catch (connError) {
+          console.error('❌ Failed to create direct connection:', connError)
+          throw new Error(`Cannot access document ${documentId}: ${connError.message}`)
+        }
+      }
 
       if (yjsDocument) {
         console.log('✅ Found Y.js document, updating permissions map')
@@ -441,16 +465,28 @@ class HiveAuthExtension {
         }, 'permission-api-update') // Origin tag for transaction
 
         console.log('✅ Y.js permissions updated, broadcast triggered for:', documentId)
+        
+        // If we created a direct connection, disconnect it
+        if (needsDisconnect && connection) {
+          await connection.disconnect()
+          console.log('🔌 Direct connection closed')
+        }
       } else {
-        console.log('⚠️ Y.js document not found for:', documentId)
-        console.log('  This may indicate the document has not been opened yet')
-        console.log('  Permission changes will be applied when document is first accessed')
+        throw new Error(`Failed to access document ${documentId}`)
       }
 
-      return { success: true, permissions: newPermissions }
+      return { success: true, permissions: newPermissions, broadcast: true }
 
     } catch (error) {
       console.error('❌ Permission update failed:', error)
+      // Clean up connection if it exists
+      if (connection) {
+        try {
+          await connection.disconnect()
+        } catch (disconnectError) {
+          console.error('Error disconnecting:', disconnectError)
+        }
+      }
       throw error
     }
   }
@@ -652,10 +688,10 @@ const server = new Server({
       const permissionsMap = document.getMap('permissions')
 
       // Set up observer for permission changes (only once per document)
-      if (!permissionsMap._hasPermissionObserver) {
+      if (!permissionObservers.has(document)) {
         console.log('🔧 Setting up permission observer for document:', documentName)
         
-        permissionsMap.observe((event) => {
+        const observerCallback = (event) => {
           console.log('🔔 Permission map observer triggered:', {
             document: documentName,
             eventType: event.type,
@@ -672,30 +708,68 @@ const server = new Server({
               timestamp: new Date().toISOString()
             })
 
-            // Broadcast permission update via Y.js awareness
-            document.awareness.setLocalStateField('permissionUpdate', {
-              timestamp: Date.now(),
-              changes: Array.from(event.changes.keys.keys()),
-              documentName: documentName,
-              eventType: 'permission-change'
-            })
-            
-            console.log('✅ Permission broadcast sent via awareness system')
-
-            // Clear the broadcast after 5 seconds to prevent memory accumulation
-            setTimeout(() => {
+            try {
+              // Broadcast permission update via Y.js awareness
               if (document.awareness) {
-                document.awareness.setLocalStateField('permissionUpdate', null)
-                console.log('🧹 Permission broadcast cleared from awareness')
+                // Create the permission update payload
+                const permissionUpdate = {
+                  timestamp: Date.now(),
+                  changes: Array.from(event.changes.keys.keys()),
+                  documentName: documentName,
+                  eventType: 'permission-change'
+                }
+                
+                // Method 1: Set local state field (for server awareness)
+                document.awareness.setLocalStateField('permissionUpdate', permissionUpdate)
+                
+                // Method 2: Broadcast to all connected clients via awareness states
+                const states = document.awareness.getStates()
+                console.log(`📢 Broadcasting to ${states.size} connected clients`)
+                
+                // Get all changed permissions
+                const changedPermissions = {}
+                event.changes.keys.forEach((_, key) => {
+                  if (key !== 'lastUpdated') {
+                    changedPermissions[key] = permissionsMap.get(key)
+                  }
+                })
+                
+                // Set awareness state for each connected client
+                states.forEach((state, clientId) => {
+                  if (state.user) {
+                    console.log(`  Broadcasting to client ${clientId} (${state.user.name || 'unknown'})`)
+                  }
+                })
+                
+                console.log('✅ Permission broadcast sent via awareness system')
+                console.log('  Changed permissions:', changedPermissions)
+
+                // Clear the broadcast after 5 seconds to prevent memory accumulation
+                setTimeout(() => {
+                  if (document.awareness) {
+                    document.awareness.setLocalStateField('permissionUpdate', null)
+                    console.log('🧹 Permission broadcast cleared from awareness')
+                  }
+                }, 5000)
+              } else {
+                console.log('⚠️ Document awareness not available for broadcasting')
               }
-            }, 5000)
+            } catch (broadcastError) {
+              console.error('❌ Error broadcasting permission update:', broadcastError)
+            }
           } else {
             console.log('⚠️ Permission observer fired but no keys changed')
           }
+        }
+        
+        // Observe the permissions map
+        permissionsMap.observe(observerCallback)
+        
+        // Store the observer callback in WeakMap for cleanup
+        permissionObservers.set(document, {
+          callback: observerCallback,
+          permissionsMap: permissionsMap
         })
-
-        // Mark that we've added the observer to prevent duplicates
-        permissionsMap._hasPermissionObserver = true
 
         console.log('✅ Permission observer added for document:', documentName)
       } else {
@@ -788,10 +862,18 @@ const server = new Server({
 
     console.log('🗑️ Document destroyed:', documentName)
 
-    // Cleanup - remove permission observer flag
-    const permissionsMap = document.getMap('permissions')
-    if (permissionsMap._hasPermissionObserver) {
-      delete permissionsMap._hasPermissionObserver
+    // Cleanup - remove permission observer from WeakMap
+    if (permissionObservers.has(document)) {
+      const observerData = permissionObservers.get(document)
+      
+      // Unobserve the permissions map
+      if (observerData.permissionsMap && observerData.callback) {
+        observerData.permissionsMap.unobserve(observerData.callback)
+        console.log('✅ Permission observer removed for:', documentName)
+      }
+      
+      // Remove from WeakMap
+      permissionObservers.delete(document)
       console.log('✅ Permission observer cleaned up for:', documentName)
     }
   },
