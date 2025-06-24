@@ -1929,6 +1929,7 @@ exports.getScriptStats = async (req, res, next) => {
   try {
     const pendingResult = await executeQuery('SELECT COUNT(*) as count FROM script_reviews WHERE status = $1', ['pending']);
     const whitelistResult = await executeQuery('SELECT COUNT(*) as count FROM script_whitelist WHERE is_active = true');
+    const inactiveResult = await executeQuery('SELECT COUNT(*) as count FROM script_whitelist WHERE is_active = false');
     const executionsResult = await executeQuery('SELECT COUNT(*) as count FROM script_execution_logs');
     const successResult = await executeQuery(`
       SELECT COUNT(*) as total, SUM(CASE WHEN success = true THEN 1 ELSE 0 END) as successful
@@ -1944,6 +1945,7 @@ exports.getScriptStats = async (req, res, next) => {
       stats: {
         totalPending: parseInt(pendingResult.rows[0].count),
         totalWhitelisted: parseInt(whitelistResult.rows[0].count),
+        totalInactive: parseInt(inactiveResult.rows[0].count),
         totalExecutions: parseInt(executionsResult.rows[0].count),
         executionSuccess: successRate,
         riskDistribution
@@ -2029,9 +2031,9 @@ exports.reviewScript = async (req, res, next) => {
 };
 
 exports.getWhitelistedScripts = async (req, res, next) => {
-  const { limit = 50, offset = 0, risk_level, search } = req.query;
+  const { limit = 50, offset = 0, risk_level, search, include_inactive } = req.query;
   try {
-    let whereClause = 'WHERE is_active = true';
+    let whereClause = include_inactive === 'true' ? 'WHERE 1=1' : 'WHERE is_active = true';
     const params = [];
     let paramIndex = 1;
     if (risk_level) {
@@ -2044,7 +2046,7 @@ exports.getWhitelistedScripts = async (req, res, next) => {
     }
     const query = `
       SELECT script_hash, script_name, whitelisted_by as approved_by, whitelisted_at as approved_at, risk_level, description, notes, 
-             'No content preview' as script_preview
+             is_active, 'No content preview' as script_preview
       FROM script_whitelist 
       ${whereClause} ORDER BY whitelisted_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
     params.push(parseInt(limit), parseInt(offset));
@@ -2064,6 +2066,18 @@ exports.removeFromWhitelist = async (req, res, next) => {
     res.json({ message: 'Script removed from whitelist successfully' });
   } catch (error) {
     res.status(500).json({ error: 'Failed to remove script from whitelist' });
+  }
+};
+
+exports.reactivateScript = async (req, res, next) => {
+  const { reactivator_username } = req.body;
+  if (!reactivator_username) return res.status(400).json({ error: 'reactivator_username is required' });
+  try {
+    const result = await executeQuery('UPDATE script_whitelist SET is_active = true WHERE script_hash = $1 AND is_active = false RETURNING script_name', [req.params.scriptHash]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Script not found or already active' });
+    res.json({ message: 'Script reactivated successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to reactivate script' });
   }
 };
 

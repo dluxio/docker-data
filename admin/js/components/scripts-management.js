@@ -49,6 +49,18 @@ const ScriptsManagement = {
           </div>
         </div>
       </div>
+      
+      <!-- Second row of stats -->
+      <div class="row mb-4" v-if="stats.totalInactive > 0">
+        <div class="col-md-3">
+          <div class="card text-white bg-secondary">
+            <div class="card-body">
+              <h5 class="card-title"><i class="bi bi-pause-circle"></i> Inactive Scripts</h5>
+              <p class="card-text display-4">{{ stats.totalInactive || 0 }}</p>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <!-- Navigation Tabs -->
       <ul class="nav nav-tabs">
@@ -116,10 +128,19 @@ const ScriptsManagement = {
 
           <!-- Whitelist View -->
           <div v-if="currentView === 'whitelist'">
-            <h3>Whitelisted Scripts</h3>
+            <div class="d-flex justify-content-between align-items-center mb-3">
+              <h3>Whitelisted Scripts</h3>
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="showInactive" v-model="showInactiveScripts" @change="fetchCurrentViewData">
+                <label class="form-check-label" for="showInactive">
+                  Show Inactive Scripts
+                </label>
+              </div>
+            </div>
             <table class="table table-hover">
               <thead>
                 <tr>
+                  <th>Status</th>
                   <th>Name</th>
                   <th>Hash</th>
                   <th>Risk Level</th>
@@ -129,7 +150,11 @@ const ScriptsManagement = {
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="script in whitelist.scripts" :key="script.script_hash">
+                <tr v-for="script in whitelist.scripts" :key="script.script_hash" :class="{ 'table-secondary': !script.is_active }">
+                  <td>
+                    <span v-if="script.is_active" class="badge bg-success">Active</span>
+                    <span v-else class="badge bg-secondary">Inactive</span>
+                  </td>
                   <td>{{ script.script_name }}</td>
                   <td class="font-monospace">{{ script.script_hash.substring(0, 12) }}...</td>
                   <td>
@@ -140,8 +165,11 @@ const ScriptsManagement = {
                   <td>{{ script.approved_by }}</td>
                   <td>{{ new Date(script.approved_at).toLocaleString() }}</td>
                   <td>
-                    <button class="btn btn-danger btn-sm" @click="removeFromWhitelist(script.script_hash)">
+                    <button v-if="script.is_active" class="btn btn-danger btn-sm" @click="removeFromWhitelist(script.script_hash)">
                       <i class="bi bi-trash"></i> Remove
+                    </button>
+                    <button v-else class="btn btn-success btn-sm" @click="reactivateScript(script.script_hash)">
+                      <i class="bi bi-arrow-clockwise"></i> Reactivate
                     </button>
                   </td>
                 </tr>
@@ -273,6 +301,7 @@ const ScriptsManagement = {
       loading: false,
       currentPage: 1,
       itemsPerPage: 10,
+      showInactiveScripts: false,
       selectedReview: {},
       reviewAction: {
         script_name: '',
@@ -309,7 +338,7 @@ const ScriptsManagement = {
       const offset = (this.currentPage - 1) * this.itemsPerPage;
       const endpoints = {
         reviews: `/api/scripts/pending?limit=${this.itemsPerPage}&offset=${offset}`,
-        whitelist: `/api/scripts/whitelist?limit=${this.itemsPerPage}&offset=${offset}`,
+        whitelist: `/api/scripts/whitelist?limit=${this.itemsPerPage}&offset=${offset}${this.showInactiveScripts ? '&include_inactive=true' : ''}`,
         logs: `/api/scripts/logs?limit=${this.itemsPerPage}&offset=${offset}`
       };
       
@@ -393,6 +422,26 @@ const ScriptsManagement = {
       } catch (error) {
         console.error('Error removing from whitelist:', error);
         alert('Failed to remove script from whitelist.');
+      }
+    },
+
+    async reactivateScript(scriptHash) {
+      if (!confirm('Are you sure you want to reactivate this script?')) return;
+      
+      try {
+        await this.apiClient.request(`/api/scripts/whitelist/${scriptHash}/reactivate`, {
+          method: 'POST',
+          body: JSON.stringify({
+            reactivator_username: this.$root.currentUser
+          })
+        });
+        
+        alert('Script reactivated successfully.');
+        this.fetchData();
+
+      } catch (error) {
+        console.error('Error reactivating script:', error);
+        alert('Failed to reactivate script.');
       }
     },
     openModal() {
