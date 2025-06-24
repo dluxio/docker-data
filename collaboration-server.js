@@ -404,6 +404,93 @@ class HiveAuthExtension {
         return false
     }
   }
+
+  // ✅ STEP 3: Permission update helper for API integration
+  async updateDocumentPermissions(server, owner, permlink, newPermissions) {
+    try {
+      // 1. Update permissions in database
+      await this.updatePermissionsInDatabase(owner, permlink, newPermissions)
+
+      // 2. Update Y.js permissions map to trigger broadcast
+      const documentId = `${owner}/${permlink}`
+      const yjsDocument = server.getDocument(documentId)
+
+      if (yjsDocument) {
+        // Use Y.js transaction to update permissions map
+        yjsDocument.transact(() => {
+          const permissionsMap = yjsDocument.getMap('permissions')
+
+          // Update each permission that changed
+          Object.entries(newPermissions).forEach(([username, permission]) => {
+            permissionsMap.set(username, permission)
+          })
+
+          // Add timestamp for debugging
+          permissionsMap.set('lastUpdated', new Date().toISOString())
+
+        }, 'permission-api-update') // Origin tag for transaction
+
+        console.log('✅ Y.js permissions updated, broadcast triggered for:', documentId)
+      }
+
+      return { success: true, permissions: newPermissions }
+
+    } catch (error) {
+      console.error('❌ Permission update failed:', error)
+      throw error
+    }
+  }
+
+  // Helper to update permissions in database
+  async updatePermissionsInDatabase(owner, permlink, newPermissions) {
+    const client = await pool.connect()
+    try {
+      // Update each permission
+      for (const [account, permissionData] of Object.entries(newPermissions)) {
+        if (typeof permissionData === 'string') {
+          // Simple permission type string
+          await client.query(`
+            INSERT INTO collaboration_permissions (owner, permlink, account, permission_type, can_read, can_edit, can_post_to_hive, granted_by)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            ON CONFLICT (owner, permlink, account)
+            DO UPDATE SET 
+              permission_type = EXCLUDED.permission_type,
+              can_read = EXCLUDED.can_read,
+              can_edit = EXCLUDED.can_edit,
+              can_post_to_hive = EXCLUDED.can_post_to_hive,
+              granted_by = EXCLUDED.granted_by,
+              granted_at = NOW()
+          `, [
+            owner, permlink, account, permissionData,
+            this.getPermissionFlags(permissionData).canRead,
+            this.getPermissionFlags(permissionData).canEdit,
+            this.getPermissionFlags(permissionData).canPostToHive,
+            owner // Assume owner is granting permissions
+          ])
+        }
+      }
+    } finally {
+      client.release()
+    }
+  }
+
+  // Helper to get permission flags from permission type
+  getPermissionFlags(permissionType) {
+    switch (permissionType) {
+      case 'owner':
+        return { canRead: true, canEdit: true, canPostToHive: true }
+      case 'postable':
+        return { canRead: true, canEdit: true, canPostToHive: true }
+      case 'editable':
+        return { canRead: true, canEdit: true, canPostToHive: false }
+      case 'readonly':
+        return { canRead: true, canEdit: false, canPostToHive: false }
+      case 'public':
+        return { canRead: true, canEdit: false, canPostToHive: false }
+      default:
+        return { canRead: false, canEdit: false, canPostToHive: false }
+    }
+  }
 }
 
 // Initialize extensions
@@ -541,21 +628,82 @@ const server = new Server({
       })
     }
   },
+
+  // ✅ STEP 1: Core Permission Observer - Real-time permission broadcasts
+  async onChangeDocument(data) {
+    const { documentName, document } = data
+
+    try {
+      // Get permissions map from Y.js document
+      const permissionsMap = document.getMap('permissions')
+
+      // Set up observer for permission changes (only once per document)
+      if (!permissionsMap._hasPermissionObserver) {
+        permissionsMap.observe((event) => {
+          if (event.type === 'update' && event.changes.keys.size > 0) {
+            
+            console.log('📡 Permission change detected, broadcasting:', {
+              document: documentName,
+              changedKeys: Array.from(event.changes.keys.keys()),
+              timestamp: new Date().toISOString()
+            })
+
+            // Broadcast permission update via Y.js awareness
+            document.awareness.setLocalStateField('permissionUpdate', {
+              timestamp: Date.now(),
+              changes: Array.from(event.changes.keys.keys()),
+              documentName: documentName,
+              eventType: 'permission-change'
+            })
+
+            // Clear the broadcast after 5 seconds to prevent memory accumulation
+            setTimeout(() => {
+              if (document.awareness) {
+                document.awareness.setLocalStateField('permissionUpdate', null)
+              }
+            }, 5000)
+          }
+        })
+
+        // Mark that we've added the observer to prevent duplicates
+        permissionsMap._hasPermissionObserver = true
+
+        console.log('✅ Permission observer added for document:', documentName)
+      }
+
+    } catch (error) {
+      console.error('❌ Error setting up permission observer:', error)
+    }
+  },
   
-  // Handle awareness updates from all users (including readonly)
+  // ✅ STEP 2: Enhanced Awareness Handling with Permission Broadcasts
   async onAwarenessUpdate(data) {
     const { documentName, context, connection, added, updated, removed, awareness } = data
     
     // CRITICAL: Allow awareness updates for ALL authenticated users (including readonly)
     // This should NOT reject awareness updates from readonly users
     
-    // Log awareness activity for debugging (as requested by client)
-    console.log('[onAwarenessUpdate] Awareness update:', { 
-      added: added.length, 
-      updated: updated.length, 
-      removed: removed.length, 
-      userCount: awareness ? awareness.getStates().size : 0 
-    })
+    // Log awareness activity for debugging
+    if (added.length > 0 || updated.length > 0 || removed.length > 0) {
+      console.log('👥 Awareness update:', {
+        document: documentName,
+        added: added.length,
+        updated: updated.length,
+        removed: removed.length,
+        totalClients: awareness.getStates().size
+      })
+
+      // ✅ STEP 2: Check for permission broadcasts in awareness states
+      awareness.getStates().forEach((state, clientId) => {
+        if (state.permissionUpdate) {
+          console.log('🔔 Permission broadcast detected in awareness:', {
+            clientId,
+            broadcast: state.permissionUpdate,
+            document: documentName
+          })
+        }
+      })
+    }
     
     if (context.user) {
       const user = context.user
@@ -582,8 +730,39 @@ const server = new Server({
       })
     }
     
-    // IMPORTANT: Always allow awareness updates - no rejections here
-    return // Allow the awareness update to proceed
+    // IMPORTANT: Always allow awareness updates to proceed (including permission broadcasts)
+    return true
+  },
+
+  // ✅ STEP 4: Document Lifecycle Management
+  async onCreateDocument(data) {
+    const { documentName, document } = data
+
+    console.log('📄 Document created:', documentName)
+
+    // Initialize permissions map if it doesn't exist
+    const permissionsMap = document.getMap('permissions')
+    if (permissionsMap.size === 0) {
+      // Set default permissions for document creator
+      const [owner] = documentName.split('/')
+      permissionsMap.set(owner, 'owner')
+      permissionsMap.set('created', new Date().toISOString())
+      
+      console.log('✅ Default permissions set for document owner:', owner)
+    }
+  },
+
+  async onDestroyDocument(data) {
+    const { documentName, document } = data
+
+    console.log('🗑️ Document destroyed:', documentName)
+
+    // Cleanup - remove permission observer flag
+    const permissionsMap = document.getMap('permissions')
+    if (permissionsMap._hasPermissionObserver) {
+      delete permissionsMap._hasPermissionObserver
+      console.log('✅ Permission observer cleaned up for:', documentName)
+    }
   },
 
   // Connection management
@@ -708,6 +887,7 @@ const server = new Server({
       }
     }
   },
+
   
   // Error handling
   async onDestroy() {
@@ -929,13 +1109,17 @@ async function startCollaborationServer() {
     // Start the server
     server.listen()
     
-    console.log(`[Server] Hocuspocus collaboration server started on port 1234`)
-    console.log(`[Server] Keep-alive mechanism: Using Hocuspocus internal timeout of ${server.configuration.timeout}ms`)
+    console.log(`🚀 Hocuspocus collaboration server started with permission broadcasts enabled`)
+    console.log(`[Server] Port: 1234`)
+    console.log(`[Server] Timeout: ${server.configuration.timeout}ms`)
+    console.log(`[Server] Permission broadcasts: ✅ ENABLED`)
     
-    // Set up connection monitoring interval
+    // ✅ STEP 5: Enhanced monitoring with permission broadcast tracking
     keepAliveInterval = setInterval(() => {
       const connections = server.getConnections()
-      console.log(`[KeepAlive] Active connections: ${connections.length}`)
+      const documentCount = server.getDocumentsCount ? server.getDocumentsCount() : 'N/A'
+      
+      console.log(`📊 Server status: ${documentCount} active documents, ${connections.length} connections`)
       
       connections.forEach(connection => {
         if (connection.context?.user) {
@@ -947,7 +1131,7 @@ async function startCollaborationServer() {
           console.log(`[KeepAlive] User ${user.name}: idle for ${Math.round(idleTime / 1000)}s`)
         }
       })
-    }, 30000) // Log every 30 seconds
+    }, 300000) // Log every 5 minutes (as suggested in instructions)
     
   } catch (error) {
     console.error('Failed to start collaboration server:', error)
@@ -981,4 +1165,4 @@ if (require.main === module) {
 
 
 
-module.exports = { server, setupCollaborationDatabase } 
+module.exports = { server, setupCollaborationDatabase, HiveAuthExtension } 
