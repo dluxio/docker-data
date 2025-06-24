@@ -343,11 +343,15 @@ class HiveAuthExtension {
     const messageType = updateArray.length > 0 ? updateArray[0] : -1
     
     const typeNames = {
-      0: 'Sync Step 1',
+      0: 'Sync',
       1: 'Awareness',
       2: 'Auth',
       3: 'Query Awareness',
-      // Add other known types as needed
+      4: 'Sync Reply',
+      5: 'Stateless',
+      6: 'Broadcast Stateless',
+      7: 'Close',
+      8: 'Sync Status'
     }
     
     return {
@@ -356,7 +360,48 @@ class HiveAuthExtension {
       size: update.length,
       isAwareness: this.isAwarenessProtocolMessage(update),
       isSync: this.isSyncProtocolMessage(update),
+      isAuth: messageType === 2,
+      isQueryAwareness: messageType === 3,
       firstBytes: Array.from(updateArray.slice(0, 10)).map(b => b.toString(16).padStart(2, '0')).join(' ')
+    }
+  }
+  
+  // Check if this is a protocol message that should always be allowed
+  isProtocolMessage(update) {
+    const updateArray = new Uint8Array(update)
+    if (updateArray.length === 0) return false
+    
+    const messageType = updateArray[0]
+    
+    // Check specific message types
+    switch (messageType) {
+      case 0:  // Sync - always allow for initial sync
+      case 1:  // Awareness - always allow for cursor/presence
+      case 2:  // Auth - always allow for authentication
+      case 3:  // Query Awareness - always allow awareness queries
+      case 4:  // Sync Reply - always allow sync responses
+      case 8:  // Sync Status - always allow status updates
+        return true
+        
+      default:
+        // For unknown types, check if it looks like a Y.js document update
+        // Y.js document updates typically have more complex structure
+        if (updateArray.length > 10) {
+          // Check if this might be a Y.js update by looking for typical patterns
+          // Y.js updates often have specific byte patterns we can detect
+          try {
+            // Try to decode as Y.js update - if it fails, it's likely not a document update
+            const tempDoc = new Y.Doc()
+            Y.applyUpdate(tempDoc, update)
+            // If we get here, it's a valid Y.js update - check if it modifies content
+            const hasContent = tempDoc.getText('content').length > 0
+            return !hasContent // Allow if it doesn't contain document content
+          } catch (e) {
+            // Not a Y.js update, likely a protocol message
+            return true
+          }
+        }
+        return false
     }
   }
 }
@@ -367,6 +412,11 @@ const hiveAuth = new HiveAuthExtension()
 // Configure the Hocuspocus server
 const server = new Server({
   port: 1234,
+  
+  // WebSocket timeout configuration
+  timeout: 300000, // 5 minutes (default is 30 seconds)
+  debounce: 2000,  // 2 seconds debounce for document updates
+  maxDebounce: 10000, // 10 seconds max debounce
   
   // CORS configuration
   cors: {
@@ -405,6 +455,12 @@ const server = new Server({
       const permissions = context.user.permissions
       const user = context.user
       
+      // Debug: Log all messages for readonly users
+      if (!permissions.canEdit) {
+        const messageInfo = hiveAuth.debugMessageType(update)
+        console.log(`[beforeHandleMessage] DEBUG - Message from readonly user ${user.name}:`, messageInfo)
+      }
+      
       // Allow all updates during grace period for initial sync
       if (hiveAuth.isInGracePeriod(user)) {
         console.log(`[beforeHandleMessage] Grace period active for ${user.name}, allowing sync protocol`)
@@ -419,15 +475,10 @@ const server = new Server({
       
       // For users without edit permissions
       if (!permissions.canEdit) {
-        // Allow awareness updates for all authenticated users
-        if (hiveAuth.isAwarenessProtocolMessage(update)) {
-          console.log(`[beforeHandleMessage] Allowing awareness update from read-only user: ${user.name}`)
-          return // Allow awareness to be broadcast
-        }
-        
-        // Allow sync protocol messages (already implemented)
-        if (hiveAuth.isSyncProtocolMessage(update)) {
-          console.log(`[beforeHandleMessage] Allowing sync protocol message for ${user.name}`)
+        // Allow all protocol messages (awareness, sync, auth, etc.)
+        if (hiveAuth.isProtocolMessage(update)) {
+          const messageInfo = hiveAuth.debugMessageType(update)
+          console.log(`[beforeHandleMessage] Allowing ${messageInfo.typeName} message from read-only user: ${user.name}`)
           return
         }
         
@@ -440,6 +491,7 @@ const server = new Server({
           timestamp: new Date().toISOString(),
           permissionType: permissions.permissionType,
           updateSize: update.length,
+          messageType: hiveAuth.debugMessageType(update).type,
           attemptedChanges: updateInfo
         })
         
@@ -449,6 +501,7 @@ const server = new Server({
         console.log(`  Permission: ${permissions.permissionType}`)
         console.log(`  Document: ${documentName}`)
         console.log(`  Update size: ${update.length} bytes`)
+        console.log(`  Message type: ${hiveAuth.debugMessageType(update).typeName}`)
         console.log(`  Update info:`, JSON.stringify(updateInfo, null, 2))
         
         // Clear error message
@@ -482,7 +535,7 @@ const server = new Server({
   
   // Connection management
   async onConnect(data) {
-    const { documentName, context } = data
+    const { documentName, context, connection } = data
     const [owner, permlink] = documentName.split('/')
     
     if (context.user) {
@@ -494,6 +547,14 @@ const server = new Server({
       console.log(`  Permission: ${permissions.permissionType}`)
       console.log(`  Can Edit: ${permissions.canEdit}`)
       console.log(`  Can Read: ${permissions.canRead}`)
+      
+      // Set connection timeout to prevent disconnections (5 minutes)
+      if (connection && connection.ws) {
+        connection.ws.isAlive = true
+        connection.ws.on('pong', () => {
+          connection.ws.isAlive = true
+        })
+      }
       
       // Update active user count
       try {
