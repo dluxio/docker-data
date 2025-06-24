@@ -177,37 +177,20 @@ const wsMonitor = initializeWebSocketMonitor(http);
 
 
 
-// Test endpoint to check script review system (temporary)
-api.post("/api/debug/test-review", express.json(), async (req, res) => {
+// Debug endpoint to check script reviews in database
+api.get("/api/debug/script-reviews", async (req, res) => {
   try {
-    const { scriptHash, scriptContent } = req.body;
-    if (!scriptHash || !scriptContent) {
-      return res.status(400).json({ error: 'scriptHash and scriptContent required' });
-    }
+    const allReviews = await pool.query('SELECT id, script_hash, status, request_source, requested_by, created_at FROM script_reviews ORDER BY created_at DESC LIMIT 10');
+    const pendingReviews = await pool.query('SELECT COUNT(*) as count FROM script_reviews WHERE status = $1', ['pending']);
     
-    console.log('Testing script review system...');
-    const API = require('./api/index');
-    
-    // Simulate the addScriptToReview function call
-    const reviewId = await API.addScriptToReview(
-      scriptHash,
-      scriptContent,
-      'debug-test',
-      'test-user',
-      { test: true }
-    );
-    
-    res.json({ 
-      success: true, 
-      reviewId: reviewId,
-      message: 'Script added to review queue' 
+    res.json({
+      success: true,
+      allReviews: allReviews.rows,
+      pendingCount: parseInt(pendingReviews.rows[0].count),
+      timestamp: new Date().toISOString()
     });
   } catch (error) {
-    res.status(500).json({ 
-      success: false, 
-      error: error.message,
-      stack: error.stack 
-    });
+    res.status(500).json({ error: error.message });
   }
 });
 
