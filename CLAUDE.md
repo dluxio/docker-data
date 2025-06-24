@@ -325,11 +325,25 @@ if (connection.readOnly) {
 ### Overview
 The server now includes a complete real-time permission broadcast system that eliminates 30-60 second delays for permission updates, providing near-instant permission changes (1-2 seconds) via Y.js awareness.
 
-**Latest Fix (December 2024)**: Resolved API integration issue where REST endpoint wasn't properly triggering Y.js document observers. The system now correctly:
-- Imports collaboration server instance from `collaboration-server.js`
-- Updates Y.js permissions map to trigger observers
-- Broadcasts permission changes via awareness system
-- Includes enhanced debugging for troubleshooting
+**Latest Fixes (December 2024)**: 
+1. **API Integration**: Resolved issue where REST endpoint wasn't properly triggering Y.js document observers:
+   - Fixed incorrect `server.getDocument()` usage (method doesn't exist)
+   - Now uses `server.documents.get()` for active documents
+   - Implements `server.openDirectConnection()` for on-demand access
+   - Updates Y.js permissions map to trigger observers
+   - Broadcasts permission changes via awareness system
+
+2. **Message Type Security**: Fixed security issue allowing readonly users to send document updates:
+   - Message type 27 (0x1b) and other unknown types are now properly blocked
+   - Only allows known protocol messages (types 0-4, 8)
+   - Enhanced debugging shows Y.js update detection
+   - Prevents readonly users from bypassing permissions with unknown message types
+
+3. **Server Monitoring**: Fixed incorrect API usage in monitoring code:
+   - Removed invalid `server.getConnections()` call
+   - Now uses `server.documents.size` for document count
+   - Monitors via document awareness states instead of connections
+   - Shows connected users per document using awareness.getStates()
 
 ### Permission Management REST API
 

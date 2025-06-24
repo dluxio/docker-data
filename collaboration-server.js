@@ -357,15 +357,35 @@ class HiveAuthExtension {
       8: 'Sync Status'
     }
     
+    // Check if this might be a Y.js document update
+    let isYjsUpdate = false
+    let decodedInfo = null
+    if (messageType > 8) {
+      try {
+        // Try to decode as Y.js update
+        const tempDoc = new Y.Doc()
+        Y.applyUpdate(tempDoc, update)
+        isYjsUpdate = true
+        decodedInfo = {
+          contentLength: tempDoc.getText('content').length,
+          hasContent: tempDoc.getText('content').length > 0
+        }
+      } catch (e) {
+        // Not a valid Y.js update
+      }
+    }
+    
     return {
       type: messageType,
-      typeName: typeNames[messageType] || 'Unknown',
+      typeName: typeNames[messageType] || (isYjsUpdate ? 'Y.js Update' : 'Unknown'),
       size: update.length,
       isAwareness: this.isAwarenessProtocolMessage(update),
       isSync: this.isSyncProtocolMessage(update),
       isAuth: messageType === 2,
       isQueryAwareness: messageType === 3,
-      firstBytes: Array.from(updateArray.slice(0, 10)).map(b => b.toString(16).padStart(2, '0')).join(' ')
+      firstBytes: Array.from(updateArray.slice(0, 10)).map(b => b.toString(16).padStart(2, '0')).join(' '),
+      isYjsUpdate: isYjsUpdate,
+      decodedInfo: decodedInfo
     }
   }
   
@@ -387,23 +407,9 @@ class HiveAuthExtension {
         return true
         
       default:
-        // For unknown types, check if it looks like a Y.js document update
-        // Y.js document updates typically have more complex structure
-        if (updateArray.length > 10) {
-          // Check if this might be a Y.js update by looking for typical patterns
-          // Y.js updates often have specific byte patterns we can detect
-          try {
-            // Try to decode as Y.js update - if it fails, it's likely not a document update
-            const tempDoc = new Y.Doc()
-            Y.applyUpdate(tempDoc, update)
-            // If we get here, it's a valid Y.js update - check if it modifies content
-            const hasContent = tempDoc.getText('content').length > 0
-            return !hasContent // Allow if it doesn't contain document content
-          } catch (e) {
-            // Not a Y.js update, likely a protocol message
-            return true
-          }
-        }
+        // Type 27 (0x1b) and other unknown types are NOT protocol messages
+        // These are likely Y.js document updates and should be blocked for readonly users
+        console.log(`[isProtocolMessage] Unknown message type ${messageType} (0x${messageType.toString(16)}) - NOT a protocol message`)
         return false
     }
   }
@@ -1229,21 +1235,34 @@ async function startCollaborationServer() {
     
     // ✅ STEP 5: Enhanced monitoring with permission broadcast tracking
     keepAliveInterval = setInterval(() => {
-      const connections = server.getConnections()
-      const documentCount = server.getDocumentsCount ? server.getDocumentsCount() : 'N/A'
-      
-      console.log(`📊 Server status: ${documentCount} active documents, ${connections.length} connections`)
-      
-      connections.forEach(connection => {
-        if (connection.context?.user) {
-          const user = connection.context.user
-          const now = Date.now()
-          const lastActivity = connection.lastActivity || connection.connectedAt || now
-          const idleTime = now - lastActivity
-          
-          console.log(`[KeepAlive] User ${user.name}: idle for ${Math.round(idleTime / 1000)}s`)
+      try {
+        // Get document count from the documents Map
+        const documentCount = server.documents ? server.documents.size : 0
+        
+        // Log basic server status
+        console.log(`📊 Server status: ${documentCount} active documents`)
+        
+        // Log document names and connection info if available
+        if (server.documents && server.documents.size > 0) {
+          console.log('📄 Active documents:')
+          server.documents.forEach((doc, docName) => {
+            console.log(`  - ${docName}`)
+            
+            // Check if document has awareness for connected users
+            if (doc.awareness) {
+              const states = doc.awareness.getStates()
+              console.log(`    Connected users: ${states.size}`)
+              states.forEach((state, clientId) => {
+                if (state.user) {
+                  console.log(`      - ${state.user.name || 'unknown'} (client ${clientId})`)
+                }
+              })
+            }
+          })
         }
-      })
+      } catch (error) {
+        console.error('Error in monitoring interval:', error)
+      }
     }, 300000) // Log every 5 minutes (as suggested in instructions)
     
   } catch (error) {
