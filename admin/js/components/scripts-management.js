@@ -165,6 +165,9 @@ const ScriptsManagement = {
                   <td>{{ script.approved_by }}</td>
                   <td>{{ new Date(script.approved_at).toLocaleString() }}</td>
                   <td>
+                    <button class="btn btn-info btn-sm me-1" @click="editScript(script)">
+                      <i class="bi bi-pencil"></i> Edit
+                    </button>
                     <button v-if="script.is_active" class="btn btn-danger btn-sm" @click="removeFromWhitelist(script.script_hash)">
                       <i class="bi bi-trash"></i> Remove
                     </button>
@@ -288,6 +291,80 @@ const ScriptsManagement = {
           </div>
         </div>
       </div>
+      
+      <!-- Script Edit Modal -->
+      <div class="modal" tabindex="-1" ref="editModal">
+        <div class="modal-dialog modal-lg">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title">Edit Script Details</h5>
+              <button type="button" class="btn-close" @click="closeEditModal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body" v-if="editingScript">
+              <form @submit.prevent="saveScriptChanges">
+                <div class="row">
+                  <div class="col-md-6">
+                    <div class="mb-3">
+                      <label for="editScriptName" class="form-label">Script Name</label>
+                      <input type="text" class="form-control" id="editScriptName" v-model="editForm.script_name" required>
+                    </div>
+                    <div class="mb-3">
+                      <label for="editRiskLevel" class="form-label">Risk Level</label>
+                      <select class="form-select" id="editRiskLevel" v-model="editForm.risk_level">
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                        <option value="critical">Critical</option>
+                      </select>
+                    </div>
+                    <div class="mb-3">
+                      <label for="editDescription" class="form-label">Description</label>
+                      <textarea class="form-control" id="editDescription" rows="3" v-model="editForm.description"></textarea>
+                    </div>
+                    <div class="mb-3">
+                      <label for="editNotes" class="form-label">Admin Notes</label>
+                      <textarea class="form-control" id="editNotes" rows="3" v-model="editForm.notes" placeholder="Internal notes about this script..."></textarea>
+                    </div>
+                  </div>
+                  <div class="col-md-6">
+                    <div class="mb-3">
+                      <label class="form-label">Script Hash</label>
+                      <div class="form-control-plaintext font-monospace">{{ editingScript.script_hash }}</div>
+                    </div>
+                    <div class="mb-3">
+                      <label class="form-label">Originally Approved By</label>
+                      <div class="form-control-plaintext">{{ editingScript.approved_by }}</div>
+                    </div>
+                    <div class="mb-3">
+                      <label class="form-label">Approved Date</label>
+                      <div class="form-control-plaintext">{{ new Date(editingScript.approved_at).toLocaleString() }}</div>
+                    </div>
+                    <div class="mb-3">
+                      <label class="form-label">Current Status</label>
+                      <div class="form-control-plaintext">
+                        <span v-if="editingScript.is_active" class="badge bg-success">Active</span>
+                        <span v-else class="badge bg-secondary">Inactive</span>
+                      </div>
+                    </div>
+                    <div class="mb-3">
+                      <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="editIsActive" v-model="editForm.is_active">
+                        <label class="form-check-label" for="editIsActive">
+                          Script is Active
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </form>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" @click="closeEditModal">Cancel</button>
+              <button type="button" class="btn btn-primary" @click="saveScriptChanges">Save Changes</button>
+            </div>
+          </div>
+        </div>
+      </div>
 
     </div>
   `,
@@ -308,7 +385,16 @@ const ScriptsManagement = {
         risk_level: 'medium',
         review_notes: '',
       },
-      modal: null
+      editingScript: null,
+      editForm: {
+        script_name: '',
+        risk_level: 'medium',
+        description: '',
+        notes: '',
+        is_active: true
+      },
+      modal: null,
+      editModal: null
     };
   },
   computed: {
@@ -444,6 +530,55 @@ const ScriptsManagement = {
         alert('Failed to reactivate script.');
       }
     },
+
+    editScript(script) {
+      this.editingScript = script;
+      this.editForm = {
+        script_name: script.script_name || '',
+        risk_level: script.risk_level || 'medium',
+        description: script.description || '',
+        notes: script.notes || '',
+        is_active: script.is_active
+      };
+      this.openEditModal();
+    },
+
+    async saveScriptChanges() {
+      if (!this.editingScript) return;
+      
+      try {
+        await this.apiClient.request(`/api/scripts/whitelist/${this.editingScript.script_hash}/update`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            ...this.editForm,
+            editor_username: this.$root.currentUser
+          })
+        });
+        
+        alert('Script updated successfully.');
+        this.closeEditModal();
+        this.fetchData();
+
+      } catch (error) {
+        console.error('Error updating script:', error);
+        alert('Failed to update script: ' + error.message);
+      }
+    },
+
+    openEditModal() {
+      if (!this.editModal) {
+        this.editModal = new bootstrap.Modal(this.$refs.editModal);
+      }
+      this.editModal.show();
+    },
+
+    closeEditModal() {
+      if (this.editModal) {
+        this.editModal.hide();
+      }
+      this.editingScript = null;
+    },
+
     openModal() {
       if (!this.modal) {
         this.modal = new bootstrap.Modal(this.$refs.reviewModal);
