@@ -379,13 +379,8 @@ const ScriptsManagement = {
       if (!confirm('Are you sure you want to remove this script from the whitelist?')) return;
       
       try {
-        const response = await fetch(`/api/scripts/whitelist/${scriptHash}`, {
-          method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ remover_username: this.$root.user.name })
-        });
-        
-        if (!response.ok) throw new Error('Failed to remove from whitelist');
+        // Use the authenticated API client instead of raw fetch
+        await this.apiClient.delete(`/api/scripts/whitelist/${scriptHash}`);
         
         alert('Script removed from whitelist.');
         this.fetchData();

@@ -176,57 +176,6 @@ const wsMonitor = initializeWebSocketMonitor(http);
 
 
 
-// Debug blockchain monitor status endpoint (remove after testing)
-api.get("/api/debug/blockchain-status", async (req, res) => {
-  try {
-    const hiveMonitor = require('./hive-monitor');
-    
-    // Get current block from Hive API
-    let currentBlock = 0;
-    try {
-      const fetch = require('node-fetch');
-      const response = await fetch('https://api.hive.blog', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          method: 'condenser_api.get_dynamic_global_properties',
-          params: [],
-          id: 1
-        })
-      });
-      const result = await response.json();
-      currentBlock = result.result?.head_block_number || 0;
-    } catch (error) {
-      console.warn('Could not fetch current block:', error);
-    }
-    
-    const status = hiveMonitor.getStatus();
-    
-    // Get database last block
-    const dbResult = await pool.query('SELECT last_block FROM hive_state WHERE id = 1');
-    const dbLastBlock = dbResult.rows[0]?.last_block || 0;
-    
-    res.json({
-      success: true,
-      currentBlock: currentBlock,
-      lastProcessedBlock: status.lastProcessedBlock,
-      dbLastBlock: dbLastBlock,
-      isRunning: status.isRunning,
-      activeListeners: status.activeListeners,
-      apiHealth: status.apiHealth,
-      blocksBehind: currentBlock - status.lastProcessedBlock,
-      dbBlocksBehind: currentBlock - dbLastBlock,
-      pendingReadTransactions: status.pendingReadTransactions,
-      readTransactionResolvers: status.readTransactionResolvers
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
 
 // Non-authenticated system endpoints (MUST BE FIRST - before any auth middleware)
 
