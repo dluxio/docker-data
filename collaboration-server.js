@@ -1380,7 +1380,6 @@ let keepAliveInterval = null
  * HTTP endpoints for triggering permission broadcasts
  * Called by the main API server when permissions change
  */
-const express = require('express')
 const broadcastRouter = express.Router()
 
 // Middleware for internal API authentication
