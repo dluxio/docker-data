@@ -1,7 +1,7 @@
 # Docker-Data Hocuspocus Collaboration Server - Claude Development Guide
 
 ## Project Overview
-This is a real-time collaborative editing server built on Hocuspocus that provides Y.js-based document synchronization with Hive blockchain authentication. The server enables multiple users to collaboratively edit documents with fine-grained permission controls, supporting features like live cursors, user presence, and automatic conflict resolution through CRDTs (Conflict-free Replicated Data Types).
+This is a real-time collaborative editing server built on Hocuspocus that provides Y.js-based document synchronization with Hive blockchain authentication. The server enables multiple users to collaboratively edit documents with fine-grained permission controls, supporting features like live cursors, user presence, automatic conflict resolution through CRDTs, and **real-time permission broadcasts**.
 
 ## Current Architecture
 - **Hocuspocus version**: 3.1.3 (@hocuspocus/server)
@@ -13,6 +13,7 @@ This is a real-time collaborative editing server built on Hocuspocus that provid
   - Supports owner, active, posting, and memo keys
 - **Y.js version**: 13.6.27 (for CRDT operations)
 - **WebSocket**: Native Hocuspocus WebSocket implementation on port 1234
+- **Real-time Permission Broadcasts**: Y.js awareness-based permission updates (implemented December 2024)
 
 ## Permission System
 
@@ -319,10 +320,16 @@ if (connection.readOnly) {
 }
 ```
 
-## Real-Time Permission Broadcast System ✅ IMPLEMENTED
+## Real-Time Permission Broadcast System ✅ IMPLEMENTED & FIXED
 
 ### Overview
 The server now includes a complete real-time permission broadcast system that eliminates 30-60 second delays for permission updates, providing near-instant permission changes (1-2 seconds) via Y.js awareness.
+
+**Latest Fix (December 2024)**: Resolved API integration issue where REST endpoint wasn't properly triggering Y.js document observers. The system now correctly:
+- Imports collaboration server instance from `collaboration-server.js`
+- Updates Y.js permissions map to trigger observers
+- Broadcasts permission changes via awareness system
+- Includes enhanced debugging for troubleshooting
 
 ### Permission Management REST API
 

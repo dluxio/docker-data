@@ -413,24 +413,38 @@ class HiveAuthExtension {
 
       // 2. Update Y.js permissions map to trigger broadcast
       const documentId = `${owner}/${permlink}`
+      console.log('🔍 Looking for Y.js document:', documentId)
+      
+      // Get or create the document if it doesn't exist
       const yjsDocument = server.getDocument(documentId)
 
       if (yjsDocument) {
+        console.log('✅ Found Y.js document, updating permissions map')
+        
         // Use Y.js transaction to update permissions map
         yjsDocument.transact(() => {
           const permissionsMap = yjsDocument.getMap('permissions')
+          
+          console.log('📝 Current permissions map size:', permissionsMap.size)
 
           // Update each permission that changed
           Object.entries(newPermissions).forEach(([username, permission]) => {
+            console.log(`  Setting permission: ${username} = ${permission}`)
             permissionsMap.set(username, permission)
           })
 
           // Add timestamp for debugging
           permissionsMap.set('lastUpdated', new Date().toISOString())
+          
+          console.log('📝 Updated permissions map size:', permissionsMap.size)
 
         }, 'permission-api-update') // Origin tag for transaction
 
         console.log('✅ Y.js permissions updated, broadcast triggered for:', documentId)
+      } else {
+        console.log('⚠️ Y.js document not found for:', documentId)
+        console.log('  This may indicate the document has not been opened yet')
+        console.log('  Permission changes will be applied when document is first accessed')
       }
 
       return { success: true, permissions: newPermissions }
@@ -639,7 +653,17 @@ const server = new Server({
 
       // Set up observer for permission changes (only once per document)
       if (!permissionsMap._hasPermissionObserver) {
+        console.log('🔧 Setting up permission observer for document:', documentName)
+        
         permissionsMap.observe((event) => {
+          console.log('🔔 Permission map observer triggered:', {
+            document: documentName,
+            eventType: event.type,
+            keysChanged: event.changes.keys.size,
+            changedKeys: Array.from(event.changes.keys.keys()),
+            timestamp: new Date().toISOString()
+          })
+          
           if (event.type === 'update' && event.changes.keys.size > 0) {
             
             console.log('📡 Permission change detected, broadcasting:', {
@@ -655,13 +679,18 @@ const server = new Server({
               documentName: documentName,
               eventType: 'permission-change'
             })
+            
+            console.log('✅ Permission broadcast sent via awareness system')
 
             // Clear the broadcast after 5 seconds to prevent memory accumulation
             setTimeout(() => {
               if (document.awareness) {
                 document.awareness.setLocalStateField('permissionUpdate', null)
+                console.log('🧹 Permission broadcast cleared from awareness')
               }
             }, 5000)
+          } else {
+            console.log('⚠️ Permission observer fired but no keys changed')
           }
         })
 
@@ -669,6 +698,8 @@ const server = new Server({
         permissionsMap._hasPermissionObserver = true
 
         console.log('✅ Permission observer added for document:', documentName)
+      } else {
+        console.log('ℹ️ Permission observer already exists for document:', documentName)
       }
 
     } catch (error) {

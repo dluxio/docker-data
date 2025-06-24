@@ -356,17 +356,10 @@ api.post("/api/collaboration/permissions/:owner/:permlink", collaborationAuthMid
 
   try {
     // Import collaboration server to access the server instance
-    const { server: collaborationServer } = require('./collaboration-server');
-    const { HiveAuthExtension } = require('./collaboration-server');
+    const { server: collaborationServer, HiveAuthExtension } = require('./collaboration-server');
     
     // Create instance to use the permission update method
-    const hiveAuth = new (require('./collaboration-server').HiveAuthExtension || class {
-      async updateDocumentPermissions(server, owner, permlink, newPermissions) {
-        // Fallback implementation if class import fails
-        console.log('✅ Permission update requested:', { owner, permlink, permissions: newPermissions });
-        return { success: true, permissions: newPermissions };
-      }
-    })();
+    const hiveAuth = new HiveAuthExtension();
 
     const result = await hiveAuth.updateDocumentPermissions(collaborationServer, owner, permlink, permissions);
     
