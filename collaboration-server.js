@@ -252,7 +252,6 @@ class HiveAuthExtension {
         // Additional validation: awareness messages should have specific structure
         // They contain awareness update data after the message type
         if (updateArray.length > 1) {
-          console.log(`[isAwarenessProtocolMessage] Detected Hocuspocus awareness message (type ${messageType}, size ${updateArray.length})`)
           return true
         }
       }
@@ -265,14 +264,12 @@ class HiveAuthExtension {
         try {
           const contentStr = new TextDecoder().decode(updateArray.slice(1, Math.min(100, updateArray.length)))
           if (contentStr.includes('user') || contentStr.includes('cursor') || contentStr.includes('lastActivity') || contentStr.includes('markegiles') || contentStr.includes('heyhey')) {
-            console.log(`[isAwarenessProtocolMessage] Detected Y.js awareness update (type ${messageType}/0x${messageType.toString(16)}, size ${updateArray.length})`)
             return true
           }
         } catch (e) {
           // Ignore decoding errors, but still check the structure
           // Y.js awareness updates have a specific pattern we can detect
           if (updateArray.length > 20) {
-            console.log(`[isAwarenessProtocolMessage] Possible Y.js awareness update based on structure (type ${messageType}/0x${messageType.toString(16)}, size ${updateArray.length})`)
             return true
           }
         }
@@ -316,7 +313,6 @@ class HiveAuthExtension {
         // Sync = 0 (includes both sync step 1 and 2)
         // SyncReply = 4 (same as Sync but won't trigger another SyncStep1)
         if (messageType === 0 || messageType === 4) {
-          console.log(`[isSyncProtocolMessage] Detected sync protocol message type ${messageType}`)
           return true
         }
       }
@@ -430,7 +426,6 @@ class HiveAuthExtension {
       default:
         // Type 27 (0x1b) and other unknown types are NOT protocol messages
         // These are likely Y.js document updates and should be blocked for readonly users
-        console.log(`[isProtocolMessage] Unknown message type ${messageType} (0x${messageType.toString(16)}) - NOT a protocol message`)
         return false
     }
   }
@@ -439,104 +434,72 @@ class HiveAuthExtension {
   async updateDocumentPermissions(server, owner, permlink, newPermissions) {
     let connection = null
     
-    console.log('[updateDocumentPermissions] Starting permission update')
-    console.log('[updateDocumentPermissions] Document:', `${owner}/${permlink}`)
-    console.log('[updateDocumentPermissions] New permissions:', newPermissions)
-    console.log('[updateDocumentPermissions] Server type:', typeof server)
-    console.log('[updateDocumentPermissions] Server has documents:', server && server.documents !== undefined)
-    console.log('[updateDocumentPermissions] Server has openDirectConnection:', server && typeof server.openDirectConnection === 'function')
+    // Updating permissions for document
     
     try {
       // 1. Update permissions in database
-      console.log('[updateDocumentPermissions] Step 1: Updating database...')
       await this.updatePermissionsInDatabase(owner, permlink, newPermissions)
-      console.log('[updateDocumentPermissions] Database updated successfully')
 
       // 2. Update Y.js permissions map to trigger broadcast
       const documentId = `${owner}/${permlink}`
-      console.log('🔍 Step 2: Looking for Y.js document:', documentId)
       
       // First, check if document exists in active documents
-      console.log('[updateDocumentPermissions] Checking for active document...')
-      
-      // The documents are stored on the hocuspocus instance, not the server
       let yjsDocument = null
       let documentsMap = null
       
-      if (server.hocuspocus && server.hocuspocus.documents) {
-        documentsMap = server.hocuspocus.documents
-        console.log('[updateDocumentPermissions] Found hocuspocus.documents, size:', documentsMap.size)
+      // Access hocuspocus instance correctly
+      const hocuspocus = server.hocuspocus || server
+      
+      if (hocuspocus.documents instanceof Map) {
+        documentsMap = hocuspocus.documents
         yjsDocument = documentsMap.get(documentId)
-      } else if (server.documents) {
-        documentsMap = server.documents
-        console.log('[updateDocumentPermissions] Found server.documents, size:', documentsMap.size)
-        yjsDocument = documentsMap.get(documentId)
-      } else {
-        console.log('[updateDocumentPermissions] No documents map found on server or hocuspocus')
       }
       let needsDisconnect = false
       
       if (!yjsDocument) {
-        console.log('📄 Document not in active connections, attempting direct connection...')
-        console.log('[updateDocumentPermissions] server.openDirectConnection type:', typeof server.openDirectConnection)
-        
-        // Check for openDirectConnection on hocuspocus instance
-        const hocuspocus = server.hocuspocus || server
-        
+        // Document not loaded, open direct connection
         if (!hocuspocus.openDirectConnection) {
-          console.error('[updateDocumentPermissions] ERROR: openDirectConnection is not available!')
-          console.log('[updateDocumentPermissions] Checked object type:', typeof hocuspocus)
-          console.log('[updateDocumentPermissions] Available properties:', Object.keys(hocuspocus).slice(0, 10))
           throw new Error('Server API missing: openDirectConnection method not available')
         }
         
         try {
-          // Create a direct connection to access/create the document
-          console.log('[updateDocumentPermissions] Creating direct connection...')
           connection = await hocuspocus.openDirectConnection(documentId, {
             user: {
               name: 'permission-api',
               permissions: { canEdit: true, canRead: true, permissionType: 'system' }
             }
           })
-          console.log('[updateDocumentPermissions] Connection created:', connection !== null)
-          console.log('[updateDocumentPermissions] Connection has document:', connection && connection.document !== undefined)
-          
           yjsDocument = connection.document
           needsDisconnect = true
-          console.log('✅ Direct connection established, document retrieved')
         } catch (connError) {
-          console.error('❌ Failed to create direct connection:', connError)
-          console.error('[updateDocumentPermissions] Connection error stack:', connError.stack)
           throw new Error(`Cannot access document ${documentId}: ${connError.message}`)
         }
-      } else {
-        console.log('✅ Document found in active connections')
       }
 
       if (yjsDocument) {
-        console.log('✅ Found Y.js document, updating permissions map')
+        // Check if observer exists
+        const hasObserver = permissionObservers.has(yjsDocument)
+        if (!hasObserver) {
+          // No permission observer found for document
+        }
         
         // Use Y.js transaction to update permissions map
         yjsDocument.transact(() => {
           const permissionsMap = yjsDocument.getMap('permissions')
-          
-          console.log('📝 Current permissions map size:', permissionsMap.size)
 
           // Update each permission that changed
           Object.entries(newPermissions).forEach(([username, permission]) => {
-            console.log(`  Setting permission: ${username} = ${permission}`)
             permissionsMap.set(username, permission)
           })
 
           // Add timestamp for debugging
           permissionsMap.set('lastUpdated', new Date().toISOString())
-          
-          console.log('📝 Updated permissions map size:', permissionsMap.size)
+        }, 'permission-api-update')
 
-        }, 'permission-api-update') // Origin tag for transaction
-
-        console.log('✅ Y.js permissions updated, broadcast triggered for:', documentId)
+        // Permissions updated successfully
+        
+        // Give the observer a moment to trigger
+        await new Promise(resolve => setTimeout(resolve, 100))
         
         // If we created a direct connection, disconnect it
         if (needsDisconnect && connection) {
@@ -619,7 +582,6 @@ class HiveAuthExtension {
 const hiveAuth = new HiveAuthExtension()
 
 // Configure the Hocuspocus server
-console.log('🔨 Creating Hocuspocus server instance...')
 const server = new Server({
   port: 1234,
   
@@ -631,12 +593,7 @@ const server = new Server({
   
   // Add startup configuration hook
   async onConfigure(data) {
-    console.log('🚀 Server configuration phase')
-    console.log('[onConfigure] Data provided:', Object.keys(data || {}))
-    console.log('[onConfigure] This context:', typeof this)
-    
-    // Configuration might not be available yet in onConfigure
-    // Move detailed logging to onLoadDocument or after server starts
+    // Configuration phase - no logging needed here
   },
   
   // CORS configuration
@@ -676,28 +633,21 @@ const server = new Server({
       const permissions = context.user.permissions
       const user = context.user
       
-      // Debug: Log all messages for readonly users
-      if (!permissions.canEdit) {
-        const messageInfo = hiveAuth.debugMessageType(update)
-        console.log(`[beforeHandleMessage] DEBUG - Message from readonly user ${user.name}:`, messageInfo)
-      }
+      // Remove debug logging for production
       
       // Allow all updates during grace period for initial sync
       if (hiveAuth.isInGracePeriod(user)) {
-        console.log(`[beforeHandleMessage] Grace period active for ${user.name}, allowing sync protocol`)
         return
       }
       
       // Always allow Y.js sync protocol messages regardless of permissions
       if (hiveAuth.isSyncProtocolMessage(update)) {
-        console.log(`[beforeHandleMessage] Allowing Y.js sync protocol message for ${user.name}`)
         return
       }
       
       // IMPORTANT: Let Hocuspocus handle awareness messages via onAwarenessUpdate
       // This avoids the broken heuristic detection and uses proper protocol handling
       if (hiveAuth.isAwarenessProtocolMessage(update)) {
-        console.log(`[beforeHandleMessage] Delegating awareness message to Hocuspocus for ${user.name}`)
         return // Let Hocuspocus process this via onAwarenessUpdate
       }
       
@@ -706,8 +656,6 @@ const server = new Server({
         // CRITICAL: Allow ALL Y.js protocol messages (types 0-4, 8) for readonly users
         // Only reject document content changes (type 0 with actual content)
         if (hiveAuth.isProtocolMessage(update)) {
-          const messageInfo = hiveAuth.debugMessageType(update)
-          console.log(`[beforeHandleMessage] Allowing protocol message (type ${messageInfo.type}: ${messageInfo.typeName}) from read-only user: ${user.name}`)
           return // Allow all protocol messages: 0-4, 8
         }
         
@@ -724,14 +672,8 @@ const server = new Server({
           attemptedChanges: updateInfo
         })
         
-        // Enhanced logging with decoded update
-        console.log(`[beforeHandleMessage] Blocking document edit from read-only user:`)
-        console.log(`  User: ${user.name}`)
-        console.log(`  Permission: ${permissions.permissionType}`)
-        console.log(`  Document: ${documentName}`)
-        console.log(`  Update size: ${update.length} bytes`)
-        console.log(`  Message type: ${hiveAuth.debugMessageType(update).typeName}`)
-        console.log(`  Update info:`, JSON.stringify(updateInfo, null, 2))
+        // Log blocked edit attempt
+        console.log(`[Permissions] Blocked edit from read-only user ${user.name} on ${documentName}`)
         
         // Clear error message
         let errorMessage = `Document editing not allowed. User ${user.name} has ${permissions.permissionType} access.`
@@ -741,8 +683,7 @@ const server = new Server({
         
         throw new Error(errorMessage)
       } else {
-        // User has edit permissions - log successful edit capability
-        console.log(`[beforeHandleMessage] User ${user.name} has edit permissions (${permissions.permissionType})`)
+        // User has edit permissions - allow
       }
     }
   },
@@ -765,39 +706,27 @@ const server = new Server({
   // ✅ STEP 1: Core Permission Observer - Real-time permission broadcasts
   async onChangeDocument(data) {
     const { documentName, document } = data
-    
-    console.log('[onChangeDocument] Called for document:', documentName)
-    console.log('[onChangeDocument] Document type:', typeof document)
-    console.log('[onChangeDocument] Document has getMap:', typeof document.getMap === 'function')
 
     try {
       // Get permissions map from Y.js document
       const permissionsMap = document.getMap('permissions')
-      console.log('[onChangeDocument] Permissions map retrieved, size:', permissionsMap.size)
-      console.log('[onChangeDocument] Current permissions:', Object.fromEntries(permissionsMap.entries()))
 
       // Set up observer for permission changes (only once per document)
       if (!permissionObservers.has(document)) {
         console.log('🔧 Setting up permission observer for document:', documentName)
-        console.log('[onChangeDocument] permissionObservers type:', typeof permissionObservers)
-        console.log('[onChangeDocument] permissionObservers has been initialized:', permissionObservers instanceof WeakMap)
         
         const observerCallback = (event) => {
-          console.log('🔔 Permission map observer triggered:', {
-            document: documentName,
-            eventType: event.type,
-            keysChanged: event.changes.keys.size,
-            changedKeys: Array.from(event.changes.keys.keys()),
-            timestamp: new Date().toISOString()
-          })
-          
           if (event.type === 'update' && event.changes.keys.size > 0) {
+            const changedKeys = Array.from(event.changes.keys.keys())
+            // Only log actual permission changes, not metadata updates
+            const permissionKeys = changedKeys.filter(key => key !== 'lastUpdated' && key !== 'created')
             
-            console.log('📡 Permission change detected, broadcasting:', {
-              document: documentName,
-              changedKeys: Array.from(event.changes.keys.keys()),
-              timestamp: new Date().toISOString()
-            })
+            if (permissionKeys.length > 0) {
+              console.log('📡 Permission change detected, broadcasting:', {
+                document: documentName,
+                changedUsers: permissionKeys
+              })
+            }
 
             try {
               // Broadcast permission update via Y.js awareness
@@ -832,24 +761,22 @@ const server = new Server({
                   }
                 })
                 
-                console.log('✅ Permission broadcast sent via awareness system')
-                console.log('  Changed permissions:', changedPermissions)
+                // Permission broadcast sent via awareness
 
                 // Clear the broadcast after 5 seconds to prevent memory accumulation
                 setTimeout(() => {
                   if (document.awareness) {
                     document.awareness.setLocalStateField('permissionUpdate', null)
-                    console.log('🧹 Permission broadcast cleared from awareness')
                   }
                 }, 5000)
               } else {
-                console.log('⚠️ Document awareness not available for broadcasting')
+                // Document awareness not available for broadcasting
               }
             } catch (broadcastError) {
               console.error('❌ Error broadcasting permission update:', broadcastError)
             }
           } else {
-            console.log('⚠️ Permission observer fired but no keys changed')
+            // Permission observer fired but no keys changed
           }
         }
         
@@ -862,12 +789,7 @@ const server = new Server({
           permissionsMap: permissionsMap
         })
         
-        console.log('[onChangeDocument] Observer stored in WeakMap')
-        console.log('[onChangeDocument] Verifying observer was stored:', permissionObservers.has(document))
-
-        console.log('✅ Permission observer added for document:', documentName)
-      } else {
-        console.log('ℹ️ Permission observer already exists for document:', documentName)
+        // Permission observer added for document
       }
 
     } catch (error) {
@@ -883,24 +805,11 @@ const server = new Server({
     // CRITICAL: Allow awareness updates for ALL authenticated users (including readonly)
     // This should NOT reject awareness updates from readonly users
     
-    // Log awareness activity for debugging
-    if (added.length > 0 || updated.length > 0 || removed.length > 0) {
-      console.log('👥 Awareness update:', {
-        document: documentName,
-        added: added.length,
-        updated: updated.length,
-        removed: removed.length,
-        totalClients: awareness.getStates().size
-      })
-
-      // ✅ STEP 2: Check for permission broadcasts in awareness states
+    // Check for permission broadcasts in awareness states
+    if (awareness && awareness.getStates) {
       awareness.getStates().forEach((state, clientId) => {
         if (state.permissionUpdate) {
-          console.log('🔔 Permission broadcast detected in awareness:', {
-            clientId,
-            broadcast: state.permissionUpdate,
-            document: documentName
-          })
+          // Permission broadcast detected in awareness
         }
       })
     }
@@ -909,13 +818,13 @@ const server = new Server({
       const user = context.user
       const permissions = user.permissions
       
-      console.log(`[onAwarenessUpdate] From user: ${user.name} (${permissions.permissionType})`)
+      // Log only for debugging permission broadcasts
+      // console.log(`[onAwarenessUpdate] From user: ${user.name} (${permissions.permissionType})`)
       
       // CRITICAL: Reset connection activity to prevent timeouts
       if (connection) {
         connection.lastActivity = Date.now()
         connection.isAlive = true
-        console.log(`[onAwarenessUpdate] Connection activity reset for ${user.name}`)
       }
       
       // Log awareness activity for monitoring
@@ -939,13 +848,9 @@ const server = new Server({
     const { documentName, document } = data
 
     console.log('📄 Document created:', documentName)
-    console.log('[onCreateDocument] Document type:', typeof document)
-    console.log('[onCreateDocument] Document has getMap:', typeof document.getMap === 'function')
-    console.log('[onCreateDocument] Document has awareness:', document.awareness !== undefined)
 
     // Initialize permissions map if it doesn't exist
     const permissionsMap = document.getMap('permissions')
-    console.log('[onCreateDocument] Initial permissions map size:', permissionsMap.size)
     
     if (permissionsMap.size === 0) {
       // Set default permissions for document creator
@@ -953,37 +858,59 @@ const server = new Server({
       permissionsMap.set(owner, 'owner')
       permissionsMap.set('created', new Date().toISOString())
       
-      console.log('✅ Default permissions set for document owner:', owner)
-      console.log('[onCreateDocument] Permissions after initialization:', Object.fromEntries(permissionsMap.entries()))
+      // Default permissions set for document owner
     }
     
-    // Trigger onChangeDocument to set up observer
-    console.log('[onCreateDocument] Setting up permission observer for new document')
+    // Set up permission observer for the new document
     try {
-      // Call the onChangeDocument function directly to set up observer
-      // Note: 'this' context should have access to the configuration
-      if (this.configuration && typeof this.configuration.onChangeDocument === 'function') {
-        await this.configuration.onChangeDocument({ documentName, document })
-        console.log('[onCreateDocument] Successfully set up permission observer')
-      } else {
-        console.log('[onCreateDocument] WARNING: onChangeDocument not available in this context')
-        // Fallback: Set up observer directly here
-        const permissionsMap = document.getMap('permissions')
-        if (!permissionObservers.has(document)) {
-          console.log('[onCreateDocument] Setting up observer directly')
-          const observerCallback = (event) => {
-            console.log('🔔 Permission map changed in document:', documentName)
-            // Observer logic would go here
+      // Set up observer directly since we can't reliably call onChangeDocument from here
+      if (!permissionObservers.has(document)) {
+        const observerCallback = (event) => {
+          if (event.type === 'update' && event.changes.keys.size > 0) {
+            const changedKeys = Array.from(event.changes.keys.keys())
+            const permissionKeys = changedKeys.filter(key => key !== 'lastUpdated' && key !== 'created')
+            
+            if (permissionKeys.length > 0) {
+              console.log('📡 Permission change detected (onCreate observer):', {
+                document: documentName,
+                changedUsers: permissionKeys
+              })
+            }
+            
+            // Broadcast permission update via Y.js awareness
+            if (document.awareness) {
+              const permissionUpdate = {
+                timestamp: Date.now(),
+                changes: Array.from(event.changes.keys.keys()),
+                documentName: documentName,
+                eventType: 'permission-change'
+              }
+              
+              // Set local state field for broadcast
+              document.awareness.setLocalStateField('permissionUpdate', permissionUpdate)
+              // Permission broadcast sent from onCreate observer
+              
+              // Clear after 5 seconds
+              setTimeout(() => {
+                if (document.awareness) {
+                  document.awareness.setLocalStateField('permissionUpdate', null)
+                }
+              }, 5000)
+            }
           }
-          permissionsMap.observe(observerCallback)
-          permissionObservers.set(document, {
-            callback: observerCallback,
-            permissionsMap: permissionsMap
-          })
         }
+        
+        permissionsMap.observe(observerCallback)
+        permissionObservers.set(document, {
+          callback: observerCallback,
+          permissionsMap: permissionsMap
+        })
+        
+        console.log('[Permissions] Observer attached for document:', documentName)
       }
     } catch (error) {
       console.error('[onCreateDocument] Error setting up permission observer:', error)
+      console.error('[onCreateDocument] Error stack:', error.stack)
     }
   },
 
@@ -999,12 +926,12 @@ const server = new Server({
       // Unobserve the permissions map
       if (observerData.permissionsMap && observerData.callback) {
         observerData.permissionsMap.unobserve(observerData.callback)
-        console.log('✅ Permission observer removed for:', documentName)
+        // Permission observer removed
       }
       
       // Remove from WeakMap
       permissionObservers.delete(document)
-      console.log('✅ Permission observer cleaned up for:', documentName)
+      // Permission observer cleaned up
     }
   },
 
@@ -1017,19 +944,13 @@ const server = new Server({
       const user = context.user
       const permissions = user.permissions
       
-      // Enhanced connection logging
-      console.log(`[onConnect] User ${user.name} connected to ${documentName}`)
-      console.log(`  Permission: ${permissions.permissionType}`)
-      console.log(`  Can Edit: ${permissions.canEdit}`)
-      console.log(`  Can Read: ${permissions.canRead}`)
-      console.log(`  Connection ID: ${connection?.id || 'unknown'}`)
-      console.log(`  Timestamp: ${new Date().toISOString()}`)
+      // Log connection for monitoring
+      console.log(`[onConnect] ${user.name} (${permissions.permissionType}) connected to ${documentName}`)
       
       // Mark connection as alive for keep-alive tracking
       if (connection) {
         connection.isAlive = true
         connection.lastActivity = Date.now()
-        console.log(`[onConnect] Connection marked as alive for user ${user.name}`)
       }
       
       // Update active user count
@@ -1246,20 +1167,6 @@ const server = new Server({
   ],
 })
 
-console.log('🔨 Hocuspocus server instance created')
-console.log('[Server Creation] Server type:', typeof server)
-console.log('[Server Creation] Has listen method:', typeof server.listen === 'function')
-console.log('[Server Creation] Has destroy method:', typeof server.destroy === 'function')
-// Note: openDirectConnection is on the hocuspocus instance, not the server instance
-console.log('[Server Creation] Checking for hocuspocus instance...')
-if (server.hocuspocus) {
-  console.log('[Server Creation] Has hocuspocus instance:', typeof server.hocuspocus === 'object')
-  console.log('[Server Creation] hocuspocus has openDirectConnection:', typeof server.hocuspocus.openDirectConnection === 'function')
-  console.log('[Server Creation] hocuspocus has documents:', server.hocuspocus.documents !== undefined)
-} else {
-  console.log('[Server Creation] No hocuspocus property on server')
-}
-
 // Setup database tables for collaboration
 async function setupCollaborationDatabase() {
   try {
@@ -1366,41 +1273,24 @@ async function startCollaborationServer() {
     // Start the server
     server.listen()
     
-    console.log(`🚀 Hocuspocus collaboration server started with permission broadcasts enabled`)
-    console.log(`[Server] Port: 1234`)
-    console.log(`[Server] Timeout: ${server.configuration.timeout}ms`)
-    console.log(`[Server] Permission broadcasts: ✅ ENABLED`)
-    console.log(`[Server] Code version: 2024-12-24-PERMISSION-BROADCAST-FIX-v2`)
-    
-    // Diagnostic: Check server properties after startup
-    console.log(`[DIAGNOSTIC] Server type:`, typeof server)
-    console.log(`[DIAGNOSTIC] Server has documents:`, server.documents !== undefined)
-    console.log(`[DIAGNOSTIC] Server has openDirectConnection:`, typeof server.openDirectConnection === 'function')
-    console.log(`[DIAGNOSTIC] HiveAuthExtension loaded:`, typeof HiveAuthExtension === 'function')
-    console.log(`[DIAGNOSTIC] permissionObservers WeakMap created:`, typeof permissionObservers === 'object')
-    console.log(`[DIAGNOSTIC] Server configuration:`, {
-      timeout: server.configuration?.timeout,
-      debounce: server.configuration?.debounce,
-      maxDebounce: server.configuration?.maxDebounce,
-      hasOnCreateDocument: typeof server.configuration?.onCreateDocument === 'function',
-      hasOnChangeDocument: typeof server.configuration?.onChangeDocument === 'function',
-      hasOnDestroyDocument: typeof server.configuration?.onDestroyDocument === 'function',
-      hasOnAwarenessUpdate: typeof server.configuration?.onAwarenessUpdate === 'function'
-    })
+    console.log(`🚀 Hocuspocus collaboration server started`)
+    console.log(`[Server] Port: 1234, Timeout: ${server.configuration.timeout}ms`)
+    console.log('[Server] Started with permission broadcasts enabled')
     
     // ✅ STEP 5: Enhanced monitoring with permission broadcast tracking
     keepAliveInterval = setInterval(() => {
       try {
-        // Get document count from the documents Map
-        const documentCount = server.documents ? server.documents.size : 0
+        // Get document count from the hocuspocus instance
+        const hocuspocus = server.hocuspocus
+        const documentCount = hocuspocus && hocuspocus.documents ? hocuspocus.documents.size : 0
         
         // Log basic server status
-        console.log(`📊 Server status: ${documentCount} active documents`)
+        // Server status: ${documentCount} active documents
         
         // Log document names and connection info if available
-        if (server.documents && server.documents.size > 0) {
+        if (hocuspocus && hocuspocus.documents && hocuspocus.documents.size > 0) {
           console.log('📄 Active documents:')
-          server.documents.forEach((doc, docName) => {
+          hocuspocus.documents.forEach((doc, docName) => {
             console.log(`  - ${docName}`)
             
             // Check if document has awareness for connected users

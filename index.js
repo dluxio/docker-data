@@ -355,53 +355,32 @@ api.post("/api/collaboration/permissions/:owner/:permlink", collaborationAuthMid
   const { permissions } = req.body;
 
   try {
-    console.log('🔍 Permission API called:', { owner, permlink, permissions });
-    console.log('[Permission API] Request headers:', req.headers['x-account']);
-    console.log('[Permission API] Permission update requested by:', req.headers['x-account']);
+    console.log('[Permissions] Update requested by:', req.headers['x-account']);
     
     // Import collaboration server to access the server instance
-    console.log('[Permission API] Importing collaboration server...');
     const { server: collaborationServer, HiveAuthExtension } = require('./collaboration-server');
     
-    console.log('🔍 Collaboration server imported:', {
-      hasServer: collaborationServer !== undefined,
-      serverType: typeof collaborationServer,
-      hasHiveAuthExtension: typeof HiveAuthExtension === 'function'
-    });
-    
-    // Check for documents on both server and hocuspocus instance
+    // Check for documents on hocuspocus instance
     let documentsMap = null;
-    if (collaborationServer.hocuspocus && collaborationServer.hocuspocus.documents) {
-      documentsMap = collaborationServer.hocuspocus.documents;
-      console.log('[Permission API] Found documents on hocuspocus instance, size:', documentsMap.size);
-    } else if (collaborationServer.documents) {
-      documentsMap = collaborationServer.documents;
-      console.log('[Permission API] Found documents on server instance, size:', documentsMap.size);
-    } else {
-      console.log('[Permission API] No documents map found');
-    }
+    const hocuspocus = collaborationServer.hocuspocus;
     
-    // List active documents
-    if (documentsMap && documentsMap.size > 0) {
-      console.log('[Permission API] Active documents:');
-      documentsMap.forEach((doc, docName) => {
-        console.log(`  - ${docName}`);
-      });
+    // Check for documents on hocuspocus instance
+    
+    if (hocuspocus && hocuspocus.documents instanceof Map) {
+      documentsMap = hocuspocus.documents;
+      // Found documents Map on hocuspocus
+    } else {
+      console.error('[Permissions] ERROR: No valid documents Map found');
     }
     
     // Create instance to use the permission update method
-    console.log('[Permission API] Creating HiveAuthExtension instance...');
     const hiveAuth = new HiveAuthExtension();
-
-    console.log('[Permission API] Calling updateDocumentPermissions...');
     const result = await hiveAuth.updateDocumentPermissions(collaborationServer, owner, permlink, permissions);
     
-    console.log('✅ Permission broadcast triggered via API for:', `${owner}/${permlink}`);
-    console.log('📊 API Result:', result);
+    console.log('[Permissions] Broadcast triggered for:', `${owner}/${permlink}`);
     res.json(result);
   } catch (error) {
-    console.error('❌ Permission update API failed:', error);
-    console.error('Error stack:', error.stack);
+    console.error('[Permissions] Update API failed:', error);
     res.status(500).json({ error: error.message });
   }
 });
