@@ -294,7 +294,10 @@ const app = createApp({
                 const [actStatusData, channelsData, blockchainStatusData, adminAccountData] = await Promise.all([
                     this.apiClient.get('/api/onboarding/admin/act-status'),
                     this.apiClient.get('/api/onboarding/admin/channels?limit=10'),
-                    this.apiClient.get('/api/onboarding/admin/blockchain-monitor-status').catch(() => ({ success: false })), // Get blockchain monitor status
+                    this.apiClient.get('/api/onboarding/admin/blockchain-monitor-status').catch(() => 
+                        // Fallback to debug endpoint if main endpoint fails
+                        this.apiClient.get('/api/debug/blockchain').catch(() => ({ success: false }))
+                    ), // Get blockchain monitor status
                     this.apiClient.get('/api/onboarding/admin/account-info').catch(() => ({ success: false }))
                 ]);
 
@@ -342,7 +345,18 @@ const app = createApp({
 
                 // Process blockchain monitoring data
                 if (blockchainStatusData.success) {
-                    this.dashboardData.blockchainMonitoring = blockchainStatusData.data || null;
+                    this.dashboardData.blockchainMonitoring = blockchainStatusData.data || blockchainStatusData || null;
+                    
+                    // If we have blockchain data, ensure it has the current block
+                    if (this.dashboardData.blockchainMonitoring) {
+                        // Convert string numbers to integers for proper display
+                        if (typeof this.dashboardData.blockchainMonitoring.lastProcessedBlock === 'string') {
+                            this.dashboardData.blockchainMonitoring.lastProcessedBlock = parseInt(this.dashboardData.blockchainMonitoring.lastProcessedBlock);
+                        }
+                        if (typeof this.dashboardData.blockchainMonitoring.currentBlock === 'string') {
+                            this.dashboardData.blockchainMonitoring.currentBlock = parseInt(this.dashboardData.blockchainMonitoring.currentBlock);
+                        }
+                    }
                 }
 
                 // Verify pending channels

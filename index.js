@@ -177,50 +177,6 @@ const wsMonitor = initializeWebSocketMonitor(http);
 
 
 
-// Debug blockchain status endpoint (temporary)
-api.get("/api/debug/blockchain", async (req, res) => {
-  try {
-    // Get current block from Hive API
-    const fetch = require('node-fetch');
-    const response = await fetch('https://api.hive.blog', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        method: 'condenser_api.get_dynamic_global_properties',
-        params: [],
-        id: 1
-      })
-    });
-    const result = await response.json();
-    const currentBlock = result.result?.head_block_number || 0;
-    
-    // Get database last block
-    const dbResult = await pool.query('SELECT last_block FROM hive_state WHERE id = 1');
-    const lastProcessedBlock = dbResult.rows[0]?.last_block || 0;
-    
-    // Try to get hive monitor status
-    let monitorStatus = null;
-    try {
-      const hiveMonitor = require('./hive-monitor');
-      monitorStatus = hiveMonitor.getStatus();
-    } catch (error) {
-      monitorStatus = { error: error.message };
-    }
-    
-    res.json({
-      success: true,
-      currentHiveBlock: currentBlock,
-      lastProcessedBlock: lastProcessedBlock,
-      blocksBehind: currentBlock - lastProcessedBlock,
-      monitorStatus: monitorStatus,
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
 // Non-authenticated system endpoints (MUST BE FIRST - before any auth middleware)
 
 
