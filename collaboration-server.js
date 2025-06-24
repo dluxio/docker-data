@@ -417,6 +417,7 @@ const server = new Server({
   timeout: 300000, // 5 minutes (default is 30 seconds)
   debounce: 2000,  // 2 seconds debounce for document updates
   maxDebounce: 10000, // 10 seconds max debounce
+  quiet: false, // Enable logging to help debug connection issues
   
   // CORS configuration
   cors: {
@@ -542,18 +543,19 @@ const server = new Server({
       const user = context.user
       const permissions = user.permissions
       
-      // Log connection with permission info
+      // Enhanced connection logging
       console.log(`[onConnect] User ${user.name} connected to ${documentName}`)
       console.log(`  Permission: ${permissions.permissionType}`)
       console.log(`  Can Edit: ${permissions.canEdit}`)
       console.log(`  Can Read: ${permissions.canRead}`)
+      console.log(`  Connection ID: ${connection?.id || 'unknown'}`)
+      console.log(`  Timestamp: ${new Date().toISOString()}`)
       
-      // Set connection timeout to prevent disconnections (5 minutes)
-      if (connection && connection.ws) {
-        connection.ws.isAlive = true
-        connection.ws.on('pong', () => {
-          connection.ws.isAlive = true
-        })
+      // Mark connection as alive for keep-alive tracking
+      if (connection) {
+        connection.isAlive = true
+        connection.lastActivity = Date.now()
+        console.log(`[onConnect] Connection marked as alive for user ${user.name}`)
       }
       
       // Update active user count
@@ -615,13 +617,25 @@ const server = new Server({
   },
   
   async onDisconnect(data) {
-    const { documentName, context } = data
+    const { documentName, context, connection } = data
     const [owner, permlink] = documentName.split('/')
     
     if (context.user) {
+      const user = context.user
+      
+      // Enhanced disconnect logging to debug the issue
+      console.log(`[onDisconnect] User ${user.name} disconnected from ${documentName}`)
+      console.log(`  Timestamp: ${new Date().toISOString()}`)
+      console.log(`  Connection ID: ${connection?.id || 'unknown'}`)
+      if (connection) {
+        const connectionDuration = connection.lastActivity ? Date.now() - connection.lastActivity : 'unknown'
+        console.log(`  Connection duration: ${connectionDuration}ms`)
+      }
+      
       // Log disconnect activity
-      await hiveAuth.logActivity(owner, permlink, context.user.name, 'disconnect', {
-        timestamp: new Date().toISOString()
+      await hiveAuth.logActivity(owner, permlink, user.name, 'disconnect', {
+        timestamp: new Date().toISOString(),
+        connectionDuration: connection?.lastActivity ? Date.now() - connection.lastActivity : null
       })
       
       // Update active user count
@@ -851,6 +865,9 @@ async function setupCollaborationDatabase() {
   }
 }
 
+// Keep-alive interval reference
+let keepAliveInterval = null
+
 // Initialize and start server
 async function startCollaborationServer() {
   try {
@@ -859,6 +876,27 @@ async function startCollaborationServer() {
     
     // Start the server
     server.listen()
+    
+    console.log(`[Server] Hocuspocus collaboration server started on port 1234`)
+    console.log(`[Server] Keep-alive mechanism: Using Hocuspocus internal timeout of ${server.configuration.timeout}ms`)
+    
+    // Set up connection monitoring interval
+    keepAliveInterval = setInterval(() => {
+      const connections = server.getConnections()
+      console.log(`[KeepAlive] Active connections: ${connections.length}`)
+      
+      connections.forEach(connection => {
+        if (connection.context?.user) {
+          const user = connection.context.user
+          const now = Date.now()
+          const lastActivity = connection.lastActivity || connection.connectedAt || now
+          const idleTime = now - lastActivity
+          
+          console.log(`[KeepAlive] User ${user.name}: idle for ${Math.round(idleTime / 1000)}s`)
+        }
+      })
+    }, 30000) // Log every 30 seconds
+    
   } catch (error) {
     console.error('Failed to start collaboration server:', error)
     process.exit(1)
@@ -867,11 +905,19 @@ async function startCollaborationServer() {
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
+  console.log('[Server] Shutting down...')
+  if (keepAliveInterval) {
+    clearInterval(keepAliveInterval)
+  }
   await server.destroy()
   process.exit(0)
 })
 
 process.on('SIGTERM', async () => {
+  console.log('[Server] Shutting down...')
+  if (keepAliveInterval) {
+    clearInterval(keepAliveInterval)
+  }
   await server.destroy()
   process.exit(0)
 })

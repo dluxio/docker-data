@@ -177,10 +177,10 @@ const wsMonitor = initializeWebSocketMonitor(http);
 
 
 
-// Non-authenticated system endpoints (MUST BE FIRST - before any auth middleware)
+// Apply CORS middleware FIRST to ensure all endpoints have proper CORS headers
+api.use(cors());
 
-
-
+// Non-authenticated system endpoints (after CORS but before auth middleware)
 api.get('/api/system/versions', async (req, res) => {
   try {
     // Get package.json to read versions
@@ -315,7 +315,6 @@ api.get('/api/system/versions', async (req, res) => {
 })
 
 api.use(API.https_redirect);
-api.use(cors());
 api.use(express.json());
 api.use(onboardingRouter);
 api.use(collaborationRouter);
