@@ -1983,13 +1983,13 @@ exports.reviewScript = async (req, res, next) => {
       [action === 'approve' ? 'approved' : action, reviewer_username, review_notes, reviewId]);
     if (action === 'approve') {
       await executeQuery(`
-        INSERT INTO script_whitelist (script_hash, script_name, script_content, approved_by, risk_level, description, tags) 
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO script_whitelist (script_hash, script_name, whitelisted_by, risk_level, description) 
+        VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT (script_hash) DO UPDATE SET
-          script_name = EXCLUDED.script_name, approved_by = EXCLUDED.approved_by, risk_level = EXCLUDED.risk_level,
-          description = EXCLUDED.description, tags = EXCLUDED.tags, is_active = true, updated_at = CURRENT_TIMESTAMP`,
-        [review.script_hash, script_name || `Script-${review.script_hash.substring(0, 8)}`, review.script_content,
-         reviewer_username, risk_level || 'medium', review_notes, tags || []]);
+          script_name = EXCLUDED.script_name, whitelisted_by = EXCLUDED.whitelisted_by, risk_level = EXCLUDED.risk_level,
+          description = EXCLUDED.description, is_active = true, whitelisted_at = CURRENT_TIMESTAMP`,
+        [review.script_hash, script_name || `Script-${review.script_hash.substring(0, 8)}`,
+         reviewer_username, risk_level || 'medium', review_notes]);
     }
     res.json({ message: `Script ${action}ed successfully`, whitelisted: action === 'approve' });
   } catch (error) {
