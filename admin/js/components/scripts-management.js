@@ -362,7 +362,7 @@ const ScriptsManagement = {
       try {
         await this.apiClient.post(`/api/scripts/review/${this.selectedReview.review.id}/action`, {
           action: action,
-          reviewer_username: this.$parent.currentUser, // Use parent's currentUser 
+          reviewer_username: this.$root.currentUser, // Use root's currentUser 
           ...this.reviewAction
         });
         
