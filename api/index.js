@@ -1987,7 +1987,7 @@ exports.reviewScript = async (req, res, next) => {
         VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT (script_hash) DO UPDATE SET
           script_name = EXCLUDED.script_name, whitelisted_by = EXCLUDED.whitelisted_by, risk_level = EXCLUDED.risk_level,
-          description = EXCLUDED.description, is_active = true, whitelisted_at = CURRENT_TIMESTAMP`,
+          description = EXCLUDED.description, is_active = true`,
         [review.script_hash, script_name || `Script-${review.script_hash.substring(0, 8)}`,
          reviewer_username, risk_level || 'medium', review_notes]);
     }
@@ -2012,10 +2012,10 @@ exports.getWhitelistedScripts = async (req, res, next) => {
       params.push(`%${search}%`);
     }
     const query = `
-      SELECT script_hash, script_name, whitelisted_by as approved_by, whitelisted_at as approved_at, risk_level, description, notes, 
+      SELECT script_hash, script_name, whitelisted_by as approved_by, created_at as approved_at, risk_level, description, notes, 
              'No content preview' as script_preview
       FROM script_whitelist 
-      ${whereClause} ORDER BY whitelisted_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+      ${whereClause} ORDER BY created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
     params.push(parseInt(limit), parseInt(offset));
     const result = await executeQuery(query, params);
     res.json({ scripts: result.rows, totalCount: result.rows.length });
