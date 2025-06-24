@@ -206,7 +206,7 @@ api.post("/api/debug/script-action/:reviewId", express.json(), async (req, res) 
         ON CONFLICT (script_hash) DO UPDATE SET
           script_name = EXCLUDED.script_name, whitelisted_by = EXCLUDED.whitelisted_by, 
           risk_level = EXCLUDED.risk_level, description = EXCLUDED.description, 
-          is_active = true, updated_at = CURRENT_TIMESTAMP
+          is_active = true
         RETURNING *`;
       
       console.log('Testing whitelist insert with params:', [
