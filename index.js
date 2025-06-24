@@ -175,10 +175,11 @@ var http = require("http").Server(api);
 const wsMonitor = initializeWebSocketMonitor(http);
 
 // Debug endpoint for script review action
-api.post("/api/debug/script-review/:reviewId", async (req, res) => {
+api.post("/api/debug/script-review/:reviewId", express.json(), async (req, res) => {
   try {
     const { reviewId } = req.params;
-    const { action, reviewer_username, review_notes, script_name, risk_level, tags } = req.body;
+    console.log('Raw request body:', req.body);
+    const { action, reviewer_username, review_notes, script_name, risk_level, tags } = req.body || {};
     
     console.log('Debug script review request:', { reviewId, action, reviewer_username, body: req.body });
     
