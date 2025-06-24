@@ -538,18 +538,18 @@ async function getDetails(uid, script, opt, req) {
     
     scriptHash = calculateScriptHash(RAM[script]);
     
-    const whitelistEntry = await checkScriptWhitelist(scriptHash);
+        const whitelistEntry = await checkScriptWhitelist(scriptHash);
     if (!whitelistEntry) {
       await addScriptToReview(
-        scriptHash, 
+        scriptHash,
         RAM[script], 
         'getDetails', 
         req?.user?.username || 'anonymous',
         { uid, opt, script }
       );
       
-      // For backwards compatibility, allow execution but log the attempt
-      console.log(`Script ${scriptHash} not whitelisted but allowing execution for backwards compatibility`);
+      console.log(`Script ${scriptHash} not whitelisted - execution blocked`);
+      throw new Error(`Script execution blocked: Script ${scriptHash} is not whitelisted. It has been submitted for review.`);
     }
     
     const sanitizedUid = sanitizeInput(uid, 100);
@@ -658,8 +658,8 @@ async function makePNG(uid, script, opt, req) {
         { uid, opt, script }
       );
       
-      // For backwards compatibility, allow execution but log the attempt
-      console.log(`Script ${scriptHash} not whitelisted but allowing execution for backwards compatibility`);
+      console.log(`Script ${scriptHash} not whitelisted - execution blocked`);
+      throw new Error(`Script execution blocked: Script ${scriptHash} is not whitelisted. It has been submitted for review.`);
     }
 
     const sanitizedUid = sanitizeInput(uid, 100);
@@ -1838,14 +1838,8 @@ async function checkScriptWhitelist(scriptHash) {
     return result.rows.length > 0 ? result.rows[0] : null;
   } catch (error) {
     console.error('Error checking script whitelist:', error);
-    // Return a default "allowed" object for backwards compatibility
-    // In production, you may want to be more restrictive
-    return { 
-      script_hash: scriptHash, 
-      script_name: 'Legacy Script', 
-      risk_level: 'medium',
-      fallback: true
-    };
+    // Return null for strict whitelist enforcement
+    return null;
   }
 }
 
@@ -1867,9 +1861,8 @@ async function addScriptToReview(scriptHash, scriptContent, source, requestedBy,
     return result.rows.length > 0 ? result.rows[0].id : null;
   } catch (error) {
     console.error('Error adding script to review:', error);
-    // Don't throw error - just log it and continue for backwards compatibility
-    console.log('Script review system unavailable, allowing execution for backwards compatibility');
-    return null;
+    // Re-throw the error to prevent execution when review system fails
+    throw new Error('Script review system unavailable - execution blocked for security');
   }
 }
 
@@ -1881,9 +1874,16 @@ async function logScriptExecution(scriptHash, executedBy, context, success, erro
         success, error_message, request_ip, user_agent
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
     `;
+    // Extract IP address without port
+    let clientIP = req?.ip || req?.connection?.remoteAddress || null;
+    if (clientIP && clientIP.includes(':')) {
+      // Remove port if present (e.g., "71.93.158.159:22606" -> "71.93.158.159")
+      clientIP = clientIP.split(':')[0];
+    }
+    
     await executeQuery(query, [
       scriptHash, executedBy, JSON.stringify(context), executionTime,
-      success, error, req?.ip || req?.connection?.remoteAddress, req?.get('User-Agent')
+      success, error, clientIP, req?.get('User-Agent')
     ], 'Error logging script execution');
   } catch (logError) {
     console.error('Error logging script execution:', logError);
