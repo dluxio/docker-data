@@ -177,53 +177,47 @@ const wsMonitor = initializeWebSocketMonitor(http);
 
 
 
-// Debug endpoint for script review (remove after fixing)
-api.post("/api/debug/review-error/:reviewId", express.json(), async (req, res) => {
+// Debug blockchain status endpoint (temporary)
+api.get("/api/debug/blockchain", async (req, res) => {
   try {
-    const { reviewId } = req.params;
-    const { action, reviewer_username, review_notes, script_name, risk_level } = req.body || {};
+    // Get current block from Hive API
+    const fetch = require('node-fetch');
+    const response = await fetch('https://api.hive.blog', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'condenser_api.get_dynamic_global_properties',
+        params: [],
+        id: 1
+      })
+    });
+    const result = await response.json();
+    const currentBlock = result.result?.head_block_number || 0;
     
-    console.log('Debug review error:', { reviewId, body: req.body });
+    // Get database last block
+    const dbResult = await pool.query('SELECT last_block FROM hive_state WHERE id = 1');
+    const lastProcessedBlock = dbResult.rows[0]?.last_block || 0;
     
-    // Check if review exists
-    const reviewResult = await pool.query('SELECT * FROM script_reviews WHERE id = $1', [reviewId]);
-    if (reviewResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Script review not found' });
+    // Try to get hive monitor status
+    let monitorStatus = null;
+    try {
+      const hiveMonitor = require('./hive-monitor');
+      monitorStatus = hiveMonitor.getStatus();
+    } catch (error) {
+      monitorStatus = { error: error.message };
     }
     
-    const review = reviewResult.rows[0];
-    console.log('Found review:', review);
-    
-    // Test the actual operation that's failing
-    if (action === 'approve') {
-      const testQuery = `
-        INSERT INTO script_whitelist (script_hash, script_name, whitelisted_by, risk_level, description) 
-        VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (script_hash) DO UPDATE SET
-          script_name = EXCLUDED.script_name, whitelisted_by = EXCLUDED.whitelisted_by, risk_level = EXCLUDED.risk_level,
-          description = EXCLUDED.description, is_active = true`;
-      
-      console.log('Testing query with params:', [
-        review.script_hash, 
-        script_name || `Script-${review.script_hash.substring(0, 8)}`, 
-        reviewer_username, 
-        risk_level || 'medium', 
-        review_notes
-      ]);
-      
-      await pool.query(testQuery, [
-        review.script_hash, 
-        script_name || `Script-${review.script_hash.substring(0, 8)}`, 
-        reviewer_username, 
-        risk_level || 'medium', 
-        review_notes
-      ]);
-    }
-    
-    res.json({ success: true, message: 'Debug test passed' });
+    res.json({
+      success: true,
+      currentHiveBlock: currentBlock,
+      lastProcessedBlock: lastProcessedBlock,
+      blocksBehind: currentBlock - lastProcessedBlock,
+      monitorStatus: monitorStatus,
+      timestamp: new Date().toISOString()
+    });
   } catch (error) {
-    console.error('Debug review error:', error);
-    res.status(500).json({ error: error.message, stack: error.stack });
+    res.status(500).json({ error: error.message });
   }
 });
 

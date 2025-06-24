@@ -1979,7 +1979,7 @@ exports.reviewScript = async (req, res, next) => {
     const reviewResult = await executeQuery('SELECT * FROM script_reviews WHERE id = $1 AND status = $2', [reviewId, 'pending']);
     if (reviewResult.rows.length === 0) return res.status(404).json({ error: 'Script review not found or already processed' });
     const review = reviewResult.rows[0];
-    await executeQuery(`UPDATE script_reviews SET status = $1, reviewed_by = $2, reviewed_at = CURRENT_TIMESTAMP, review_notes = $3 WHERE id = $4`,
+    await executeQuery(`UPDATE script_reviews SET status = $1, reviewed_by = $2, reviewed_at = CURRENT_TIMESTAMP, reviewer_notes = $3 WHERE id = $4`,
       [action === 'approve' ? 'approved' : action, reviewer_username, review_notes, reviewId]);
     if (action === 'approve') {
       await executeQuery(`
@@ -1993,7 +1993,8 @@ exports.reviewScript = async (req, res, next) => {
     }
     res.json({ message: `Script ${action}ed successfully`, whitelisted: action === 'approve' });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to review script' });
+    console.error('Script review error:', error);
+    res.status(500).json({ error: 'Failed to review script', details: error.message });
   }
 };
 
