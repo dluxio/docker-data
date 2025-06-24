@@ -542,6 +542,67 @@ Based on the Hocuspocus structure in this codebase:
 2. **collaboration-auth.js** - Authentication utilities
 3. **HiveAuthExtension class** - Contains the permission logic
 
+## Documentation URLs
+
+- **TipTap Collaboration**: https://tiptap.dev/docs/collaboration/getting-started/overview
+- **TipTap CollaborationCaret**: https://next.tiptap.dev/docs/editor/extensions/functionality/collaboration-caret
+- **TipTap Awareness Concepts**: https://next.tiptap.dev/docs/collaboration/core-concepts/awareness
+- **Hocuspocus Server**: https://github.com/ueberdosis/hocuspocus
+- **Y.js Documentation**: https://docs.yjs.dev/
+- **Y.js Protocols**: https://github.com/yjs/y-protocols
+- **PostgreSQL Documentation**: https://www.postgresql.org/docs/
+
+## Understanding Y.js Awareness Protocol
+
+### What is Awareness?
+
+Awareness is a Y.js feature that enables sharing of user presence and metadata (like cursor position, selection, user name, and user color) in real-time collaborative environments. Unlike document updates, awareness information is ephemeral and doesn't persist.
+
+### Key Characteristics
+
+1. **Ephemeral Data**: Awareness updates don't modify document content and aren't stored permanently
+2. **30-Second Timeout**: Y.js automatically marks clients as offline if no awareness updates are received within 30 seconds
+3. **Natural Heartbeat**: Awareness serves as a natural keep-alive mechanism for connections
+4. **Protocol Messages**: Uses specific message types (MessageType.Awareness = 1) that should always be allowed
+
+### Message Types in Hocuspocus
+
+From `/node_modules/@hocuspocus/server/src/MessageReceiver.ts`:
+
+```typescript
+switch (type) {
+    case MessageType.Sync:           // 0 - Document synchronization
+    case MessageType.SyncReply:      // 4 - Sync response  
+    case MessageType.Awareness:      // 1 - User presence/cursor updates
+    case MessageType.QueryAwareness: // 3 - Request awareness state
+    case MessageType.Stateless:      // 5 - Stateless messages
+    case MessageType.BroadcastStateless: // 6 - Broadcast stateless
+    case MessageType.CLOSE:          // 7 - Connection close
+    case MessageType.Auth:           // 2 - Authentication
+}
+```
+
+### Why Readonly Users Need Awareness
+
+1. **Cursor Visibility**: Other users see where readonly users are looking
+2. **Presence Indication**: Shows who is actively viewing the document
+3. **Connection Health**: Prevents disconnections due to inactivity
+4. **User Experience**: Maintains collaborative feel even for viewers
+
+### Current Implementation Issue
+
+The server's `beforeHandleMessage` hook blocks awareness messages from readonly users, causing:
+- Disconnections every 45-50 seconds (awareness timeout)
+- Loss of cursor/presence information
+- Poor user experience for readonly collaborators
+
+### Solution Requirements
+
+1. **Allow Awareness Messages**: Permit MessageType.Awareness (type 1) from readonly users
+2. **Proper Detection**: Use Hocuspocus message type detection instead of heuristics
+3. **Reset Activity**: Update connection activity on awareness messages to prevent timeouts
+4. **Enhanced Logging**: Monitor awareness message flow for debugging
+
 ## Summary
 
 The server has all the right intentions but fails at execution:

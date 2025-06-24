@@ -474,10 +474,17 @@ const server = new Server({
         return
       }
       
+      // IMPORTANT: Let Hocuspocus handle awareness messages via onAwarenessUpdate
+      // This avoids the broken heuristic detection and uses proper protocol handling
+      if (hiveAuth.isAwarenessProtocolMessage(update)) {
+        console.log(`[beforeHandleMessage] Delegating awareness message to Hocuspocus for ${user.name}`)
+        return // Let Hocuspocus process this via onAwarenessUpdate
+      }
+      
       // For users without edit permissions
       if (!permissions.canEdit) {
-        // Allow all protocol messages (awareness, sync, auth, etc.)
-        if (hiveAuth.isProtocolMessage(update)) {
+        // Allow other protocol messages (auth, query awareness, etc.)
+        if (hiveAuth.isProtocolMessage(update) && !hiveAuth.isAwarenessProtocolMessage(update)) {
           const messageInfo = hiveAuth.debugMessageType(update)
           console.log(`[beforeHandleMessage] Allowing ${messageInfo.typeName} message from read-only user: ${user.name}`)
           return
@@ -534,6 +541,36 @@ const server = new Server({
     }
   },
   
+  // Handle awareness updates from all users (including readonly)
+  async onAwarenessUpdate(data) {
+    const { documentName, context, connection, added, updated, removed } = data
+    
+    if (context.user) {
+      const user = context.user
+      const permissions = user.permissions
+      
+      // Log awareness activity for debugging
+      console.log(`[onAwarenessUpdate] Awareness update from ${user.name} (${permissions.permissionType})`)
+      console.log(`  Added: ${added.length}, Updated: ${updated.length}, Removed: ${removed.length}`)
+      
+      // Reset connection activity to prevent timeouts
+      if (connection) {
+        connection.lastActivity = Date.now()
+        connection.isAlive = true
+      }
+      
+      // Log awareness activity for monitoring
+      const [owner, permlink] = documentName.split('/')
+      await hiveAuth.logActivity(owner, permlink, user.name, 'awareness_update', {
+        timestamp: new Date().toISOString(),
+        permissionType: permissions.permissionType,
+        added: added.length,
+        updated: updated.length,
+        removed: removed.length
+      })
+    }
+  },
+
   // Connection management
   async onConnect(data) {
     const { documentName, context, connection } = data
