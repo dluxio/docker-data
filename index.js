@@ -177,6 +177,40 @@ const wsMonitor = initializeWebSocketMonitor(http);
 
 
 
+// Test endpoint to check script review system (temporary)
+api.post("/api/debug/test-review", express.json(), async (req, res) => {
+  try {
+    const { scriptHash, scriptContent } = req.body;
+    if (!scriptHash || !scriptContent) {
+      return res.status(400).json({ error: 'scriptHash and scriptContent required' });
+    }
+    
+    console.log('Testing script review system...');
+    const API = require('./api/index');
+    
+    // Simulate the addScriptToReview function call
+    const reviewId = await API.addScriptToReview(
+      scriptHash,
+      scriptContent,
+      'debug-test',
+      'test-user',
+      { test: true }
+    );
+    
+    res.json({ 
+      success: true, 
+      reviewId: reviewId,
+      message: 'Script added to review queue' 
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      success: false, 
+      error: error.message,
+      stack: error.stack 
+    });
+  }
+});
+
 // Non-authenticated system endpoints (MUST BE FIRST - before any auth middleware)
 
 

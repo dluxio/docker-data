@@ -1845,24 +1845,39 @@ async function checkScriptWhitelist(scriptHash) {
 
 async function addScriptToReview(scriptHash, scriptContent, source, requestedBy, context) {
   try {
+    console.log(`Adding script ${scriptHash} to review queue...`);
     const safety = analyzeScriptSafety(scriptContent);
     const query = `
       INSERT INTO script_reviews (
         script_hash, script_content, request_source, requested_by, 
         request_context, risk_assessment, auto_flagged, flagged_reasons
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-      ON CONFLICT (script_hash) DO NOTHING
+      ON CONFLICT (script_hash) DO UPDATE SET
+        request_source = EXCLUDED.request_source,
+        requested_by = EXCLUDED.requested_by,
+        request_context = EXCLUDED.request_context,
+        updated_at = CURRENT_TIMESTAMP
       RETURNING id
     `;
     const result = await executeQuery(query, [
       scriptHash, scriptContent, source, requestedBy,
       JSON.stringify(context), JSON.stringify({ riskLevel: safety.riskLevel }), safety.isAutoFlagged, safety.flaggedReasons
     ], 'Error adding script to review');
-    return result.rows.length > 0 ? result.rows[0].id : null;
+    
+    if (result.rows.length > 0) {
+      console.log(`Script ${scriptHash} added to review queue with ID ${result.rows[0].id}`);
+      return result.rows[0].id;
+    } else {
+      console.log(`Script ${scriptHash} already exists in review queue`);
+      return null;
+    }
   } catch (error) {
     console.error('Error adding script to review:', error);
-    // Re-throw the error to prevent execution when review system fails
-    throw new Error('Script review system unavailable - execution blocked for security');
+    console.error('Script hash:', scriptHash);
+    console.error('Source:', source);
+    console.error('Requested by:', requestedBy);
+    // Still block execution for security, but provide better error info
+    throw new Error(`Script review system error: ${error.message}`);
   }
 }
 
@@ -1874,11 +1889,26 @@ async function logScriptExecution(scriptHash, executedBy, context, success, erro
         success, error_message, request_ip, user_agent
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
     `;
-    // Extract IP address without port
+    // Extract IP address without port and handle various formats
     let clientIP = req?.ip || req?.connection?.remoteAddress || null;
-    if (clientIP && clientIP.includes(':')) {
+    if (clientIP) {
+      // Handle IPv6 wrapped IPv4 (e.g., "::ffff:192.168.1.1")
+      if (clientIP.startsWith('::ffff:')) {
+        clientIP = clientIP.substring(7);
+      }
       // Remove port if present (e.g., "71.93.158.159:22606" -> "71.93.158.159")
-      clientIP = clientIP.split(':')[0];
+      if (clientIP.includes(':') && !clientIP.includes('::')) {
+        const parts = clientIP.split(':');
+        // For IPv4:port, take the first part
+        if (parts.length === 2 && /^\d+$/.test(parts[1])) {
+          clientIP = parts[0];
+        }
+      }
+      // Validate it's a valid IP format
+      if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(clientIP) && !/^([0-9a-fA-F:]+)$/.test(clientIP)) {
+        console.warn('Invalid IP format detected:', clientIP);
+        clientIP = null;
+      }
     }
     
     await executeQuery(query, [
