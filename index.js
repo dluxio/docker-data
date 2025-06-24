@@ -177,16 +177,18 @@ const wsMonitor = initializeWebSocketMonitor(http);
 
 
 
-// Debug endpoint to check script reviews in database
+// Debug endpoint to check script reviews and whitelist
 api.get("/api/debug/script-reviews", async (req, res) => {
   try {
     const allReviews = await pool.query('SELECT id, script_hash, status, request_source, requested_by, created_at FROM script_reviews ORDER BY created_at DESC LIMIT 10');
     const pendingReviews = await pool.query('SELECT COUNT(*) as count FROM script_reviews WHERE status = $1', ['pending']);
+    const whitelist = await pool.query('SELECT script_hash, script_name, whitelisted_by, is_active FROM script_whitelist ORDER BY whitelisted_at DESC LIMIT 10');
     
     res.json({
       success: true,
       allReviews: allReviews.rows,
       pendingCount: parseInt(pendingReviews.rows[0].count),
+      whitelist: whitelist.rows,
       timestamp: new Date().toISOString()
     });
   } catch (error) {
