@@ -177,6 +177,37 @@ const wsMonitor = initializeWebSocketMonitor(http);
 
 
 
+// Temporary debug endpoint for script review troubleshooting
+api.post("/api/debug/script-review/:reviewId", express.json(), async (req, res) => {
+  try {
+    const { reviewId } = req.params;
+    console.log('Debug script review request:', { reviewId, body: req.body });
+    
+    // Check if review exists
+    const reviewResult = await pool.query('SELECT * FROM script_reviews WHERE id = $1', [reviewId]);
+    if (reviewResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Script review not found' });
+    }
+    
+    const review = reviewResult.rows[0];
+    console.log('Found review:', { id: review.id, status: review.status, script_hash: review.script_hash });
+    
+    res.json({ 
+      success: true,
+      reviewFound: true,
+      reviewStatus: review.status,
+      reviewData: review 
+    });
+  } catch (error) {
+    console.error('Debug script review error:', error);
+    res.status(500).json({ 
+      success: false,
+      error: error.message,
+      stack: error.stack 
+    });
+  }
+});
+
 // Non-authenticated system endpoints (MUST BE FIRST - before any auth middleware)
 
 
