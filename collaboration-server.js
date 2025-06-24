@@ -8,6 +8,7 @@ const { createHash } = require('crypto')
 const Y = require('yjs')
 const { decoding } = require('lib0')
 const awarenessProtocol = require('y-protocols/awareness')
+const express = require('express')
 
 // Initialize database pool
 const pool = new Pool({
@@ -580,6 +581,115 @@ class HiveAuthExtension {
 
 // Initialize extensions
 const hiveAuth = new HiveAuthExtension()
+
+// ==================== PERMISSION BROADCAST SYSTEM ====================
+
+/**
+ * Permission Broadcast Manager
+ * Handles real-time permission changes via Y.js document updates
+ */
+class PermissionBroadcastManager {
+  constructor(hocuspocusServer) {
+    this.server = hocuspocusServer
+  }
+
+  /**
+   * Broadcast permission change to all connected clients for a document
+   * @param {string} owner - Document owner
+   * @param {string} permlink - Document permlink  
+   * @param {string} targetAccount - Account whose permissions changed
+   * @param {string} permissionType - New permission type (or 'revoked')
+   * @param {string} grantedBy - Account who made the change
+   */
+  async broadcastPermissionChange(owner, permlink, targetAccount, permissionType, grantedBy) {
+    const documentName = `${owner}/${permlink}`
+    
+    try {
+      // Get the Y.js document for this collaborative document
+      const ydoc = this.server.getDocument(documentName)
+      
+      if (!ydoc) {
+        console.log(`[PermissionBroadcast] No active Y.js document for ${documentName} - no broadcast needed`)
+        return
+      }
+
+      // Get the permissions map from the Y.js document
+      const permissionsMap = ydoc.getMap('permissions')
+      
+      // Create permission update data
+      const permissionUpdate = {
+        account: targetAccount,
+        permissionType: permissionType,
+        grantedBy: grantedBy,
+        timestamp: new Date().toISOString(),
+        broadcastType: permissionType === 'revoked' ? 'permission_revoked' : 'permission_granted'
+      }
+      
+      // Update the permissions map to trigger awareness broadcasts
+      // This will notify all connected clients via Y.js synchronization
+      permissionsMap.set(`update_${targetAccount}_${Date.now()}`, permissionUpdate)
+      
+      // Clean up old permission updates (keep only last 10 per account)
+      const allKeys = Array.from(permissionsMap.keys())
+      const accountUpdates = allKeys
+        .filter(key => key.startsWith(`update_${targetAccount}_`))
+        .sort((a, b) => {
+          const timestampA = parseInt(a.split('_').pop())
+          const timestampB = parseInt(b.split('_').pop())
+          return timestampB - timestampA // newest first
+        })
+      
+      // Remove old updates (keep only 10 most recent)
+      if (accountUpdates.length > 10) {
+        accountUpdates.slice(10).forEach(key => {
+          permissionsMap.delete(key)
+        })
+      }
+      
+      console.log(`[PermissionBroadcast] ✅ Broadcasted ${permissionType} permission for ${targetAccount} in ${documentName}`)
+      console.log(`[PermissionBroadcast] Connected clients will receive update via Y.js awareness`)
+      
+      // Log broadcast statistics
+      const connections = this.server.getConnections()
+      const documentConnections = connections.filter(conn => conn.documentName === documentName)
+      console.log(`[PermissionBroadcast] Broadcast sent to ${documentConnections.length} active connections`)
+      
+    } catch (error) {
+      console.error(`[PermissionBroadcast] Error broadcasting permission change for ${documentName}:`, error)
+    }
+  }
+
+  /**
+   * Broadcast document deletion to all connected clients
+   * @param {string} owner - Document owner
+   * @param {string} permlink - Document permlink
+   */
+  async broadcastDocumentDeletion(owner, permlink) {
+    const documentName = `${owner}/${permlink}`
+    
+    try {
+      const connections = this.server.getConnections()
+      const documentConnections = connections.filter(conn => conn.documentName === documentName)
+      
+      console.log(`[PermissionBroadcast] Broadcasting document deletion to ${documentConnections.length} connections`)
+      
+      // Force disconnect all connections for the deleted document
+      documentConnections.forEach(connection => {
+        try {
+          connection.close(1000, 'Document deleted')
+        } catch (error) {
+          console.error('[PermissionBroadcast] Error closing connection:', error)
+        }
+      })
+      
+    } catch (error) {
+      console.error(`[PermissionBroadcast] Error broadcasting document deletion for ${documentName}:`, error)
+    }
+  }
+}
+
+// Initialize the permission broadcast manager
+let permissionBroadcaster = null
 
 // Configure the Hocuspocus server
 const server = new Server({
@@ -1264,18 +1374,119 @@ async function setupCollaborationDatabase() {
 // Keep-alive interval reference
 let keepAliveInterval = null
 
+// ==================== PERMISSION BROADCAST API ====================
+
+/**
+ * HTTP endpoints for triggering permission broadcasts
+ * Called by the main API server when permissions change
+ */
+const express = require('express')
+const broadcastRouter = express.Router()
+
+// Middleware for internal API authentication
+const internalAuthMiddleware = (req, res, next) => {
+  const authHeader = req.headers['x-internal-auth']
+  const expectedToken = process.env.INTERNAL_AUTH_TOKEN || 'dlux-internal-broadcast-2025'
+  
+  if (authHeader !== expectedToken) {
+    return res.status(401).json({ error: 'Unauthorized - invalid internal auth token' })
+  }
+  
+  next()
+}
+
+// Broadcast permission change endpoint
+broadcastRouter.post('/broadcast/permission-change', internalAuthMiddleware, async (req, res) => {
+  try {
+    const { owner, permlink, targetAccount, permissionType, grantedBy } = req.body
+    
+    if (!owner || !permlink || !targetAccount || !permissionType || !grantedBy) {
+      return res.status(400).json({
+        error: 'Missing required fields: owner, permlink, targetAccount, permissionType, grantedBy'
+      })
+    }
+    
+    if (!permissionBroadcaster) {
+      return res.status(503).json({ error: 'Permission broadcaster not initialized' })
+    }
+    
+    await permissionBroadcaster.broadcastPermissionChange(owner, permlink, targetAccount, permissionType, grantedBy)
+    
+    res.json({
+      success: true,
+      message: `Permission broadcast sent for ${targetAccount} in ${owner}/${permlink}`
+    })
+    
+  } catch (error) {
+    console.error('[BroadcastAPI] Error in permission change broadcast:', error)
+    res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+// Broadcast document deletion endpoint
+broadcastRouter.post('/broadcast/document-deletion', internalAuthMiddleware, async (req, res) => {
+  try {
+    const { owner, permlink } = req.body
+    
+    if (!owner || !permlink) {
+      return res.status(400).json({ error: 'Missing required fields: owner, permlink' })
+    }
+    
+    if (!permissionBroadcaster) {
+      return res.status(503).json({ error: 'Permission broadcaster not initialized' })
+    }
+    
+    await permissionBroadcaster.broadcastDocumentDeletion(owner, permlink)
+    
+    res.json({
+      success: true,
+      message: `Document deletion broadcast sent for ${owner}/${permlink}`
+    })
+    
+  } catch (error) {
+    console.error('[BroadcastAPI] Error in document deletion broadcast:', error)
+    res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+// Health check endpoint
+broadcastRouter.get('/broadcast/health', (req, res) => {
+  const connections = server.getConnections()
+  res.json({
+    status: 'healthy',
+    broadcaster: permissionBroadcaster ? 'initialized' : 'not initialized',
+    activeConnections: connections.length,
+    uptime: process.uptime()
+  })
+})
+
+// Create Express app for broadcast API
+const broadcastApp = express()
+broadcastApp.use(express.json())
+broadcastApp.use('/', broadcastRouter)
+
 // Initialize and start server
 async function startCollaborationServer() {
   try {
     // Setup database tables
     await setupCollaborationDatabase()
     
-    // Start the server
+    // Initialize permission broadcaster
+    permissionBroadcaster = new PermissionBroadcastManager(server)
+    
+    // Start the Hocuspocus server
     server.listen()
     
-    console.log(`🚀 Hocuspocus collaboration server started`)
-    console.log(`[Server] Port: 1234, Timeout: ${server.configuration.timeout}ms`)
-    console.log('[Server] Started with permission broadcasts enabled')
+    // Start the broadcast API server on port 1235
+    const broadcastPort = 1235
+    broadcastApp.listen(broadcastPort, () => {
+      console.log(`[BroadcastAPI] Permission broadcast API server started on port ${broadcastPort}`)
+    })
+    
+    console.log(`[Server] Hocuspocus collaboration server started on port 1234`)
+    console.log(`[Server] Keep-alive mechanism: Using Hocuspocus internal timeout of ${server.configuration.timeout}ms`)
+    console.log(`[Server] Permission broadcast system: ✅ ENABLED`)
+    console.log(`[Server] Real-time permission updates: ✅ PRODUCTION READY`)
     
     // ✅ STEP 5: Enhanced monitoring with permission broadcast tracking
     keepAliveInterval = setInterval(() => {

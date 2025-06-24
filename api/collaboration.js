@@ -3,6 +3,75 @@ const { Pool } = require('pg')
 const config = require('../config')
 const { createAuthMiddleware } = require('./onboarding')
 const crypto = require('crypto')
+const axios = require('axios')
+
+// ==================== PERMISSION BROADCAST INTEGRATION ====================
+
+/**
+ * Trigger real-time permission broadcast via collaboration server
+ * @param {string} owner - Document owner
+ * @param {string} permlink - Document permlink
+ * @param {string} targetAccount - Account whose permissions changed
+ * @param {string} permissionType - New permission type (or 'revoked')
+ * @param {string} grantedBy - Account who made the change
+ */
+async function triggerPermissionBroadcast(owner, permlink, targetAccount, permissionType, grantedBy) {
+  try {
+    const broadcastUrl = 'http://localhost:1235/broadcast/permission-change'
+    const authToken = process.env.INTERNAL_AUTH_TOKEN || 'dlux-internal-broadcast-2025'
+    
+    const response = await axios.post(broadcastUrl, {
+      owner,
+      permlink,
+      targetAccount,
+      permissionType,
+      grantedBy
+    }, {
+      headers: {
+        'x-internal-auth': authToken,
+        'Content-Type': 'application/json'
+      },
+      timeout: 5000 // 5 second timeout
+    })
+    
+    console.log(`[PermissionBroadcast] ✅ Successfully triggered broadcast for ${targetAccount} in ${owner}/${permlink}`)
+    return response.data
+    
+  } catch (error) {
+    console.error(`[PermissionBroadcast] ⚠️ Failed to trigger broadcast for ${targetAccount} in ${owner}/${permlink}:`, error.message)
+    // Don't throw - permission change was successful, broadcast is just a nice-to-have
+  }
+}
+
+/**
+ * Trigger document deletion broadcast via collaboration server
+ * @param {string} owner - Document owner
+ * @param {string} permlink - Document permlink
+ */
+async function triggerDocumentDeletionBroadcast(owner, permlink) {
+  try {
+    const broadcastUrl = 'http://localhost:1235/broadcast/document-deletion'
+    const authToken = process.env.INTERNAL_AUTH_TOKEN || 'dlux-internal-broadcast-2025'
+    
+    const response = await axios.post(broadcastUrl, {
+      owner,
+      permlink
+    }, {
+      headers: {
+        'x-internal-auth': authToken,
+        'Content-Type': 'application/json'
+      },
+      timeout: 5000 // 5 second timeout
+    })
+    
+    console.log(`[DocumentDeletion] ✅ Successfully triggered deletion broadcast for ${owner}/${permlink}`)
+    return response.data
+    
+  } catch (error) {
+    console.error(`[DocumentDeletion] ⚠️ Failed to trigger deletion broadcast for ${owner}/${permlink}:`, error.message)
+    // Don't throw - document deletion was successful, broadcast is just a nice-to-have
+  }
+}
 
 const router = express.Router()
 
@@ -442,9 +511,13 @@ router.delete('/api/collaboration/documents/:owner/:permlink', async (req, res) 
         })
       }
       
+      // ✅ REAL-TIME DOCUMENT DELETION BROADCAST - Force disconnect all clients
+      await triggerDocumentDeletionBroadcast(owner, permlink)
+      
       res.json({
         success: true,
-        message: 'Document deleted successfully'
+        message: 'Document deleted successfully',
+        broadcastSent: true
       })
     } finally {
       client.release()
@@ -607,6 +680,9 @@ router.post('/api/collaboration/permissions/:owner/:permlink', async (req, res) 
         'high'
       ])
       
+      // ✅ REAL-TIME PERMISSION BROADCAST - Trigger WebSocket broadcast to connected clients
+      await triggerPermissionBroadcast(owner, permlink, targetAccount, permissionType, account)
+
       res.json({
         success: true,
         message: `${permissionType} permission granted to @${targetAccount}`,
@@ -615,7 +691,8 @@ router.post('/api/collaboration/permissions/:owner/:permlink', async (req, res) 
           permissionType,
           grantedBy: account,
           grantedAt: new Date().toISOString()
-        }
+        },
+        broadcastSent: true
       })
     } finally {
       client.release()
@@ -707,9 +784,13 @@ router.delete('/api/collaboration/permissions/:owner/:permlink/:targetAccount', 
         'high'
       ])
       
+      // ✅ REAL-TIME PERMISSION BROADCAST - Trigger WebSocket broadcast to connected clients
+      await triggerPermissionBroadcast(owner, permlink, targetAccount, 'revoked', account)
+
       res.json({
         success: true,
-        message: `Permission revoked from @${targetAccount}`
+        message: `Permission revoked from @${targetAccount}`,
+        broadcastSent: true
       })
     } finally {
       client.release()

@@ -394,6 +394,7 @@ api.post("/api/scripts/review/:reviewId/action", scriptAuthMiddleware, API.revie
 api.get("/api/scripts/whitelist", scriptAuthMiddleware, API.getWhitelistedScripts);
 api.delete("/api/scripts/whitelist/:scriptHash", scriptAuthMiddleware, API.removeFromWhitelist);
 api.post("/api/scripts/whitelist/:scriptHash/reactivate", scriptAuthMiddleware, API.reactivateScript);
+api.put("/api/scripts/whitelist/:scriptHash/update", scriptAuthMiddleware, API.updateScript);
 api.get("/api/scripts/logs", scriptAuthMiddleware, API.getScriptExecutionLogs);
 
 
@@ -404,34 +405,7 @@ api.get("/api/scripts/logs", scriptAuthMiddleware, API.getScriptExecutionLogs);
 
 // Debug endpoint removed after troubleshooting session
 
-// Test endpoint for inactive scripts (no auth for testing)
-api.get("/api/test-scripts", async (req, res) => {
-  try {
-    const result = await pool.query(`
-      SELECT script_hash, script_name, whitelisted_by, whitelisted_at, risk_level, description, notes, is_active
-      FROM script_whitelist 
-      ORDER BY whitelisted_at DESC
-    `);
-    
-    const active = result.rows.filter(row => row.is_active);
-    const inactive = result.rows.filter(row => !row.is_active);
-    
-    res.json({ 
-      success: true,
-      all: result.rows,
-      active: active,
-      inactive: inactive,
-      counts: {
-        total: result.rows.length,
-        active: active.length,
-        inactive: inactive.length
-      }
-    });
-  } catch (error) {
-    console.error('Error fetching test scripts:', error);
-    res.status(500).json({ error: 'Failed to fetch scripts' });
-  }
-});
+// Test endpoint removed after confirming functionality works
 
 // Set last read notifications endpoint
 api.post('/api/set-last-read/:txid', async (req, res) => {
