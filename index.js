@@ -366,15 +366,25 @@ api.post("/api/collaboration/permissions/:owner/:permlink", collaborationAuthMid
     console.log('🔍 Collaboration server imported:', {
       hasServer: collaborationServer !== undefined,
       serverType: typeof collaborationServer,
-      hasHiveAuthExtension: typeof HiveAuthExtension === 'function',
-      serverHasDocuments: collaborationServer && collaborationServer.documents !== undefined,
-      documentCount: collaborationServer && collaborationServer.documents ? collaborationServer.documents.size : 0
+      hasHiveAuthExtension: typeof HiveAuthExtension === 'function'
     });
     
+    // Check for documents on both server and hocuspocus instance
+    let documentsMap = null;
+    if (collaborationServer.hocuspocus && collaborationServer.hocuspocus.documents) {
+      documentsMap = collaborationServer.hocuspocus.documents;
+      console.log('[Permission API] Found documents on hocuspocus instance, size:', documentsMap.size);
+    } else if (collaborationServer.documents) {
+      documentsMap = collaborationServer.documents;
+      console.log('[Permission API] Found documents on server instance, size:', documentsMap.size);
+    } else {
+      console.log('[Permission API] No documents map found');
+    }
+    
     // List active documents
-    if (collaborationServer && collaborationServer.documents && collaborationServer.documents.size > 0) {
+    if (documentsMap && documentsMap.size > 0) {
       console.log('[Permission API] Active documents:');
-      collaborationServer.documents.forEach((doc, docName) => {
+      documentsMap.forEach((doc, docName) => {
         console.log(`  - ${docName}`);
       });
     }

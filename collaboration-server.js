@@ -457,28 +457,43 @@ class HiveAuthExtension {
       console.log('🔍 Step 2: Looking for Y.js document:', documentId)
       
       // First, check if document exists in active documents
-      console.log('[updateDocumentPermissions] Checking server.documents Map...')
-      console.log('[updateDocumentPermissions] server.documents exists:', server.documents !== undefined)
-      console.log('[updateDocumentPermissions] server.documents size:', server.documents ? server.documents.size : 'N/A')
+      console.log('[updateDocumentPermissions] Checking for active document...')
       
-      let yjsDocument = server.documents?.get(documentId)
+      // The documents are stored on the hocuspocus instance, not the server
+      let yjsDocument = null
+      let documentsMap = null
+      
+      if (server.hocuspocus && server.hocuspocus.documents) {
+        documentsMap = server.hocuspocus.documents
+        console.log('[updateDocumentPermissions] Found hocuspocus.documents, size:', documentsMap.size)
+        yjsDocument = documentsMap.get(documentId)
+      } else if (server.documents) {
+        documentsMap = server.documents
+        console.log('[updateDocumentPermissions] Found server.documents, size:', documentsMap.size)
+        yjsDocument = documentsMap.get(documentId)
+      } else {
+        console.log('[updateDocumentPermissions] No documents map found on server or hocuspocus')
+      }
       let needsDisconnect = false
       
       if (!yjsDocument) {
         console.log('📄 Document not in active connections, attempting direct connection...')
         console.log('[updateDocumentPermissions] server.openDirectConnection type:', typeof server.openDirectConnection)
         
-        if (!server.openDirectConnection) {
-          console.error('[updateDocumentPermissions] ERROR: server.openDirectConnection is not available!')
-          console.log('[updateDocumentPermissions] Available server properties:', Object.keys(server))
-          console.log('[updateDocumentPermissions] Server prototype methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(server)).filter(m => typeof server[m] === 'function').slice(0, 10))
+        // Check for openDirectConnection on hocuspocus instance
+        const hocuspocus = server.hocuspocus || server
+        
+        if (!hocuspocus.openDirectConnection) {
+          console.error('[updateDocumentPermissions] ERROR: openDirectConnection is not available!')
+          console.log('[updateDocumentPermissions] Checked object type:', typeof hocuspocus)
+          console.log('[updateDocumentPermissions] Available properties:', Object.keys(hocuspocus).slice(0, 10))
           throw new Error('Server API missing: openDirectConnection method not available')
         }
         
         try {
           // Create a direct connection to access/create the document
           console.log('[updateDocumentPermissions] Creating direct connection...')
-          connection = await server.openDirectConnection(documentId, {
+          connection = await hocuspocus.openDirectConnection(documentId, {
             user: {
               name: 'permission-api',
               permissions: { canEdit: true, canRead: true, permissionType: 'system' }
@@ -604,6 +619,7 @@ class HiveAuthExtension {
 const hiveAuth = new HiveAuthExtension()
 
 // Configure the Hocuspocus server
+console.log('🔨 Creating Hocuspocus server instance...')
 const server = new Server({
   port: 1234,
   
@@ -616,16 +632,11 @@ const server = new Server({
   // Add startup configuration hook
   async onConfigure(data) {
     console.log('🚀 Server configuration phase')
-    console.log('[onConfigure] Server instance type:', typeof server)
-    console.log('[onConfigure] Server has documents:', server.documents !== undefined)
-    console.log('[onConfigure] Server configuration:', {
-      timeout: this.configuration.timeout,
-      debounce: this.configuration.debounce,
-      maxDebounce: this.configuration.maxDebounce,
-      hasOnCreateDocument: typeof this.configuration.onCreateDocument === 'function',
-      hasOnChangeDocument: typeof this.configuration.onChangeDocument === 'function',
-      hasOnDestroyDocument: typeof this.configuration.onDestroyDocument === 'function'
-    })
+    console.log('[onConfigure] Data provided:', Object.keys(data || {}))
+    console.log('[onConfigure] This context:', typeof this)
+    
+    // Configuration might not be available yet in onConfigure
+    // Move detailed logging to onLoadDocument or after server starts
   },
   
   // CORS configuration
@@ -947,12 +958,32 @@ const server = new Server({
     }
     
     // Trigger onChangeDocument to set up observer
-    console.log('[onCreateDocument] Triggering onChangeDocument to set up observer')
+    console.log('[onCreateDocument] Setting up permission observer for new document')
     try {
-      await server.configuration.onChangeDocument({ documentName, document })
-      console.log('[onCreateDocument] Successfully triggered onChangeDocument')
+      // Call the onChangeDocument function directly to set up observer
+      // Note: 'this' context should have access to the configuration
+      if (this.configuration && typeof this.configuration.onChangeDocument === 'function') {
+        await this.configuration.onChangeDocument({ documentName, document })
+        console.log('[onCreateDocument] Successfully set up permission observer')
+      } else {
+        console.log('[onCreateDocument] WARNING: onChangeDocument not available in this context')
+        // Fallback: Set up observer directly here
+        const permissionsMap = document.getMap('permissions')
+        if (!permissionObservers.has(document)) {
+          console.log('[onCreateDocument] Setting up observer directly')
+          const observerCallback = (event) => {
+            console.log('🔔 Permission map changed in document:', documentName)
+            // Observer logic would go here
+          }
+          permissionsMap.observe(observerCallback)
+          permissionObservers.set(document, {
+            callback: observerCallback,
+            permissionsMap: permissionsMap
+          })
+        }
+      }
     } catch (error) {
-      console.error('[onCreateDocument] Error triggering onChangeDocument:', error)
+      console.error('[onCreateDocument] Error setting up permission observer:', error)
     }
   },
 
@@ -1215,6 +1246,20 @@ const server = new Server({
   ],
 })
 
+console.log('🔨 Hocuspocus server instance created')
+console.log('[Server Creation] Server type:', typeof server)
+console.log('[Server Creation] Has listen method:', typeof server.listen === 'function')
+console.log('[Server Creation] Has destroy method:', typeof server.destroy === 'function')
+// Note: openDirectConnection is on the hocuspocus instance, not the server instance
+console.log('[Server Creation] Checking for hocuspocus instance...')
+if (server.hocuspocus) {
+  console.log('[Server Creation] Has hocuspocus instance:', typeof server.hocuspocus === 'object')
+  console.log('[Server Creation] hocuspocus has openDirectConnection:', typeof server.hocuspocus.openDirectConnection === 'function')
+  console.log('[Server Creation] hocuspocus has documents:', server.hocuspocus.documents !== undefined)
+} else {
+  console.log('[Server Creation] No hocuspocus property on server')
+}
+
 // Setup database tables for collaboration
 async function setupCollaborationDatabase() {
   try {
@@ -1325,14 +1370,23 @@ async function startCollaborationServer() {
     console.log(`[Server] Port: 1234`)
     console.log(`[Server] Timeout: ${server.configuration.timeout}ms`)
     console.log(`[Server] Permission broadcasts: ✅ ENABLED`)
-    console.log(`[Server] Code version: 2024-12-24-PERMISSION-BROADCAST-FIX`)
+    console.log(`[Server] Code version: 2024-12-24-PERMISSION-BROADCAST-FIX-v2`)
     
-    // Diagnostic: Check server properties
+    // Diagnostic: Check server properties after startup
     console.log(`[DIAGNOSTIC] Server type:`, typeof server)
     console.log(`[DIAGNOSTIC] Server has documents:`, server.documents !== undefined)
     console.log(`[DIAGNOSTIC] Server has openDirectConnection:`, typeof server.openDirectConnection === 'function')
     console.log(`[DIAGNOSTIC] HiveAuthExtension loaded:`, typeof HiveAuthExtension === 'function')
     console.log(`[DIAGNOSTIC] permissionObservers WeakMap created:`, typeof permissionObservers === 'object')
+    console.log(`[DIAGNOSTIC] Server configuration:`, {
+      timeout: server.configuration?.timeout,
+      debounce: server.configuration?.debounce,
+      maxDebounce: server.configuration?.maxDebounce,
+      hasOnCreateDocument: typeof server.configuration?.onCreateDocument === 'function',
+      hasOnChangeDocument: typeof server.configuration?.onChangeDocument === 'function',
+      hasOnDestroyDocument: typeof server.configuration?.onDestroyDocument === 'function',
+      hasOnAwarenessUpdate: typeof server.configuration?.onAwarenessUpdate === 'function'
+    })
     
     // ✅ STEP 5: Enhanced monitoring with permission broadcast tracking
     keepAliveInterval = setInterval(() => {
