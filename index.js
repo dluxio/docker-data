@@ -298,7 +298,7 @@ api.get("/api/debug/blockchain-simple", async (req, res) => {
     const currentBlock = result.result?.head_block_number || 0;
     
     // Get database last block
-    const dbResult = await pool.query('SELECT MAX(head_block_number) as last_block FROM hive_blocks_processed');
+    const dbResult = await pool.query('SELECT last_block FROM hive_state WHERE id = 1');
     const lastProcessedBlock = dbResult.rows[0]?.last_block || 0;
     
     res.json({
