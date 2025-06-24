@@ -355,18 +355,43 @@ api.post("/api/collaboration/permissions/:owner/:permlink", collaborationAuthMid
   const { permissions } = req.body;
 
   try {
+    console.log('🔍 Permission API called:', { owner, permlink, permissions });
+    console.log('[Permission API] Request headers:', req.headers['x-account']);
+    console.log('[Permission API] Permission update requested by:', req.headers['x-account']);
+    
     // Import collaboration server to access the server instance
+    console.log('[Permission API] Importing collaboration server...');
     const { server: collaborationServer, HiveAuthExtension } = require('./collaboration-server');
     
+    console.log('🔍 Collaboration server imported:', {
+      hasServer: collaborationServer !== undefined,
+      serverType: typeof collaborationServer,
+      hasHiveAuthExtension: typeof HiveAuthExtension === 'function',
+      serverHasDocuments: collaborationServer && collaborationServer.documents !== undefined,
+      documentCount: collaborationServer && collaborationServer.documents ? collaborationServer.documents.size : 0
+    });
+    
+    // List active documents
+    if (collaborationServer && collaborationServer.documents && collaborationServer.documents.size > 0) {
+      console.log('[Permission API] Active documents:');
+      collaborationServer.documents.forEach((doc, docName) => {
+        console.log(`  - ${docName}`);
+      });
+    }
+    
     // Create instance to use the permission update method
+    console.log('[Permission API] Creating HiveAuthExtension instance...');
     const hiveAuth = new HiveAuthExtension();
 
+    console.log('[Permission API] Calling updateDocumentPermissions...');
     const result = await hiveAuth.updateDocumentPermissions(collaborationServer, owner, permlink, permissions);
     
     console.log('✅ Permission broadcast triggered via API for:', `${owner}/${permlink}`);
+    console.log('📊 API Result:', result);
     res.json(result);
   } catch (error) {
     console.error('❌ Permission update API failed:', error);
+    console.error('Error stack:', error.stack);
     res.status(500).json({ error: error.message });
   }
 });

@@ -257,6 +257,27 @@ class HiveAuthExtension {
         }
       }
       
+      // Check for Y.js awareness updates (type 27 / 0x1b)
+      // These contain user presence data like cursor position and user info
+      if (messageType === 27 || messageType === 0x1b) {
+        // Check if it looks like an awareness update by examining the content
+        // The hex dump shows it contains user data in JSON format
+        try {
+          const contentStr = new TextDecoder().decode(updateArray.slice(1, Math.min(100, updateArray.length)))
+          if (contentStr.includes('user') || contentStr.includes('cursor') || contentStr.includes('lastActivity') || contentStr.includes('markegiles') || contentStr.includes('heyhey')) {
+            console.log(`[isAwarenessProtocolMessage] Detected Y.js awareness update (type ${messageType}/0x${messageType.toString(16)}, size ${updateArray.length})`)
+            return true
+          }
+        } catch (e) {
+          // Ignore decoding errors, but still check the structure
+          // Y.js awareness updates have a specific pattern we can detect
+          if (updateArray.length > 20) {
+            console.log(`[isAwarenessProtocolMessage] Possible Y.js awareness update based on structure (type ${messageType}/0x${messageType.toString(16)}, size ${updateArray.length})`)
+            return true
+          }
+        }
+      }
+      
       return false
     } catch (error) {
       console.error('[isAwarenessProtocolMessage] Error:', error)
@@ -417,35 +438,65 @@ class HiveAuthExtension {
   // ✅ STEP 3: Permission update helper for API integration
   async updateDocumentPermissions(server, owner, permlink, newPermissions) {
     let connection = null
+    
+    console.log('[updateDocumentPermissions] Starting permission update')
+    console.log('[updateDocumentPermissions] Document:', `${owner}/${permlink}`)
+    console.log('[updateDocumentPermissions] New permissions:', newPermissions)
+    console.log('[updateDocumentPermissions] Server type:', typeof server)
+    console.log('[updateDocumentPermissions] Server has documents:', server && server.documents !== undefined)
+    console.log('[updateDocumentPermissions] Server has openDirectConnection:', server && typeof server.openDirectConnection === 'function')
+    
     try {
       // 1. Update permissions in database
+      console.log('[updateDocumentPermissions] Step 1: Updating database...')
       await this.updatePermissionsInDatabase(owner, permlink, newPermissions)
+      console.log('[updateDocumentPermissions] Database updated successfully')
 
       // 2. Update Y.js permissions map to trigger broadcast
       const documentId = `${owner}/${permlink}`
-      console.log('🔍 Looking for Y.js document:', documentId)
+      console.log('🔍 Step 2: Looking for Y.js document:', documentId)
       
       // First, check if document exists in active documents
+      console.log('[updateDocumentPermissions] Checking server.documents Map...')
+      console.log('[updateDocumentPermissions] server.documents exists:', server.documents !== undefined)
+      console.log('[updateDocumentPermissions] server.documents size:', server.documents ? server.documents.size : 'N/A')
+      
       let yjsDocument = server.documents?.get(documentId)
       let needsDisconnect = false
       
       if (!yjsDocument) {
-        console.log('📄 Document not in active connections, creating direct connection...')
+        console.log('📄 Document not in active connections, attempting direct connection...')
+        console.log('[updateDocumentPermissions] server.openDirectConnection type:', typeof server.openDirectConnection)
+        
+        if (!server.openDirectConnection) {
+          console.error('[updateDocumentPermissions] ERROR: server.openDirectConnection is not available!')
+          console.log('[updateDocumentPermissions] Available server properties:', Object.keys(server))
+          console.log('[updateDocumentPermissions] Server prototype methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(server)).filter(m => typeof server[m] === 'function').slice(0, 10))
+          throw new Error('Server API missing: openDirectConnection method not available')
+        }
+        
         try {
           // Create a direct connection to access/create the document
+          console.log('[updateDocumentPermissions] Creating direct connection...')
           connection = await server.openDirectConnection(documentId, {
             user: {
               name: 'permission-api',
               permissions: { canEdit: true, canRead: true, permissionType: 'system' }
             }
           })
+          console.log('[updateDocumentPermissions] Connection created:', connection !== null)
+          console.log('[updateDocumentPermissions] Connection has document:', connection && connection.document !== undefined)
+          
           yjsDocument = connection.document
           needsDisconnect = true
-          console.log('✅ Direct connection established')
+          console.log('✅ Direct connection established, document retrieved')
         } catch (connError) {
           console.error('❌ Failed to create direct connection:', connError)
+          console.error('[updateDocumentPermissions] Connection error stack:', connError.stack)
           throw new Error(`Cannot access document ${documentId}: ${connError.message}`)
         }
+      } else {
+        console.log('✅ Document found in active connections')
       }
 
       if (yjsDocument) {
@@ -561,6 +612,21 @@ const server = new Server({
   debounce: 2000,  // 2 seconds debounce for document updates
   maxDebounce: 10000, // 10 seconds max debounce
   quiet: false, // Enable logging to help debug connection issues
+  
+  // Add startup configuration hook
+  async onConfigure(data) {
+    console.log('🚀 Server configuration phase')
+    console.log('[onConfigure] Server instance type:', typeof server)
+    console.log('[onConfigure] Server has documents:', server.documents !== undefined)
+    console.log('[onConfigure] Server configuration:', {
+      timeout: this.configuration.timeout,
+      debounce: this.configuration.debounce,
+      maxDebounce: this.configuration.maxDebounce,
+      hasOnCreateDocument: typeof this.configuration.onCreateDocument === 'function',
+      hasOnChangeDocument: typeof this.configuration.onChangeDocument === 'function',
+      hasOnDestroyDocument: typeof this.configuration.onDestroyDocument === 'function'
+    })
+  },
   
   // CORS configuration
   cors: {
@@ -688,14 +754,22 @@ const server = new Server({
   // ✅ STEP 1: Core Permission Observer - Real-time permission broadcasts
   async onChangeDocument(data) {
     const { documentName, document } = data
+    
+    console.log('[onChangeDocument] Called for document:', documentName)
+    console.log('[onChangeDocument] Document type:', typeof document)
+    console.log('[onChangeDocument] Document has getMap:', typeof document.getMap === 'function')
 
     try {
       // Get permissions map from Y.js document
       const permissionsMap = document.getMap('permissions')
+      console.log('[onChangeDocument] Permissions map retrieved, size:', permissionsMap.size)
+      console.log('[onChangeDocument] Current permissions:', Object.fromEntries(permissionsMap.entries()))
 
       // Set up observer for permission changes (only once per document)
       if (!permissionObservers.has(document)) {
         console.log('🔧 Setting up permission observer for document:', documentName)
+        console.log('[onChangeDocument] permissionObservers type:', typeof permissionObservers)
+        console.log('[onChangeDocument] permissionObservers has been initialized:', permissionObservers instanceof WeakMap)
         
         const observerCallback = (event) => {
           console.log('🔔 Permission map observer triggered:', {
@@ -776,6 +850,9 @@ const server = new Server({
           callback: observerCallback,
           permissionsMap: permissionsMap
         })
+        
+        console.log('[onChangeDocument] Observer stored in WeakMap')
+        console.log('[onChangeDocument] Verifying observer was stored:', permissionObservers.has(document))
 
         console.log('✅ Permission observer added for document:', documentName)
       } else {
@@ -784,6 +861,7 @@ const server = new Server({
 
     } catch (error) {
       console.error('❌ Error setting up permission observer:', error)
+      console.error('[onChangeDocument] Error stack:', error.stack)
     }
   },
   
@@ -850,9 +928,14 @@ const server = new Server({
     const { documentName, document } = data
 
     console.log('📄 Document created:', documentName)
+    console.log('[onCreateDocument] Document type:', typeof document)
+    console.log('[onCreateDocument] Document has getMap:', typeof document.getMap === 'function')
+    console.log('[onCreateDocument] Document has awareness:', document.awareness !== undefined)
 
     // Initialize permissions map if it doesn't exist
     const permissionsMap = document.getMap('permissions')
+    console.log('[onCreateDocument] Initial permissions map size:', permissionsMap.size)
+    
     if (permissionsMap.size === 0) {
       // Set default permissions for document creator
       const [owner] = documentName.split('/')
@@ -860,6 +943,16 @@ const server = new Server({
       permissionsMap.set('created', new Date().toISOString())
       
       console.log('✅ Default permissions set for document owner:', owner)
+      console.log('[onCreateDocument] Permissions after initialization:', Object.fromEntries(permissionsMap.entries()))
+    }
+    
+    // Trigger onChangeDocument to set up observer
+    console.log('[onCreateDocument] Triggering onChangeDocument to set up observer')
+    try {
+      await server.configuration.onChangeDocument({ documentName, document })
+      console.log('[onCreateDocument] Successfully triggered onChangeDocument')
+    } catch (error) {
+      console.error('[onCreateDocument] Error triggering onChangeDocument:', error)
     }
   },
 
@@ -1232,6 +1325,14 @@ async function startCollaborationServer() {
     console.log(`[Server] Port: 1234`)
     console.log(`[Server] Timeout: ${server.configuration.timeout}ms`)
     console.log(`[Server] Permission broadcasts: ✅ ENABLED`)
+    console.log(`[Server] Code version: 2024-12-24-PERMISSION-BROADCAST-FIX`)
+    
+    // Diagnostic: Check server properties
+    console.log(`[DIAGNOSTIC] Server type:`, typeof server)
+    console.log(`[DIAGNOSTIC] Server has documents:`, server.documents !== undefined)
+    console.log(`[DIAGNOSTIC] Server has openDirectConnection:`, typeof server.openDirectConnection === 'function')
+    console.log(`[DIAGNOSTIC] HiveAuthExtension loaded:`, typeof HiveAuthExtension === 'function')
+    console.log(`[DIAGNOSTIC] permissionObservers WeakMap created:`, typeof permissionObservers === 'object')
     
     // ✅ STEP 5: Enhanced monitoring with permission broadcast tracking
     keepAliveInterval = setInterval(() => {

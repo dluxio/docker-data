@@ -703,6 +703,108 @@ The collaboration server now provides:
 5. **Performance optimization** (reduced polling, lower server load)
 6. **Comprehensive monitoring** (detailed logging for debugging)
 
+## Diagnostic Logging Added (December 2024)
+
+To troubleshoot permission broadcast issues, comprehensive diagnostic logging has been added:
+
+### Server Startup Diagnostics
+```
+🚀 Server configuration phase
+[onConfigure] Server instance type: object
+[onConfigure] Server has documents: true
+[onConfigure] Configuration has hooks: {
+  onCreateDocument: true,
+  onChangeDocument: true,
+  onDestroyDocument: true
+}
+```
+
+### Document Creation Logging
+```
+📄 Document created: user/document
+[onCreateDocument] Document type: object
+[onCreateDocument] Document has getMap: true
+[onCreateDocument] Document has awareness: true
+[onCreateDocument] Initial permissions map size: 0
+[onCreateDocument] Triggering onChangeDocument to set up observer
+```
+
+### Permission Observer Setup
+```
+[onChangeDocument] Called for document: user/document
+[onChangeDocument] Document type: object
+[onChangeDocument] Permissions map retrieved, size: 2
+[onChangeDocument] Current permissions: { user: 'owner', created: '2024-12-24T...' }
+🔧 Setting up permission observer for document: user/document
+[onChangeDocument] Observer stored in WeakMap
+[onChangeDocument] Verifying observer was stored: true
+✅ Permission observer added for document: user/document
+```
+
+### Permission API Execution
+```
+🔍 Permission API called: { owner: 'user', permlink: 'document', permissions: {...} }
+[Permission API] Request from: username
+[Permission API] Active documents: 1
+[Permission API] Creating HiveAuthExtension instance...
+[Permission API] Calling updateDocumentPermissions...
+```
+
+### Permission Update Process
+```
+[updateDocumentPermissions] Starting permission update
+[updateDocumentPermissions] Document: user/document
+[updateDocumentPermissions] Server has documents: true
+[updateDocumentPermissions] Step 1: Updating database...
+[updateDocumentPermissions] Database updated successfully
+[updateDocumentPermissions] Step 2: Looking for Y.js document
+[updateDocumentPermissions] Document found in active connections
+✅ Found Y.js document, updating permissions map
+📝 Current permissions map size: 3
+  Setting permission: newuser = readonly
+📝 Updated permissions map size: 5
+✅ Y.js permissions updated, broadcast triggered
+```
+
+### Permission Broadcast Detection
+```
+🔔 Permission map observer triggered: {
+  document: 'user/document',
+  keysChanged: 2,
+  changedKeys: ['newuser', 'lastUpdated']
+}
+📡 Permission change detected, broadcasting
+📢 Broadcasting to 2 connected clients
+✅ Permission broadcast sent via awareness system
+```
+
+### Monitoring Output (Every 5 Minutes)
+```
+📊 Server status: 1 active documents
+📄 Active documents:
+  - user/document
+    Connected users: 2
+      - username (client 1)
+      - collaborator (client 2)
+```
+
+### Troubleshooting Guide
+
+If permission broadcasts aren't working:
+
+1. **Check Server Startup**: Verify `onConfigure` shows all hooks registered
+2. **Check Document Creation**: Ensure `onCreateDocument` triggers `onChangeDocument`
+3. **Check Observer Setup**: Verify "Permission observer added" appears
+4. **Check API Call**: Look for "Permission API called" with correct parameters
+5. **Check Y.js Update**: Verify "Y.js permissions updated" appears
+6. **Check Observer Trigger**: Look for "Permission map observer triggered"
+7. **Check Broadcast**: Verify "Broadcasting to X connected clients"
+
+Common issues:
+- **No observer trigger**: Document might not be loaded (will use openDirectConnection)
+- **No broadcast**: Awareness system might not be available
+- **No clients receive**: Check WebSocket connections are stable
+
 ## Documentation URLs
 
 - **TipTap Collaboration**: https://tiptap.dev/docs/collaboration/getting-started/overview
