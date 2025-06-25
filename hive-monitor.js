@@ -193,9 +193,10 @@ class HiveMonitor {
                             await this.processBlock(block);
                             this.lastProcessedBlock = startBlock;
                             await this.updateLastProcessedBlock(startBlock);
+                            console.log(`✓ Advanced to block ${startBlock}`);
                         }
                     } else {
-                        // Process block range
+                        // Process block range sequentially to ensure proper ordering
                         const blocks = await this.getBlockRange(startBlock, batchSize);
                         if (blocks && blocks.length > 0) {
                             for (let i = 0; i < blocks.length; i++) {
@@ -203,24 +204,39 @@ class HiveMonitor {
                                 const blockNum = parseInt(block.block_id.slice(0, 8), 16);
                                 
                                 // Add transaction metadata
-                                for (let j = 0; j < block.transactions.length; j++) {
-                                    block.transactions[j].block_num = blockNum;
-                                    block.transactions[j].transaction_id = block.transaction_ids[j];
-                                    block.transactions[j].transaction_num = j;
+                                if (block.transactions && block.transaction_ids) {
+                                    for (let j = 0; j < block.transactions.length; j++) {
+                                        block.transactions[j].block_num = blockNum;
+                                        block.transactions[j].transaction_id = block.transaction_ids[j];
+                                        block.transactions[j].transaction_num = j;
+                                    }
                                 }
                                 
+                                // Process this block completely before moving to next
                                 await this.processBlock(block);
                                 this.lastProcessedBlock = blockNum;
+                                
+                                // Update database every 10 blocks or on last block
+                                if (blockNum % 10 === 0 || i === blocks.length - 1) {
+                                    await this.updateLastProcessedBlock(blockNum);
+                                }
                                 
                                 if (blockNum % 100 === 0) {
                                     console.log(`✓ Processed block ${blockNum} (${this.head_block - blockNum} blocks behind)`);
                                 }
                             }
-                            await this.updateLastProcessedBlock(this.lastProcessedBlock);
+                            console.log(`✓ Batch complete: Advanced to block ${this.lastProcessedBlock}`);
                         }
                     }
+                    
+                    // Reset API health on successful processing
+                    this.apiHealth.consecutiveErrors = 0;
+                    this.apiHealth.status = 'healthy';
+                    this.apiHealth.lastSuccess = Date.now();
+                    
                 } else {
                     // We're caught up, wait a bit before checking again
+                    console.log(`Caught up! Current block: ${this.lastProcessedBlock}, Head: ${this.head_block}`);
                     await new Promise(resolve => setTimeout(resolve, 3000));
                 }
                 
@@ -232,20 +248,28 @@ class HiveMonitor {
             } catch (error) {
                 console.error('Error in block computing:', error);
                 this.apiHealth.consecutiveErrors++;
+                this.apiHealth.lastError = error;
+                this.apiHealth.status = 'error';
                 
-                // Wait before retrying
+                // Wait before retrying with exponential backoff
                 const delay = Math.min(this.retryDelay * Math.pow(2, this.apiHealth.consecutiveErrors), this.maxRetryDelay);
                 console.log(`Waiting ${delay}ms before retry (consecutive errors: ${this.apiHealth.consecutiveErrors})`);
                 await new Promise(resolve => setTimeout(resolve, delay));
             }
         }
+        
+        console.log('Hive monitor stopped');
     }
 
     async processBlock(block) {
         if (!block || !block.transactions) return;
 
         const blockNum = parseInt(block.block_id.slice(0, 8), 16);
-        console.log(blockNum);
+        console.log(`Processing block ${blockNum} with ${block.transactions.length} transactions`);
+        
+        // Collect all operations to process
+        const allOperations = [];
+        
         for (const tx of block.transactions) {
             const txId = tx.transaction_id;
             
@@ -264,23 +288,62 @@ class HiveMonitor {
                         
                         const handler = this.operationHandlers.get(opType);
                         if (handler) {
-                            try {
-                                await handler(opData, block, txId);
-                            } catch (error) {
-                                console.error(`Error processing operation ${opType}:`, error);
-                            }
+                            allOperations.push({
+                                type: opType,
+                                data: opData,
+                                handler: handler,
+                                block: block,
+                                txId: txId
+                            });
                         }
                     }
                 }
             }
         }
+
+        // Process all operations and wait for completion
+        if (allOperations.length > 0) {
+            console.log(`Block ${blockNum}: Processing ${allOperations.length} operations`);
+            
+            // Process operations in parallel since we don't need strict ordering
+            const operationPromises = allOperations.map(async (op) => {
+                try {
+                    await op.handler(op.data, op.block, op.txId);
+                    return { success: true, type: op.type };
+                } catch (error) {
+                    console.error(`Error processing operation ${op.type} in block ${blockNum}:`, error);
+                    return { success: false, type: op.type, error: error.message };
+                }
+            });
+            
+            // Wait for all operations to complete
+            const results = await Promise.allSettled(operationPromises);
+            
+            // Log results
+            const successful = results.filter(r => r.status === 'fulfilled' && r.value.success).length;
+            const failed = results.filter(r => r.status === 'rejected' || (r.status === 'fulfilled' && !r.value.success)).length;
+            
+            if (failed > 0) {
+                console.warn(`Block ${blockNum}: ${successful} operations succeeded, ${failed} operations failed`);
+            } else {
+                console.log(`Block ${blockNum}: All ${successful} operations completed successfully`);
+            }
+        } else {
+            console.log(`Block ${blockNum}: No operations to process`);
+        }
+        
+        // Block processing is complete
+        console.log(`✓ Block ${blockNum} processing complete`);
     }
 
     async updateLastProcessedBlock(blockNum) {
         try {
             await pool.query('UPDATE hive_state SET last_block = $1 WHERE id = 1', [blockNum]);
+            console.log(`Database updated: last_block = ${blockNum}`);
         } catch (error) {
-            console.error('Error updating last processed block:', error);
+            console.error('Error updating last processed block in database:', error);
+            // Don't throw here - we want to continue processing even if database update fails
+            // The block counter in memory will still advance
         }
     }
 
