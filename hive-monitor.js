@@ -245,7 +245,7 @@ class HiveMonitor {
         if (!block || !block.transactions) return;
 
         const blockNum = parseInt(block.block_id.slice(0, 8), 16);
-        
+        console.log(blockNum);
         for (const tx of block.transactions) {
             const txId = tx.transaction_id;
             
