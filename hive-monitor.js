@@ -179,6 +179,8 @@ class HiveMonitor {
                 this.head_block = await this.getHeadBlockNumber();
                 this.behind = this.head_block - (this.lastProcessedBlock + 1);
                 
+                console.log(`DEBUG: Current: ${this.lastProcessedBlock}, Head: ${this.head_block}, Behind: ${this.behind}`);
+                
                 if (this.behind > 0) {
                     // Process blocks in batches when behind
                     const batchSize = this.behind > 100 ? 100 : this.behind;
@@ -188,17 +190,22 @@ class HiveMonitor {
                     
                     if (batchSize === 1) {
                         // Process single block
+                        console.log(`Fetching single block ${startBlock}`);
                         const block = await this.getBlock(startBlock);
                         if (block) {
                             await this.processBlock(block);
                             this.lastProcessedBlock = startBlock;
                             await this.updateLastProcessedBlock(startBlock);
                             console.log(`✓ Advanced to block ${startBlock}`);
+                        } else {
+                            console.error(`Failed to fetch block ${startBlock}`);
                         }
                     } else {
                         // Process block range sequentially to ensure proper ordering
+                        console.log(`Fetching block range ${startBlock} to ${startBlock + batchSize - 1}`);
                         const blocks = await this.getBlockRange(startBlock, batchSize);
                         if (blocks && blocks.length > 0) {
+                            console.log(`Received ${blocks.length} blocks to process`);
                             for (let i = 0; i < blocks.length; i++) {
                                 const block = blocks[i];
                                 const blockNum = parseInt(block.block_id.slice(0, 8), 16);
@@ -226,6 +233,8 @@ class HiveMonitor {
                                 }
                             }
                             console.log(`✓ Batch complete: Advanced to block ${this.lastProcessedBlock}`);
+                        } else {
+                            console.error(`Failed to fetch block range ${startBlock}-${startBlock + batchSize - 1}`);
                         }
                     }
                     
@@ -234,9 +243,16 @@ class HiveMonitor {
                     this.apiHealth.status = 'healthy';
                     this.apiHealth.lastSuccess = Date.now();
                     
-                } else {
-                    // We're caught up, wait a bit before checking again
+                    // Don't wait - immediately check for next batch
+                    continue;
+                    
+                } else if (this.behind === 0) {
+                    // We're exactly caught up, wait a bit before checking again
                     console.log(`Caught up! Current block: ${this.lastProcessedBlock}, Head: ${this.head_block}`);
+                    await new Promise(resolve => setTimeout(resolve, 3000));
+                } else {
+                    // This shouldn't happen (behind < 0)
+                    console.error(`ERROR: Behind calculation is negative: ${this.behind} (Current: ${this.lastProcessedBlock}, Head: ${this.head_block})`);
                     await new Promise(resolve => setTimeout(resolve, 3000));
                 }
                 
