@@ -119,6 +119,11 @@ class HiveMonitor {
                             // Update last processed block in database
                             await pool.query('UPDATE hive_state SET last_block = $1 WHERE id = 1', [blockNum]);
                             
+                            // Enhanced logging every 100 blocks or on first block
+                            if (blockNum % 100 === 0 || blockNum === this.lastProcessedBlock) {
+                                console.log(`✓ Processed block ${blockNum} (${headBlock - blockNum} blocks behind)`);
+                            }
+                            
                             // Reset retry delay on success
                             this.retryDelay = 5000;
                             this.apiHealth.errorCount = 0;
@@ -354,14 +359,28 @@ hiveMonitor.registerOperationHandler('comment', async (opData, block, txId) => {
             } else if (metadata.vrHash === 'dapp') {
                 postType = 'dapp';
             }
+
+            // Extract ReMix data if present
+            const remixCid = metadata.ReMix && metadata.ReMix.trim() !== '' ? metadata.ReMix : null;
             
-            // Insert into posts database (only if it doesn't already exist)
-            const result = await pool.query(`
-                INSERT INTO posts (author, permlink, type, block, votes, voteweight, promote, paid)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                ON CONFLICT (author, permlink) DO NOTHING
+            // Extract license from .lic property
+            const license = metadata['.lic'] || null;
+            
+            // Extract tags if present
+            const tags = Array.isArray(metadata.tags) ? metadata.tags : [];
+            
+            // Insert/update the main post record
+            const insertQuery = `
+                INSERT INTO posts (author, permlink, type, block, votes, voteweight, promote, paid, remix_cid, license, tags)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                ON CONFLICT (author, permlink) DO UPDATE SET
+                    remix_cid = EXCLUDED.remix_cid,
+                    license = EXCLUDED.license,
+                    tags = EXCLUDED.tags
                 RETURNING author, permlink
-            `, [
+            `;
+            
+            const postResult = await pool.query(insertQuery, [
                 author,
                 permlink,
                 postType,
@@ -369,13 +388,83 @@ hiveMonitor.registerOperationHandler('comment', async (opData, block, txId) => {
                 0, // Initial votes
                 0, // Initial voteweight
                 0, // Initial promote
-                false // Initial paid status
+                false, // Initial paid status
+                remixCid,
+                license,
+                tags
             ]);
             
-            if (result.rows.length > 0) {
-                console.log(`✓ Stored new dApp post: @${author}/${permlink} (type: ${postType}) in block ${block.block_num || block.block_id}`);
+            // If this post has a ReMix CID, handle the ReMix application tracking
+            if (remixCid) {
+                try {
+                    // Check if this ReMix application already exists
+                    const existingApp = await pool.query(
+                        'SELECT remix_cid, usage_count FROM remix_applications WHERE remix_cid = $1',
+                        [remixCid]
+                    );
+                    
+                    if (existingApp.rows.length === 0) {
+                        // This is a new ReMix application - create the application record
+                        await pool.query(`
+                            INSERT INTO remix_applications (
+                                remix_cid, first_author, first_permlink, first_seen_block, 
+                                license, title, description, usage_count
+                            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                        `, [
+                            remixCid,
+                            author,
+                            permlink,
+                            block.block_num || block.block_id,
+                            license,
+                            metadata.title || null,
+                            metadata.description || null,
+                            1
+                        ]);
+                        
+                        console.log(`✓ Created new ReMix application: ${remixCid} by @${author}/${permlink}`);
+                    } else {
+                        // This ReMix application already exists - increment usage count
+                        await pool.query(`
+                            UPDATE remix_applications 
+                            SET usage_count = usage_count + 1, updated_at = CURRENT_TIMESTAMP
+                            WHERE remix_cid = $1
+                        `, [remixCid]);
+                        
+                        console.log(`✓ Incremented usage for ReMix application: ${remixCid} (now ${existingApp.rows[0].usage_count + 1} uses)`);
+                    }
+                    
+                    // Add this post as a derivative work
+                    await pool.query(`
+                        INSERT INTO remix_derivatives (remix_cid, author, permlink, block, license, tags)
+                        VALUES ($1, $2, $3, $4, $5, $6)
+                        ON CONFLICT (remix_cid, author, permlink) DO UPDATE SET
+                            license = EXCLUDED.license,
+                            tags = EXCLUDED.tags
+                    `, [
+                        remixCid,
+                        author,
+                        permlink,
+                        block.block_num || block.block_id,
+                        license,
+                        tags
+                    ]);
+                    
+                    console.log(`✓ Added derivative work: @${author}/${permlink} using ReMix ${remixCid}`);
+                    
+                } catch (remixError) {
+                    console.error('Error processing ReMix application data:', remixError);
+                }
+            }
+            
+            if (postResult.rows.length > 0) {
+                let logMessage = `✓ Stored new dApp post: @${author}/${permlink} (type: ${postType})`;
+                if (remixCid) logMessage += ` with ReMix: ${remixCid}`;
+                if (license) logMessage += ` license: ${license}`;
+                if (tags.length > 0) logMessage += ` tags: [${tags.join(', ')}]`;
+                logMessage += ` in block ${block.block_num || block.block_id}`;
+                console.log(logMessage);
             } else {
-                console.log(`ℹ dApp post @${author}/${permlink} already exists in database (likely from Layer 2)`);
+                console.log(`ℹ Updated existing dApp post @${author}/${permlink} with new metadata`);
             }
         }
     } catch (error) {

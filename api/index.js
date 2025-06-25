@@ -325,6 +325,265 @@ function getDBPromotedPosts(amt, off, bitMask) {
   });
 }
 
+// New ReMix content functions
+function getNewReMixPosts(amt, off, license = null, tag = null) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      let query = `
+        SELECT *
+        FROM posts
+        WHERE remix_cid IS NOT NULL`;
+      
+      const params = [];
+      let paramIndex = 1;
+      
+      if (license) {
+        query += ` AND license = $${paramIndex}`;
+        params.push(license);
+        paramIndex++;
+      }
+      
+      if (tag) {
+        query += ` AND $${paramIndex} = ANY(tags)`;
+        params.push(tag);
+        paramIndex++;
+      }
+      
+      query += ` ORDER BY block DESC OFFSET $${paramIndex} ROWS FETCH FIRST $${paramIndex + 1} ROWS ONLY;`;
+      params.push(off, amt);
+      
+      const res = await executeQuery(query, params, 'Error - Failed to get new ReMix posts');
+
+      for (const item of res.rows) {
+        item.url = `/dlux/@${item.author}/${item.permlink}`;
+      }
+      resolve(res.rows);
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+function getTrendingReMixPosts(amt, off, license = null, tag = null) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      let query = `
+        SELECT *
+        FROM posts
+        WHERE remix_cid IS NOT NULL`;
+      
+      const params = [];
+      let paramIndex = 1;
+      
+      if (license) {
+        query += ` AND license = $${paramIndex}`;
+        params.push(license);
+        paramIndex++;
+      }
+      
+      if (tag) {
+        query += ` AND $${paramIndex} = ANY(tags)`;
+        params.push(tag);
+        paramIndex++;
+      }
+      
+      query += ` ORDER BY votes DESC, block DESC OFFSET $${paramIndex} ROWS FETCH FIRST $${paramIndex + 1} ROWS ONLY;`;
+      params.push(off, amt);
+      
+      const res = await executeQuery(query, params, 'Error - Failed to get trending ReMix posts');
+
+      for (const item of res.rows) {
+        item.url = `/dlux/@${item.author}/${item.permlink}`;
+      }
+      resolve(res.rows);
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+function getReMixLicenses() {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const query = `
+        SELECT license, COUNT(*) as count
+        FROM posts
+        WHERE remix_cid IS NOT NULL AND license IS NOT NULL
+        GROUP BY license
+        ORDER BY count DESC;`;
+      
+      const res = await executeQuery(query, [], 'Error - Failed to get ReMix licenses');
+      resolve(res.rows);
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+function getReMixTags() {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const query = `
+        SELECT UNNEST(tags) as tag, COUNT(*) as count
+        FROM posts
+        WHERE remix_cid IS NOT NULL AND tags IS NOT NULL
+        GROUP BY tag
+        ORDER BY count DESC
+        LIMIT 50;`;
+      
+      const res = await executeQuery(query, [], 'Error - Failed to get ReMix tags');
+      resolve(res.rows);
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+// New ReMix Application functions
+function getPopularReMixApplications(amt, off) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const query = `
+        SELECT ra.*, COUNT(rd.id) as derivative_count
+        FROM remix_applications ra
+        LEFT JOIN remix_derivatives rd ON ra.remix_cid = rd.remix_cid
+        GROUP BY ra.remix_cid
+        ORDER BY ra.usage_count DESC, derivative_count DESC
+        OFFSET $1 ROWS FETCH FIRST $2 ROWS ONLY;`;
+      
+      const res = await executeQuery(query, [off, amt], 'Error - Failed to get popular ReMix applications');
+      resolve(res.rows);
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+function getNewestReMixApplications(amt, off) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const query = `
+        SELECT ra.*, COUNT(rd.id) as derivative_count
+        FROM remix_applications ra
+        LEFT JOIN remix_derivatives rd ON ra.remix_cid = rd.remix_cid
+        GROUP BY ra.remix_cid
+        ORDER BY ra.created_at DESC
+        OFFSET $1 ROWS FETCH FIRST $2 ROWS ONLY;`;
+      
+      const res = await executeQuery(query, [off, amt], 'Error - Failed to get newest ReMix applications');
+      resolve(res.rows);
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+function getReMixApplicationDetails(remixCid) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      // Get application details
+      const appQuery = `
+        SELECT ra.*, COUNT(rd.id) as derivative_count
+        FROM remix_applications ra
+        LEFT JOIN remix_derivatives rd ON ra.remix_cid = rd.remix_cid
+        WHERE ra.remix_cid = $1
+        GROUP BY ra.remix_cid;`;
+      
+      const appRes = await executeQuery(appQuery, [remixCid], 'Error - Failed to get ReMix application details');
+      
+      if (appRes.rows.length === 0) {
+        resolve(null);
+        return;
+      }
+      
+      // Get derivative works
+      const derivativesQuery = `
+        SELECT rd.*, p.votes, p.voteweight
+        FROM remix_derivatives rd
+        LEFT JOIN posts p ON rd.author = p.author AND rd.permlink = p.permlink
+        WHERE rd.remix_cid = $1
+        ORDER BY rd.created_at DESC;`;
+      
+      const derivativesRes = await executeQuery(derivativesQuery, [remixCid], 'Error - Failed to get derivative works');
+      
+      const result = {
+        application: appRes.rows[0],
+        derivatives: derivativesRes.rows
+      };
+      
+      resolve(result);
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+function getDerivativeWorksByAuthor(author, amt, off) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const query = `
+        SELECT rd.*, ra.title as app_title, ra.license as app_license,
+               p.votes, p.voteweight
+        FROM remix_derivatives rd
+        JOIN remix_applications ra ON rd.remix_cid = ra.remix_cid
+        LEFT JOIN posts p ON rd.author = p.author AND rd.permlink = p.permlink
+        WHERE rd.author = $1
+        ORDER BY rd.created_at DESC
+        OFFSET $2 ROWS FETCH FIRST $3 ROWS ONLY;`;
+      
+      const res = await executeQuery(query, [author, off, amt], 'Error - Failed to get derivative works by author');
+      
+      for (const item of res.rows) {
+        item.url = `/dlux/@${item.author}/${item.permlink}`;
+      }
+      
+      resolve(res.rows);
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+function getReMixApplicationStats() {
+  return new Promise(async (resolve, reject) => {
+    try {
+      // Get total applications
+      const totalQuery = 'SELECT COUNT(*) as total FROM remix_applications';
+      const totalRes = await executeQuery(totalQuery, [], 'Error counting ReMix applications');
+      
+      // Get total derivative works
+      const derivativesQuery = 'SELECT COUNT(*) as total FROM remix_derivatives';
+      const derivativesRes = await executeQuery(derivativesQuery, [], 'Error counting derivative works');
+      
+      // Get most popular application
+      const popularQuery = `
+        SELECT remix_cid, usage_count, first_author, title
+        FROM remix_applications
+        ORDER BY usage_count DESC
+        LIMIT 1`;
+      const popularRes = await executeQuery(popularQuery, [], 'Error getting most popular app');
+      
+      // Get recent activity (last 7 days)
+      const recentQuery = `
+        SELECT COUNT(*) as recent
+        FROM remix_derivatives
+        WHERE created_at > NOW() - INTERVAL '7 days'`;
+      const recentRes = await executeQuery(recentQuery, [], 'Error counting recent activity');
+      
+      const stats = {
+        totalApplications: parseInt(totalRes.rows[0].total),
+        totalDerivativeWorks: parseInt(derivativesRes.rows[0].total),
+        mostPopular: popularRes.rows[0] || null,
+        recentActivity: parseInt(recentRes.rows[0].recent)
+      };
+      
+      resolve(stats);
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
 exports.getPromotedPosts = async (req, res, next) => {
   let amt = parseInt(req.query.a) || 50;
   let off = parseInt(req.query.o) || 0;
@@ -2415,5 +2674,350 @@ exports.getCollaborationTestInfo = async (req, res, next) => {
     })
   }
 }
+
+// ReMix API endpoints
+exports.getNewReMixPosts = async (req, res, next) => {
+  let amt = parseInt(req.query.a) || 50;
+  let off = parseInt(req.query.o) || 0;
+  const license = req.query.license || null;
+  const tag = req.query.tag || null;
+  
+  if (amt < 1) amt = 1;
+  else if (amt > 100) amt = 100;
+  if (off < 0) off = 0;
+
+  res.setHeader("Content-Type", "application/json");
+  try {
+    const results = await getNewReMixPosts(amt, off, license, tag);
+    res.send(
+      JSON.stringify(
+        {
+          result: results,
+          filters: { license, tag },
+          node: config.username,
+        },
+        null,
+        3
+      )
+    );
+  } catch (e) {
+    console.error("Error getting new ReMix posts:", e);
+    res.status(500).send(JSON.stringify({ error: "Failed to get new ReMix posts", node: config.username }, null, 3));
+  }
+};
+
+exports.getTrendingReMixPosts = async (req, res, next) => {
+  let amt = parseInt(req.query.a) || 50;
+  let off = parseInt(req.query.o) || 0;
+  const license = req.query.license || null;
+  const tag = req.query.tag || null;
+  
+  if (amt < 1) amt = 1;
+  else if (amt > 100) amt = 100;
+  if (off < 0) off = 0;
+
+  res.setHeader("Content-Type", "application/json");
+  try {
+    const results = await getTrendingReMixPosts(amt, off, license, tag);
+    res.send(
+      JSON.stringify(
+        {
+          result: results,
+          filters: { license, tag },
+          node: config.username,
+        },
+        null,
+        3
+      )
+    );
+  } catch (e) {
+    console.error("Error getting trending ReMix posts:", e);
+    res.status(500).send(JSON.stringify({ error: "Failed to get trending ReMix posts", node: config.username }, null, 3));
+  }
+};
+
+exports.getReMixLicenses = async (req, res, next) => {
+  res.setHeader("Content-Type", "application/json");
+  try {
+    const results = await getReMixLicenses();
+    res.send(
+      JSON.stringify(
+        {
+          result: results,
+          node: config.username,
+        },
+        null,
+        3
+      )
+    );
+  } catch (e) {
+    console.error("Error getting ReMix licenses:", e);
+    res.status(500).send(JSON.stringify({ error: "Failed to get ReMix licenses", node: config.username }, null, 3));
+  }
+};
+
+exports.getReMixTags = async (req, res, next) => {
+  res.setHeader("Content-Type", "application/json");
+  try {
+    const results = await getReMixTags();
+    res.send(
+      JSON.stringify(
+        {
+          result: results,
+          node: config.username,
+        },
+        null,
+        3
+      )
+    );
+  } catch (e) {
+    console.error("Error getting ReMix tags:", e);
+    res.status(500).send(JSON.stringify({ error: "Failed to get ReMix tags", node: config.username }, null, 3));
+  }
+};
+
+// Add monitoring endpoint to expose last processed block
+exports.getBlockMonitorStatus = async (req, res, next) => {
+  res.setHeader("Content-Type", "application/json");
+  try {
+    // Import hive monitor here to avoid circular dependency
+    const hiveMonitor = require('../hive-monitor');
+    const status = hiveMonitor.getStatus();
+    
+    res.send(
+      JSON.stringify(
+        {
+          result: {
+            isRunning: status.isRunning,
+            lastProcessedBlock: status.lastProcessedBlock,
+            activeListeners: status.activeListeners,
+            apiHealth: status.apiHealth,
+            retryDelay: status.retryDelay,
+            pendingReadTransactions: status.pendingReadTransactions,
+            readTransactionResolvers: status.readTransactionResolvers
+          },
+          node: config.username,
+        },
+        null,
+        3
+      )
+    );
+  } catch (e) {
+    console.error("Error getting block monitor status:", e);
+    res.status(500).send(JSON.stringify({ error: "Failed to get block monitor status", node: config.username }, null, 3));
+  }
+};
+
+// Test endpoint for ReMix functionality
+exports.testReMixData = async (req, res, next) => {
+  res.setHeader("Content-Type", "application/json");
+  
+  // Check admin headers
+  const account = req.headers['x-account'];
+  const challenge = req.headers['x-challenge'];
+  const pubkey = req.headers['x-pubkey'];
+  const signature = req.headers['x-signature'];
+  
+  // Simple admin check (you can enhance this)
+  if (account !== 'dlux-io') {
+    return res.status(403).send(JSON.stringify({ error: "Access denied" }, null, 3));
+  }
+
+  try {
+    // Create a test ReMix post
+    const testPost = {
+      author: 'test-user',
+      permlink: `test-remix-${Date.now()}`,
+      type: 'dapp',
+      block: 96726251,
+      remix_cid: 'QmTestReMixCIDExample123456789',
+      license: 'CC BY-SA 4.0',
+      tags: ['test', 'remix', 'example']
+    };
+    
+    const insertQuery = `
+      INSERT INTO posts (author, permlink, type, block, votes, voteweight, promote, paid, remix_cid, license, tags)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      ON CONFLICT (author, permlink) DO UPDATE SET
+          remix_cid = EXCLUDED.remix_cid,
+          license = EXCLUDED.license,
+          tags = EXCLUDED.tags
+      RETURNING *
+    `;
+    
+    const result = await executeQuery(insertQuery, [
+      testPost.author,
+      testPost.permlink,
+      testPost.type,
+      testPost.block,
+      0, // votes
+      0, // voteweight
+      0, // promote
+      false, // paid
+      testPost.remix_cid,
+      testPost.license,
+      testPost.tags
+    ], 'Error creating test ReMix post');
+    
+    res.send(
+      JSON.stringify(
+        {
+          message: "Test ReMix post created successfully",
+          result: result.rows[0],
+          node: config.username,
+        },
+        null,
+        3
+      )
+    );
+  } catch (e) {
+    console.error("Error creating test ReMix data:", e);
+    res.status(500).send(JSON.stringify({ error: "Failed to create test ReMix data", details: e.message, node: config.username }, null, 3));
+  }
+};
+
+// ReMix Applications API endpoints
+exports.getPopularReMixApplications = async (req, res, next) => {
+  let amt = parseInt(req.query.a) || 50;
+  let off = parseInt(req.query.o) || 0;
+  
+  if (amt < 1) amt = 1;
+  else if (amt > 100) amt = 100;
+  if (off < 0) off = 0;
+
+  res.setHeader("Content-Type", "application/json");
+  try {
+    const results = await getPopularReMixApplications(amt, off);
+    res.send(
+      JSON.stringify(
+        {
+          result: results,
+          node: config.username,
+        },
+        null,
+        3
+      )
+    );
+  } catch (e) {
+    console.error("Error getting popular ReMix applications:", e);
+    res.status(500).send(JSON.stringify({ error: "Failed to get popular ReMix applications", node: config.username }, null, 3));
+  }
+};
+
+exports.getNewestReMixApplications = async (req, res, next) => {
+  let amt = parseInt(req.query.a) || 50;
+  let off = parseInt(req.query.o) || 0;
+  
+  if (amt < 1) amt = 1;
+  else if (amt > 100) amt = 100;
+  if (off < 0) off = 0;
+
+  res.setHeader("Content-Type", "application/json");
+  try {
+    const results = await getNewestReMixApplications(amt, off);
+    res.send(
+      JSON.stringify(
+        {
+          result: results,
+          node: config.username,
+        },
+        null,
+        3
+      )
+    );
+  } catch (e) {
+    console.error("Error getting newest ReMix applications:", e);
+    res.status(500).send(JSON.stringify({ error: "Failed to get newest ReMix applications", node: config.username }, null, 3));
+  }
+};
+
+exports.getReMixApplicationDetails = async (req, res, next) => {
+  const { remixCid } = req.params;
+  
+  if (!remixCid) {
+    return res.status(400).send(JSON.stringify({ error: "ReMix CID parameter is required" }, null, 3));
+  }
+
+  res.setHeader("Content-Type", "application/json");
+  try {
+    const result = await getReMixApplicationDetails(remixCid);
+    
+    if (!result) {
+      return res.status(404).send(JSON.stringify({ error: "ReMix application not found" }, null, 3));
+    }
+    
+    // Add URLs to derivative works
+    result.derivatives.forEach(derivative => {
+      derivative.url = `/dlux/@${derivative.author}/${derivative.permlink}`;
+    });
+    
+    res.send(
+      JSON.stringify(
+        {
+          result: result,
+          node: config.username,
+        },
+        null,
+        3
+      )
+    );
+  } catch (e) {
+    console.error("Error getting ReMix application details:", e);
+    res.status(500).send(JSON.stringify({ error: "Failed to get ReMix application details", node: config.username }, null, 3));
+  }
+};
+
+exports.getDerivativeWorksByAuthor = async (req, res, next) => {
+  const { author } = req.params;
+  let amt = parseInt(req.query.a) || 50;
+  let off = parseInt(req.query.o) || 0;
+  
+  if (!author) {
+    return res.status(400).send(JSON.stringify({ error: "Author parameter is required" }, null, 3));
+  }
+  
+  if (amt < 1) amt = 1;
+  else if (amt > 100) amt = 100;
+  if (off < 0) off = 0;
+
+  res.setHeader("Content-Type", "application/json");
+  try {
+    const results = await getDerivativeWorksByAuthor(author, amt, off);
+    res.send(
+      JSON.stringify(
+        {
+          result: results,
+          author: author,
+          node: config.username,
+        },
+        null,
+        3
+      )
+    );
+  } catch (e) {
+    console.error("Error getting derivative works by author:", e);
+    res.status(500).send(JSON.stringify({ error: "Failed to get derivative works by author", node: config.username }, null, 3));
+  }
+};
+
+exports.getReMixApplicationStats = async (req, res, next) => {
+  res.setHeader("Content-Type", "application/json");
+  try {
+    const results = await getReMixApplicationStats();
+    res.send(
+      JSON.stringify(
+        {
+          result: results,
+          node: config.username,
+        },
+        null,
+        3
+      )
+    );
+  } catch (e) {
+    console.error("Error getting ReMix application stats:", e);
+    res.status(500).send(JSON.stringify({ error: "Failed to get ReMix application stats", node: config.username }, null, 3));
+  }
+};
 
 

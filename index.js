@@ -161,6 +161,109 @@ async function initializeDatabase() {
       CREATE INDEX IF NOT EXISTS idx_notification_settings_username ON notification_settings(username);
     `);
 
+    // Add new columns to posts table for ReMix content
+    try {
+      // Check if posts table exists
+      const tableCheck = await pool.query(`
+        SELECT EXISTS (
+          SELECT FROM information_schema.tables 
+          WHERE table_schema = 'public' 
+          AND table_name = 'posts'
+        )
+      `);
+      
+      if (tableCheck.rows[0].exists) {
+        console.log('Posts table exists, checking for new columns...');
+        
+        // Add remix_cid column if it doesn't exist
+        try {
+          await pool.query('ALTER TABLE posts ADD COLUMN IF NOT EXISTS remix_cid TEXT');
+          console.log('✓ Added remix_cid column to posts table');
+        } catch (error) {
+          console.log('remix_cid column already exists or error:', error.message);
+        }
+        
+        // Add license column if it doesn't exist
+        try {
+          await pool.query('ALTER TABLE posts ADD COLUMN IF NOT EXISTS license VARCHAR(255)');
+          console.log('✓ Added license column to posts table');
+        } catch (error) {
+          console.log('license column already exists or error:', error.message);
+        }
+        
+        // Add tags column if it doesn't exist (PostgreSQL array)
+        try {
+          await pool.query('ALTER TABLE posts ADD COLUMN IF NOT EXISTS tags TEXT[]');
+          console.log('✓ Added tags column to posts table');
+        } catch (error) {
+          console.log('tags column already exists or error:', error.message);
+        }
+        
+        // Create indexes for the new columns
+        try {
+          await pool.query('CREATE INDEX IF NOT EXISTS idx_posts_remix_cid ON posts(remix_cid) WHERE remix_cid IS NOT NULL');
+          await pool.query('CREATE INDEX IF NOT EXISTS idx_posts_license ON posts(license) WHERE license IS NOT NULL');
+          await pool.query('CREATE INDEX IF NOT EXISTS idx_posts_tags ON posts USING GIN(tags) WHERE tags IS NOT NULL');
+          console.log('✓ Created indexes for new columns');
+        } catch (error) {
+          console.log('Error creating indexes:', error.message);
+        }
+      }
+    } catch (error) {
+      console.error('Error updating posts table schema:', error);
+    }
+
+    // Create ReMix applications tracking tables
+    try {
+      // Table to track unique ReMix applications (CIDs)
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS remix_applications (
+          remix_cid TEXT PRIMARY KEY,
+          first_author VARCHAR(50) NOT NULL,
+          first_permlink VARCHAR(255) NOT NULL,
+          first_seen_block BIGINT NOT NULL,
+          license VARCHAR(255),
+          title VARCHAR(500),
+          description TEXT,
+          usage_count INTEGER DEFAULT 1,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      console.log('✓ Created remix_applications table');
+
+      // Table to track derivative works using ReMix applications
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS remix_derivatives (
+          id SERIAL PRIMARY KEY,
+          remix_cid TEXT NOT NULL,
+          author VARCHAR(50) NOT NULL,
+          permlink VARCHAR(255) NOT NULL,
+          block BIGINT NOT NULL,
+          license VARCHAR(255),
+          tags TEXT[],
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(remix_cid, author, permlink),
+          FOREIGN KEY (remix_cid) REFERENCES remix_applications(remix_cid) ON DELETE CASCADE
+        )
+      `);
+      console.log('✓ Created remix_derivatives table');
+
+      // Create indexes for performance
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_remix_applications_usage ON remix_applications(usage_count DESC);
+        CREATE INDEX IF NOT EXISTS idx_remix_applications_created ON remix_applications(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_remix_derivatives_cid ON remix_derivatives(remix_cid);
+        CREATE INDEX IF NOT EXISTS idx_remix_derivatives_author ON remix_derivatives(author);
+        CREATE INDEX IF NOT EXISTS idx_remix_derivatives_block ON remix_derivatives(block DESC);
+        CREATE INDEX IF NOT EXISTS idx_remix_derivatives_tags ON remix_derivatives USING GIN(tags) WHERE tags IS NOT NULL;
+      `);
+      console.log('✓ Created indexes for ReMix tables');
+
+    } catch (error) {
+      console.error('Error creating ReMix tracking tables:', error);
+    }
+
     console.log('Database initialization completed successfully');
 
   } catch (error) {
@@ -526,6 +629,25 @@ api.get("/img/details/:set/:uid", API.detailsNFT);
 api.get("/render/:script/:uid", API.renderNFT);
 api.get("/img/render/:set/:uid", API.renderNFT);
 api.get("/hc/tickers", API.tickers);
+
+// ReMix API routes
+api.get("/remix/new", API.getNewReMixPosts);
+api.get("/remix/trending", API.getTrendingReMixPosts);
+api.get("/remix/licenses", API.getReMixLicenses);
+api.get("/remix/tags", API.getReMixTags);
+
+// ReMix Applications API routes
+api.get("/remix/apps/popular", API.getPopularReMixApplications);
+api.get("/remix/apps/newest", API.getNewestReMixApplications);
+api.get("/remix/apps/stats", API.getReMixApplicationStats);
+api.get("/remix/apps/:remixCid", API.getReMixApplicationDetails);
+api.get("/remix/derivatives/@:author", API.getDerivativeWorksByAuthor);
+
+// Monitoring API routes
+api.get("/monitor/blocks", API.getBlockMonitorStatus);
+
+// Test routes (for admin use)
+api.post("/test/remix", API.testReMixData);
 
 http.listen(config.port, async function () {
 
