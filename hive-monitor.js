@@ -43,7 +43,9 @@ class HiveMonitor {
             // Get the last processed block from database
             const result = await pool.query('SELECT last_block FROM hive_state WHERE id = 1');
             if (result.rows.length > 0) {
-                this.lastProcessedBlock = result.rows[0].last_block > 96726250 ? result.rows[0].last_block : 96726250;
+                const dbBlock = Number(result.rows[0].last_block);
+                this.lastProcessedBlock = dbBlock > 96726250 ? dbBlock : 96726250;
+                console.log(`Loaded last processed block from database: ${this.lastProcessedBlock} (type: ${typeof this.lastProcessedBlock})`);
             } else {
                 // Initialize state with specific block number
                 const initialBlock = 96726250;
@@ -52,6 +54,7 @@ class HiveMonitor {
                 console.log(`Initialized Hive monitor starting at block ${initialBlock}`);
             }
             this.blocks.completed = this.lastProcessedBlock;
+            console.log(`Initialization complete - lastProcessedBlock: ${this.lastProcessedBlock}`);
         } catch (error) {
             console.error('Failed to initialize Hive monitor:', error);
             throw error;
@@ -177,14 +180,20 @@ class HiveMonitor {
         while (this.isRunning && this.hasListeners) {
             try {
                 this.head_block = await this.getHeadBlockNumber();
-                this.behind = this.head_block - (this.lastProcessedBlock + 1);
                 
-                console.log(`DEBUG: Current: ${this.lastProcessedBlock}, Head: ${this.head_block}, Behind: ${this.behind}`);
+                // Ensure both values are numbers
+                const headBlock = Number(this.head_block);
+                const currentBlock = Number(this.lastProcessedBlock);
+                
+                // Calculate how many blocks we're behind
+                this.behind = headBlock - (currentBlock + 1);
+                
+                console.log(`DEBUG: Current: ${currentBlock}, Head: ${headBlock}, Behind: ${this.behind}`);
                 
                 if (this.behind > 0) {
                     // Process blocks in batches when behind
                     const batchSize = this.behind > 100 ? 100 : this.behind;
-                    const startBlock = this.lastProcessedBlock + 1;
+                    const startBlock = currentBlock + 1;
                     
                     console.log(`Processing blocks ${startBlock}-${startBlock + batchSize - 1} (${this.behind} blocks behind)`);
                     
@@ -229,7 +238,7 @@ class HiveMonitor {
                                 }
                                 
                                 if (blockNum % 100 === 0) {
-                                    console.log(`✓ Processed block ${blockNum} (${this.head_block - blockNum} blocks behind)`);
+                                    console.log(`✓ Processed block ${blockNum} (${headBlock - blockNum} blocks behind)`);
                                 }
                             }
                             console.log(`✓ Batch complete: Advanced to block ${this.lastProcessedBlock}`);
@@ -248,11 +257,13 @@ class HiveMonitor {
                     
                 } else if (this.behind === 0) {
                     // We're exactly caught up, wait a bit before checking again
-                    console.log(`Caught up! Current block: ${this.lastProcessedBlock}, Head: ${this.head_block}`);
+                    console.log(`Caught up! Current block: ${currentBlock}, Head: ${headBlock}`);
                     await new Promise(resolve => setTimeout(resolve, 3000));
                 } else {
                     // This shouldn't happen (behind < 0)
-                    console.error(`ERROR: Behind calculation is negative: ${this.behind} (Current: ${this.lastProcessedBlock}, Head: ${this.head_block})`);
+                    console.error(`ERROR: Behind calculation is negative: ${this.behind} (Current: ${currentBlock}, Head: ${headBlock})`);
+                    console.error(`Type check - Current type: ${typeof currentBlock}, Head type: ${typeof headBlock}`);
+                    console.error(`Raw values - this.lastProcessedBlock: ${this.lastProcessedBlock}, this.head_block: ${this.head_block}`);
                     await new Promise(resolve => setTimeout(resolve, 3000));
                 }
                 
