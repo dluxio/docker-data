@@ -45,16 +45,16 @@ class HiveMonitor {
             if (result.rows.length > 0) {
                 const dbBlock = Number(result.rows[0].last_block);
                 this.lastProcessedBlock = dbBlock > 96726250 ? dbBlock : 96726250;
-                console.log(`Loaded last processed block from database: ${this.lastProcessedBlock} (type: ${typeof this.lastProcessedBlock})`);
+                
             } else {
                 // Initialize state with specific block number
                 const initialBlock = 96726250;
                 await pool.query('INSERT INTO hive_state (id, last_block) VALUES (1, $1)', [initialBlock]);
                 this.lastProcessedBlock = initialBlock;
-                console.log(`Initialized Hive monitor starting at block ${initialBlock}`);
+                
             }
             this.blocks.completed = this.lastProcessedBlock;
-            console.log(`Initialization complete - lastProcessedBlock: ${this.lastProcessedBlock}`);
+            
         } catch (error) {
             console.error('Failed to initialize Hive monitor:', error);
             throw error;
@@ -187,34 +187,30 @@ class HiveMonitor {
                 
                 // Calculate how many blocks we're behind
                 this.behind = headBlock - (currentBlock + 1);
-                
-                console.log(`DEBUG: Current: ${currentBlock}, Head: ${headBlock}, Behind: ${this.behind}`);
+             
                 
                 if (this.behind > 0) {
                     // Process blocks in batches when behind
                     const batchSize = this.behind > 100 ? 100 : this.behind;
                     const startBlock = currentBlock + 1;
-                    
-                    console.log(`Processing blocks ${startBlock}-${startBlock + batchSize - 1} (${this.behind} blocks behind)`);
+                  
                     
                     if (batchSize === 1) {
                         // Process single block
-                        console.log(`Fetching single block ${startBlock}`);
                         const block = await this.getBlock(startBlock);
                         if (block) {
                             await this.processBlock(block);
                             this.lastProcessedBlock = startBlock;
                             await this.updateLastProcessedBlock(startBlock);
-                            console.log(`✓ Advanced to block ${startBlock}`);
                         } else {
                             console.error(`Failed to fetch block ${startBlock}`);
                         }
                     } else {
                         // Process block range sequentially to ensure proper ordering
-                        console.log(`Fetching block range ${startBlock} to ${startBlock + batchSize - 1}`);
+                       
                         const blocks = await this.getBlockRange(startBlock, batchSize);
                         if (blocks && blocks.length > 0) {
-                            console.log(`Received ${blocks.length} blocks to process`);
+                            
                             for (let i = 0; i < blocks.length; i++) {
                                 const block = blocks[i];
                                 const blockNum = parseInt(block.block_id.slice(0, 8), 16);
@@ -238,10 +234,10 @@ class HiveMonitor {
                                 }
                                 
                                 if (blockNum % 100 === 0) {
-                                    console.log(`✓ Processed block ${blockNum} (${headBlock - blockNum} blocks behind)`);
+                                   
                                 }
                             }
-                            console.log(`✓ Batch complete: Advanced to block ${this.lastProcessedBlock}`);
+                            
                         } else {
                             console.error(`Failed to fetch block range ${startBlock}-${startBlock + batchSize - 1}`);
                         }
@@ -257,7 +253,7 @@ class HiveMonitor {
                     
                 } else if (this.behind === 0) {
                     // We're exactly caught up, wait a bit before checking again
-                    console.log(`Caught up! Current block: ${currentBlock}, Head: ${headBlock}`);
+                    
                     await new Promise(resolve => setTimeout(resolve, 3000));
                 } else {
                     // This shouldn't happen (behind < 0)
@@ -292,7 +288,7 @@ class HiveMonitor {
         if (!block || !block.transactions) return;
 
         const blockNum = parseInt(block.block_id.slice(0, 8), 16);
-        console.log(`Processing block ${blockNum} with ${block.transactions.length} transactions`);
+       
         
         // Collect all operations to process
         const allOperations = [];
@@ -330,7 +326,7 @@ class HiveMonitor {
 
         // Process all operations and wait for completion
         if (allOperations.length > 0) {
-            console.log(`Block ${blockNum}: Processing ${allOperations.length} operations`);
+            
             
             // Process operations in parallel since we don't need strict ordering
             const operationPromises = allOperations.map(async (op) => {
@@ -353,20 +349,17 @@ class HiveMonitor {
             if (failed > 0) {
                 console.warn(`Block ${blockNum}: ${successful} operations succeeded, ${failed} operations failed`);
             } else {
-                console.log(`Block ${blockNum}: All ${successful} operations completed successfully`);
+                
             }
         } else {
-            console.log(`Block ${blockNum}: No operations to process`);
         }
         
         // Block processing is complete
-        console.log(`✓ Block ${blockNum} processing complete`);
     }
 
     async updateLastProcessedBlock(blockNum) {
         try {
             await pool.query('UPDATE hive_state SET last_block = $1 WHERE id = 1', [blockNum]);
-            console.log(`Database updated: last_block = ${blockNum}`);
         } catch (error) {
             console.error('Error updating last processed block in database:', error);
             // Don't throw here - we want to continue processing even if database update fails
