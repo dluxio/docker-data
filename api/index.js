@@ -3020,4 +3020,91 @@ exports.getReMixApplicationStats = async (req, res, next) => {
   }
 };
 
+// Hive Monitor Status endpoint
+exports.getHiveMonitorStatus = async (req, res, next) => {
+  res.setHeader("Content-Type", "application/json");
+  try {
+    const hiveMonitor = require('../hive-monitor');
+    const status = hiveMonitor.getStatus();
+    
+    res.send(
+      JSON.stringify(
+        {
+          result: status,
+          node: config.username,
+          timestamp: new Date().toISOString()
+        },
+        null,
+        3
+      )
+    );
+  } catch (e) {
+    console.error("Error getting hive monitor status:", e);
+    res.status(500).send(JSON.stringify({ error: "Failed to get hive monitor status", node: config.username }, null, 3));
+  }
+};
+
+// Test Hive API connectivity endpoint
+exports.testHiveAPI = async (req, res, next) => {
+  res.setHeader("Content-Type", "application/json");
+  try {
+    const fetch = require('node-fetch');
+    const currentAddress = 'https://hive-api.dlux.io';
+    
+    console.log('Testing Hive API connectivity...');
+    
+    const response = await fetch(currentAddress, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'dlux-data-monitor-test'
+      },
+      body: JSON.stringify({
+        "jsonrpc": "2.0",
+        "method": "database_api.get_dynamic_global_properties",
+        "params": {},
+        "id": 1
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    if (data.error) {
+      throw new Error(`API Error: ${data.error.message}`);
+    }
+    
+    const headBlock = data.result.head_block_number;
+    
+    console.log(`✓ Hive API test successful. Current head block: ${headBlock}`);
+    
+    res.send(
+      JSON.stringify(
+        {
+          success: true,
+          result: {
+            headBlock: headBlock,
+            apiEndpoint: currentAddress,
+            response: data.result
+          },
+          node: config.username,
+          timestamp: new Date().toISOString()
+        },
+        null,
+        3
+      )
+    );
+  } catch (e) {
+    console.error("Error testing Hive API:", e);
+    res.status(500).send(JSON.stringify({ 
+      success: false,
+      error: "Failed to test Hive API", 
+      details: e.message,
+      node: config.username 
+    }, null, 3));
+  }
+};
+
 

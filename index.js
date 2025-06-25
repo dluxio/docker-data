@@ -645,8 +645,10 @@ api.get("/remix/derivatives/@:author", API.getDerivativeWorksByAuthor);
 
 // Monitoring API routes
 api.get("/monitor/blocks", API.getBlockMonitorStatus);
+api.get("/monitor/hive", API.getHiveMonitorStatus);
 
 // Test routes (for admin use)
+api.get("/test/hive-api", API.testHiveAPI);
 api.post("/test/remix", API.testReMixData);
 
 http.listen(config.port, async function () {

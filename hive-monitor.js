@@ -1,16 +1,15 @@
-const hive = require('@hiveio/hive-js');
+const fetch = require('node-fetch');
 const { pool } = require('./index');
 
 class HiveMonitor {
     constructor() {
-        this.client = hive;
-        this.client.api.setOptions({ url: 'https://hive-api.dlux.io' });
+        this.currentAddress = 'https://hive-api.dlux.io';
         this.lastProcessedBlock = 0;
         this.isRunning = false;
         this.operationHandlers = new Map();
         this.hasListeners = false;
-        this.retryDelay = 3000; // Increased initial retry delay in ms
-        this.maxRetryDelay = 30000; // Increased maximum retry delay in ms
+        this.retryDelay = 3000;
+        this.maxRetryDelay = 30000;
         this.apiHealth = {
             status: 'healthy',
             lastError: null,
@@ -18,9 +17,25 @@ class HiveMonitor {
             lastSuccess: Date.now(),
             consecutiveErrors: 0
         };
+        
         // State for tracking transactions for read notifications
-        this.pendingReadTransactions = new Map(); // txid -> { username, timestamp, data }
-        this.readTransactionResolvers = new Map(); // txid -> { resolve, reject, timeout }
+        this.pendingReadTransactions = new Map();
+        this.readTransactionResolvers = new Map();
+        
+        // Block processing state
+        this.blocks = {
+            processing: 0,
+            completed: 0,
+            data: {},
+            requests: {
+                last_range: 0,
+                last_block: 0,
+            }
+        };
+        
+        this.isStreaming = false;
+        this.behind = 0;
+        this.head_block = 0;
     }
 
     async initialize() {
@@ -36,6 +51,7 @@ class HiveMonitor {
                 this.lastProcessedBlock = initialBlock;
                 console.log(`Initialized Hive monitor starting at block ${initialBlock}`);
             }
+            this.blocks.completed = this.lastProcessedBlock;
         } catch (error) {
             console.error('Failed to initialize Hive monitor:', error);
             throw error;
@@ -45,121 +61,182 @@ class HiveMonitor {
     async start() {
         if (this.isRunning || !this.hasListeners) return;
         this.isRunning = true;
-        this.retryDelay = 3000; // Reset retry delay on start
+        this.retryDelay = 3000;
         
         try {
             await this.initialize();
-            await this.processBlocks();
+            await this.beginBlockComputing();
         } catch (error) {
             console.error('Error in Hive monitor:', error);
             this.isRunning = false;
         }
     }
 
-    async safeApiCall(method, ...args) {
+    async getHeadBlockNumber() {
         try {
-            const result = await method.apply(this.client.api, args);
+            const response = await fetch(this.currentAddress, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'dlux-data-monitor'
+                },
+                body: JSON.stringify({
+                    "jsonrpc": "2.0",
+                    "method": "database_api.get_dynamic_global_properties",
+                    "params": {},
+                    "id": 1
+                })
+            });
             
-            // Validate response
-            if (result === null || result === undefined) {
-                throw new Error('API returned null or undefined response');
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
-
-            // Reset error counters on success
-            this.apiHealth.consecutiveErrors = 0;
-            this.apiHealth.status = 'healthy';
-            this.apiHealth.lastSuccess = Date.now();
             
-            return result;
+            const data = await response.json();
+            if (data.error) {
+                throw new Error(`API Error: ${data.error.message}`);
+            }
+            
+            return data.result.head_block_number;
         } catch (error) {
-            this.apiHealth.consecutiveErrors++;
-            this.apiHealth.lastError = error;
-            
-            // Handle specific error types
-            if (error.message.includes('429') || error.message.includes('Too Many Requests')) {
-                this.apiHealth.status = 'rate_limited';
-                // Increase delay more aggressively for consecutive rate limits
-                this.retryDelay = Math.min(this.retryDelay * 1.5, this.maxRetryDelay);
-                console.warn(`Rate limit hit, waiting ${this.retryDelay}ms (consecutive errors: ${this.apiHealth.consecutiveErrors})`);
-            } else if (error.message.includes('JSON')) {
-                this.apiHealth.status = 'parse_error';
-                console.error('JSON parsing error:', error);
-            } else {
-                this.apiHealth.status = 'error';
-                console.error('API error:', error);
-            }
-            
+            console.error('Error getting head block number:', error);
             throw error;
         }
     }
 
-    async processBlocks() {
+    async getBlock(blockNum) {
+        try {
+            const response = await fetch(this.currentAddress, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'dlux-data-monitor'
+                },
+                body: JSON.stringify({
+                    "jsonrpc": "2.0",
+                    "method": "block_api.get_block",
+                    "params": {
+                        "block_num": blockNum
+                    },
+                    "id": 1
+                })
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            
+            const data = await response.json();
+            if (data.error) {
+                throw new Error(`API Error: ${data.error.message}`);
+            }
+            
+            return data.result.block;
+        } catch (error) {
+            console.error(`Error getting block ${blockNum}:`, error);
+            throw error;
+        }
+    }
+
+    async getBlockRange(startBlock, count) {
+        try {
+            const response = await fetch(this.currentAddress, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'dlux-data-monitor'
+                },
+                body: JSON.stringify({
+                    "jsonrpc": "2.0",
+                    "method": "block_api.get_block_range",
+                    "params": {
+                        "starting_block_num": startBlock,
+                        "count": count
+                    },
+                    "id": 1
+                })
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            
+            const data = await response.json();
+            if (data.error) {
+                throw new Error(`API Error: ${data.error.message}`);
+            }
+            
+            return data.result.blocks;
+        } catch (error) {
+            console.error(`Error getting block range ${startBlock}-${startBlock + count - 1}:`, error);
+            throw error;
+        }
+    }
+
+    async beginBlockComputing() {
         while (this.isRunning && this.hasListeners) {
             try {
-                const currentBlock = await this.safeApiCall(this.client.api.getDynamicGlobalPropertiesAsync);
-                const headBlock = currentBlock.head_block_number;
-
-                if (this.lastProcessedBlock < headBlock) {
-                    // Process blocks in smaller batches when having issues
-                    const batchSize = this.apiHealth.consecutiveErrors > 0 ? 20 : 100;
-                    const endBlock = Math.min(this.lastProcessedBlock + batchSize, headBlock);
-
-                    for (let blockNum = this.lastProcessedBlock + 1; blockNum <= endBlock; blockNum++) {
-                        try {
-                            const block = await this.safeApiCall(this.client.api.getBlockAsync, blockNum);
-                            
-                            if (!block || !block.transactions) {
-                                console.warn(`Invalid block data received for block ${blockNum}`);
-                                continue;
-                            }
-
+                this.head_block = await this.getHeadBlockNumber();
+                this.behind = this.head_block - (this.lastProcessedBlock + 1);
+                
+                if (this.behind > 0) {
+                    // Process blocks in batches when behind
+                    const batchSize = this.behind > 100 ? 100 : this.behind;
+                    const startBlock = this.lastProcessedBlock + 1;
+                    
+                    console.log(`Processing blocks ${startBlock}-${startBlock + batchSize - 1} (${this.behind} blocks behind)`);
+                    
+                    if (batchSize === 1) {
+                        // Process single block
+                        const block = await this.getBlock(startBlock);
+                        if (block) {
                             await this.processBlock(block);
-                            this.lastProcessedBlock = blockNum;
-                            
-                            // Update last processed block in database
-                            await pool.query('UPDATE hive_state SET last_block = $1 WHERE id = 1', [blockNum]);
-                            
-                            // Enhanced logging every 100 blocks or on first block
-                            if (blockNum % 100 === 0 || blockNum === this.lastProcessedBlock) {
-                                console.log(`✓ Processed block ${blockNum} (${headBlock - blockNum} blocks behind)`);
-                            }
-                            
-                            // Reset retry delay on success
-                            this.retryDelay = 5000;
-                            this.apiHealth.errorCount = 0;
-                        } catch (error) {
-                            if (error.message.includes('429') || error.message.includes('Too Many Requests')) {
-                                await new Promise(resolve => setTimeout(resolve, this.retryDelay));
-                                break; // Break the loop to retry the current block
-                            } else {
-                                console.error(`Error processing block ${blockNum}:`, error);
-                                this.apiHealth.errorCount++;
+                            this.lastProcessedBlock = startBlock;
+                            await this.updateLastProcessedBlock(startBlock);
+                        }
+                    } else {
+                        // Process block range
+                        const blocks = await this.getBlockRange(startBlock, batchSize);
+                        if (blocks && blocks.length > 0) {
+                            for (let i = 0; i < blocks.length; i++) {
+                                const block = blocks[i];
+                                const blockNum = parseInt(block.block_id.slice(0, 8), 16);
                                 
-                                // If we have too many consecutive errors, take a longer break
-                                if (this.apiHealth.consecutiveErrors > 5) {
-                                    console.warn('Too many consecutive errors, taking a longer break');
-                                    await new Promise(resolve => setTimeout(resolve, this.maxRetryDelay));
-                                    this.apiHealth.consecutiveErrors = 0;
+                                // Add transaction metadata
+                                for (let j = 0; j < block.transactions.length; j++) {
+                                    block.transactions[j].block_num = blockNum;
+                                    block.transactions[j].transaction_id = block.transaction_ids[j];
+                                    block.transactions[j].transaction_num = j;
+                                }
+                                
+                                await this.processBlock(block);
+                                this.lastProcessedBlock = blockNum;
+                                
+                                if (blockNum % 100 === 0) {
+                                    console.log(`✓ Processed block ${blockNum} (${this.head_block - blockNum} blocks behind)`);
                                 }
                             }
+                            await this.updateLastProcessedBlock(this.lastProcessedBlock);
                         }
                     }
+                } else {
+                    // We're caught up, wait a bit before checking again
+                    await new Promise(resolve => setTimeout(resolve, 3000));
                 }
-
-                // Adaptive delay based on API health
-                const delay = this.apiHealth.status === 'healthy' ? 1000 : this.retryDelay;
-                await new Promise(resolve => setTimeout(resolve, delay));
-
+                
                 // Clean up old transactions periodically
-                if (Date.now() % 60000 < delay) { // Approximately every minute
+                if (Date.now() % 60000 < 3000) {
                     this.cleanupOldTransactions();
                 }
-            } catch (error) {
-                console.error('Error processing blocks:', error);
-                this.apiHealth.errorCount++;
                 
-                // Wait longer on error before retrying
-                await new Promise(resolve => setTimeout(resolve, this.retryDelay));
+            } catch (error) {
+                console.error('Error in block computing:', error);
+                this.apiHealth.consecutiveErrors++;
+                
+                // Wait before retrying
+                const delay = Math.min(this.retryDelay * Math.pow(2, this.apiHealth.consecutiveErrors), this.maxRetryDelay);
+                console.log(`Waiting ${delay}ms before retry (consecutive errors: ${this.apiHealth.consecutiveErrors})`);
+                await new Promise(resolve => setTimeout(resolve, delay));
             }
         }
     }
@@ -167,36 +244,43 @@ class HiveMonitor {
     async processBlock(block) {
         if (!block || !block.transactions) return;
 
+        const blockNum = parseInt(block.block_id.slice(0, 8), 16);
+        
         for (const tx of block.transactions) {
             const txId = tx.transaction_id;
             
             // Process regular operations
-            for (const op of tx.operations) {
-                const [opType, opData] = op;
-                const handler = this.operationHandlers.get(opType);
-                if (handler) {
-                    try {
-                        await handler(opData, block, txId);
-                    } catch (error) {
-                        console.error(`Error processing operation ${opType}:`, error);
-                    }
-                }
-            }
-
-            // Process virtual operations if they exist
-            if (tx.virtual_operations) {
-                for (const vop of tx.virtual_operations) {
-                    const [vopType, vopData] = vop;
-                    const handler = this.operationHandlers.get(`virtual_${vopType}`);
-                    if (handler) {
-                        try {
-                            await handler(vopData, block, txId);
-                        } catch (error) {
-                            console.error(`Error processing virtual operation ${vopType}:`, error);
+            if (tx.operations && Array.isArray(tx.operations)) {
+                for (const op of tx.operations) {
+                    if (Array.isArray(op) && op.length >= 2) {
+                        const opType = op[0];
+                        const opData = op[1];
+                        
+                        // Add metadata to operation data
+                        opData.transaction_id = txId;
+                        opData.block_num = blockNum;
+                        opData.timestamp = block.timestamp;
+                        opData.block_id = block.block_id;
+                        
+                        const handler = this.operationHandlers.get(opType);
+                        if (handler) {
+                            try {
+                                await handler(opData, block, txId);
+                            } catch (error) {
+                                console.error(`Error processing operation ${opType}:`, error);
+                            }
                         }
                     }
                 }
             }
+        }
+    }
+
+    async updateLastProcessedBlock(blockNum) {
+        try {
+            await pool.query('UPDATE hive_state SET last_block = $1 WHERE id = 1', [blockNum]);
+        } catch (error) {
+            console.error('Error updating last processed block:', error);
         }
     }
 
@@ -230,7 +314,9 @@ class HiveMonitor {
             apiHealth: this.apiHealth,
             retryDelay: this.retryDelay,
             pendingReadTransactions: this.pendingReadTransactions.size,
-            readTransactionResolvers: this.readTransactionResolvers.size
+            readTransactionResolvers: this.readTransactionResolvers.size,
+            behind: this.behind,
+            headBlock: this.head_block
         };
     }
 
@@ -319,8 +405,8 @@ hiveMonitor.registerOperationHandler('custom_json', async (opData, block, txId) 
                 hiveMonitor.processFoundReadTransaction(txId, account, {
                     action,
                     data,
-                    blockNum: block.block_num || block.block_id,
-                    timestamp: block.timestamp
+                    blockNum: block.block_num || opData.block_num,
+                    timestamp: block.timestamp || opData.timestamp
                 });
             }
         } catch (error) {
@@ -384,7 +470,7 @@ hiveMonitor.registerOperationHandler('comment', async (opData, block, txId) => {
                 author,
                 permlink,
                 postType,
-                block.block_num || block.block_id,
+                opData.block_num,
                 0, // Initial votes
                 0, // Initial voteweight
                 0, // Initial promote
@@ -414,7 +500,7 @@ hiveMonitor.registerOperationHandler('comment', async (opData, block, txId) => {
                             remixCid,
                             author,
                             permlink,
-                            block.block_num || block.block_id,
+                            opData.block_num,
                             license,
                             metadata.title || null,
                             metadata.description || null,
@@ -444,7 +530,7 @@ hiveMonitor.registerOperationHandler('comment', async (opData, block, txId) => {
                         remixCid,
                         author,
                         permlink,
-                        block.block_num || block.block_id,
+                        opData.block_num,
                         license,
                         tags
                     ]);
@@ -461,7 +547,7 @@ hiveMonitor.registerOperationHandler('comment', async (opData, block, txId) => {
                 if (remixCid) logMessage += ` with ReMix: ${remixCid}`;
                 if (license) logMessage += ` license: ${license}`;
                 if (tags.length > 0) logMessage += ` tags: [${tags.join(', ')}]`;
-                logMessage += ` in block ${block.block_num || block.block_id}`;
+                logMessage += ` in block ${opData.block_num}`;
                 console.log(logMessage);
             } else {
                 console.log(`ℹ Updated existing dApp post @${author}/${permlink} with new metadata`);
