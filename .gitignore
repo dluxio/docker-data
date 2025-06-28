@@ -9,6 +9,7 @@ lambda.js
 dlux.zip
 docker-compose.yml
 pg_hba.conf
+postgresql.conf
 
 # Created by https://www.gitignore.io/api/node,linux,macos,windows,webstorm+all
 
