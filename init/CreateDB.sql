@@ -124,3 +124,87 @@ CREATE INDEX idx_script_reviews_created ON script_reviews(created_at);
 CREATE INDEX idx_script_execution_log_hash ON script_execution_log(script_hash);
 CREATE INDEX idx_script_execution_log_executed_at ON script_execution_log(executed_at);
 CREATE INDEX idx_script_execution_log_success ON script_execution_log(success);
+
+-- ==================================================================
+-- DLUX PRESENCE VR INTEGRATION TABLES
+-- ==================================================================
+
+-- VR presence sessions for tracking users in VR spaces
+CREATE TABLE presence_sessions (
+    id SERIAL PRIMARY KEY,
+    socket_id varchar(255) UNIQUE NOT NULL,
+    user_account varchar(16), -- Hive account (null for guests)
+    space_type varchar(20) NOT NULL, -- 'post', 'community', 'document', 'global'
+    space_id varchar(255) NOT NULL, -- post author/permlink, community name, document id, or 'lobby'
+    subspace varchar(255) DEFAULT 'main', -- subroom within the space
+    connected_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    last_activity timestamp DEFAULT CURRENT_TIMESTAMP
+);
+
+-- VR space permissions (who can access which VR spaces)
+CREATE TABLE presence_permissions (
+    id SERIAL PRIMARY KEY,
+    space_type varchar(20) NOT NULL, -- 'post', 'community', 'document'
+    space_id varchar(255) NOT NULL, -- identifier for the space
+    user_account varchar(16) NOT NULL, -- Hive account
+    permission varchar(20) DEFAULT 'access', -- 'access', 'moderate', 'admin'
+    granted_by varchar(16) NOT NULL,
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(space_type, space_id, user_account)
+);
+
+-- WebRTC peer connections for debugging VR voice chat
+CREATE TABLE presence_peer_connections (
+    id SERIAL PRIMARY KEY,
+    session_id INTEGER REFERENCES presence_sessions(id) ON DELETE CASCADE,
+    peer_socket_id varchar(255) NOT NULL,
+    connection_state varchar(50),
+    ice_connection_state varchar(50),
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp DEFAULT CURRENT_TIMESTAMP
+);
+
+-- VR space settings (configuration for different spaces)
+CREATE TABLE presence_space_settings (
+    id SERIAL PRIMARY KEY,
+    space_type varchar(20) NOT NULL, -- 'post', 'community', 'document', 'global'
+    space_id varchar(255) NOT NULL, -- identifier for the space
+    settings jsonb NOT NULL DEFAULT '{}', -- VR scene settings, spawn points, etc.
+    created_by varchar(16) NOT NULL,
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(space_type, space_id)
+);
+
+-- Audit log for VR presence activities
+CREATE TABLE presence_audit_log (
+    id SERIAL PRIMARY KEY,
+    user_account varchar(16),
+    action varchar(100) NOT NULL, -- 'join_space', 'leave_space', 'voice_start', 'voice_end'
+    space_type varchar(20),
+    space_id varchar(255),
+    details jsonb,
+    ip_address inet,
+    user_agent text,
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Performance indexes for presence tables
+CREATE INDEX idx_presence_sessions_user ON presence_sessions(user_account);
+CREATE INDEX idx_presence_sessions_space ON presence_sessions(space_type, space_id);
+CREATE INDEX idx_presence_sessions_activity ON presence_sessions(last_activity);
+CREATE INDEX idx_presence_permissions_space_user ON presence_permissions(space_type, space_id, user_account);
+CREATE INDEX idx_presence_permissions_user ON presence_permissions(user_account);
+CREATE INDEX idx_presence_space_settings_space ON presence_space_settings(space_type, space_id);
+CREATE INDEX idx_presence_audit_log_user ON presence_audit_log(user_account);
+CREATE INDEX idx_presence_audit_log_action ON presence_audit_log(action);
+CREATE INDEX idx_presence_audit_log_created ON presence_audit_log(created_at);
+
+-- Create replication user for presence.dlux.io
+DO $$ 
+BEGIN
+   IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'presence_replica') THEN
+      CREATE ROLE presence_replica WITH REPLICATION LOGIN ENCRYPTED PASSWORD 'presence_replica_password_2024';
+   END IF;
+END
+$$;

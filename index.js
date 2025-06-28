@@ -651,6 +651,13 @@ api.get("/monitor/hive", API.getHiveMonitorStatus);
 api.get("/test/hive-api", API.testHiveAPI);
 api.post("/test/remix", API.testReMixData);
 
+// DLUX Presence VR API routes
+const presenceAPI = require('./api/presence');
+api.get("/api/presence/turn-credentials", presenceAPI.getTurnCredentials);
+api.get("/api/presence/spaces", presenceAPI.getSpaces);
+api.get("/api/presence/spaces/:spaceType/:spaceId", presenceAPI.getSpaceDetails);
+api.post("/api/presence/spaces/:spaceType/:spaceId/join", presenceAPI.joinSpace);
+
 http.listen(config.port, async function () {
 
   await initializeDatabase();
