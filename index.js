@@ -614,6 +614,56 @@ api.get('/api/debug/read-transactions', async (req, res) => {
   }
 });
 
+// ==================================================================
+// SUBSCRIPTION SYSTEM API ROUTES (MUST BE BEFORE CATCH-ALL)
+// ==================================================================
+
+// Database initialization and status endpoints
+api.get("/api/init-subscription-system", API.initSubscriptionSystem);
+api.get("/api/check-subscription-tables", API.checkSubscriptionTables);
+
+const subscriptionAPI = require('./api/subscription-api');
+
+// Public subscription endpoints
+api.get("/api/subscriptions/tiers", subscriptionAPI.getSubscriptionTiers);
+api.get("/api/subscriptions/user/:userAccount", subscriptionAPI.getUserSubscription);
+api.get("/api/subscriptions/user/:userAccount/access", subscriptionAPI.checkSubscriptionAccess);
+api.get("/api/subscriptions/user/:userAccount/payments", subscriptionAPI.getPaymentHistory);
+api.post("/api/subscriptions/calculate-price", subscriptionAPI.calculateSubscriptionPrice);
+
+// Admin subscription endpoints (should have proper auth in production)
+api.get("/api/admin/subscriptions/stats", subscriptionAPI.getSubscriptionStats);
+api.post("/api/admin/subscriptions/promo-codes", subscriptionAPI.createPromoCode);
+api.get("/api/admin/subscriptions/promo-codes", subscriptionAPI.getPromoCodes);
+
+// Payment notification endpoints (admin)
+api.get("/api/admin/subscriptions/notifications/stats", subscriptionAPI.getNotificationStats);
+api.post("/api/admin/subscriptions/notifications/run-checks", subscriptionAPI.runNotificationChecks);
+
+// Global subscription monitor instance
+let globalSubscriptionMonitor = null;
+
+// Subscription monitoring status endpoint
+api.get("/api/subscriptions/monitor/stats", async (req, res) => {
+  try {
+    if (!globalSubscriptionMonitor) {
+      return res.status(503).json({ 
+        error: 'Subscription monitor not initialized yet',
+        message: 'Please wait for the service to fully start up'
+      });
+    }
+    const stats = await globalSubscriptionMonitor.getStats();
+    res.json(stats);
+  } catch (error) {
+    console.error('Error getting subscription monitor stats:', error);
+    res.status(500).json({ error: 'Failed to get subscription monitor stats' });
+  }
+});
+
+// ==================================================================
+// GENERAL API ROUTES
+// ==================================================================
+
 api.get("/api/:api_type/:api_call", API.hive_api);
 api.get("/dapps/@:author/:permlink", API.getPostRoute);
 api.get("/dapps/@:author", API.getAuthorPosts);
@@ -698,51 +748,7 @@ api.get("/api/presence/waitlist/analytics", presenceWriteAPI.getWaitlistAnalytic
 // Test endpoint for viral capacity system
 api.get("/api/presence/test/viral-capacity", presenceWriteAPI.testViralCapacitySystem);
 
-// ==================================================================
-// SUBSCRIPTION SYSTEM API ROUTES
-// ==================================================================
 
-// Database initialization and status endpoints
-api.get("/api/init-subscription-system", API.initSubscriptionSystem);
-api.get("/api/check-subscription-tables", API.checkSubscriptionTables);
-
-const subscriptionAPI = require('./api/subscription-api');
-
-// Public subscription endpoints
-api.get("/api/subscriptions/tiers", subscriptionAPI.getSubscriptionTiers);
-api.get("/api/subscriptions/user/:userAccount", subscriptionAPI.getUserSubscription);
-api.get("/api/subscriptions/user/:userAccount/access", subscriptionAPI.checkSubscriptionAccess);
-api.get("/api/subscriptions/user/:userAccount/payments", subscriptionAPI.getPaymentHistory);
-api.post("/api/subscriptions/calculate-price", subscriptionAPI.calculateSubscriptionPrice);
-
-// Admin subscription endpoints (should have proper auth in production)
-api.get("/api/admin/subscriptions/stats", subscriptionAPI.getSubscriptionStats);
-api.post("/api/admin/subscriptions/promo-codes", subscriptionAPI.createPromoCode);
-api.get("/api/admin/subscriptions/promo-codes", subscriptionAPI.getPromoCodes);
-
-// Payment notification endpoints (admin)
-api.get("/api/admin/subscriptions/notifications/stats", subscriptionAPI.getNotificationStats);
-api.post("/api/admin/subscriptions/notifications/run-checks", subscriptionAPI.runNotificationChecks);
-
-// Global subscription monitor instance
-let globalSubscriptionMonitor = null;
-
-// Subscription monitoring status endpoint
-api.get("/api/subscriptions/monitor/stats", async (req, res) => {
-  try {
-    if (!globalSubscriptionMonitor) {
-      return res.status(503).json({ 
-        error: 'Subscription monitor not initialized yet',
-        message: 'Please wait for the service to fully start up'
-      });
-    }
-    const stats = await globalSubscriptionMonitor.getStats();
-    res.json(stats);
-  } catch (error) {
-    console.error('Error getting subscription monitor stats:', error);
-    res.status(500).json({ error: 'Failed to get subscription monitor stats' });
-  }
-});
 
 http.listen(config.port, async function () {
 
