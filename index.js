@@ -724,12 +724,19 @@ api.get("/api/admin/subscriptions/promo-codes", subscriptionAPI.getPromoCodes);
 api.get("/api/admin/subscriptions/notifications/stats", subscriptionAPI.getNotificationStats);
 api.post("/api/admin/subscriptions/notifications/run-checks", subscriptionAPI.runNotificationChecks);
 
+// Global subscription monitor instance
+let globalSubscriptionMonitor = null;
+
 // Subscription monitoring status endpoint
 api.get("/api/subscriptions/monitor/stats", async (req, res) => {
   try {
-    const SubscriptionMonitor = require('./subscription-monitor');
-    const subscriptionMonitor = require('./subscription-monitor-instance');
-    const stats = await subscriptionMonitor.getStats();
+    if (!globalSubscriptionMonitor) {
+      return res.status(503).json({ 
+        error: 'Subscription monitor not initialized yet',
+        message: 'Please wait for the service to fully start up'
+      });
+    }
+    const stats = await globalSubscriptionMonitor.getStats();
     res.json(stats);
   } catch (error) {
     console.error('Error getting subscription monitor stats:', error);
@@ -749,16 +756,8 @@ http.listen(config.port, async function () {
   
   // Initialize and start subscription monitoring
   const SubscriptionMonitor = require('./subscription-monitor');
-  const subscriptionMonitor = new SubscriptionMonitor();
-  await subscriptionMonitor.initialize(hiveMonitor);
-  
-  // Store subscription monitor instance for API access
-  const fs = require('fs');
-  const path = require('path');
-  fs.writeFileSync(
-    path.join(__dirname, 'subscription-monitor-instance.js'),
-    `module.exports = ${JSON.stringify(subscriptionMonitor)};`
-  );
+  globalSubscriptionMonitor = new SubscriptionMonitor();
+  await globalSubscriptionMonitor.initialize(hiveMonitor);
   
   console.log('✅ Subscription monitoring system initialized');
   
