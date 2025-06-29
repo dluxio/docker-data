@@ -3107,4 +3107,50 @@ exports.testHiveAPI = async (req, res, next) => {
   }
 };
 
+// ==================================================================
+// ENHANCED PRESENCE API ROUTES (VIRAL CAPACITY SYSTEM)
+// ==================================================================
+
+// Enhanced presence session creation with viral capacity
+exports.createPresenceSession = require('./presence-api').createPresenceSession;
+
+// Update presence session activity
+exports.updatePresenceActivity = require('./presence-api').updatePresenceActivity;
+
+// Remove presence session
+exports.removePresenceSession = require('./presence-api').removePresenceSession;
+
+// Get space capacity information (enhanced with premium multipliers)
+exports.getSpaceCapacity = require('./presence-api').getSpaceCapacity;
+
+// Get user's current spaces (for guest limitation enforcement)
+exports.getUserSpaces = require('./presence-api').getUserSpaces;
+
+// Track viral events for subscription growth analytics
+exports.trackViralEvent = require('./presence-api').trackViralEvent;
+
+// Get viral growth analytics
+exports.getViralAnalytics = require('./presence-api').getViralAnalytics;
+
+// Send chat message
+exports.sendChatMessage = require('./presence-api').sendChatMessage;
+
+// Add document comment
+exports.addDocumentComment = require('./presence-api').addDocumentComment;
+
+// Update space audio configuration
+exports.updateSpaceAudioConfig = require('./presence-api').updateSpaceAudioConfig;
+
+// Start audio session
+exports.startAudioSession = require('./presence-api').startAudioSession;
+
+// End audio session
+exports.endAudioSession = require('./presence-api').endAudioSession;
+
+// Log space activity
+exports.logSpaceActivity = require('./presence-api').logSpaceActivity;
+
+// Presence API health check
+exports.presenceHealthCheck = require('./presence-api').presenceHealthCheck;
+
 

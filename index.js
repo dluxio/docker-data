@@ -653,10 +653,85 @@ api.post("/test/remix", API.testReMixData);
 
 // DLUX Presence VR API routes
 const presenceAPI = require('./api/presence');
+const presenceWriteAPI = require('./api/presence-api');
+
+// Read operations (existing presence API)
 api.get("/api/presence/turn-credentials", presenceAPI.getTurnCredentials);
 api.get("/api/presence/spaces", presenceAPI.getSpaces);
 api.get("/api/presence/spaces/:spaceType/:spaceId", presenceAPI.getSpaceDetails);
 api.post("/api/presence/spaces/:spaceType/:spaceId/join", presenceAPI.joinSpace);
+
+// Write operations (new presence write API)
+api.get("/api/presence/health", presenceWriteAPI.presenceHealthCheck);
+
+// Session management
+api.post("/api/presence/sessions", presenceWriteAPI.createPresenceSession);
+api.put("/api/presence/sessions/:socket_id", presenceWriteAPI.updatePresenceActivity);
+api.delete("/api/presence/sessions/:socket_id", presenceWriteAPI.removePresenceSession);
+
+// Chat messaging
+api.post("/api/presence/chat/messages", presenceWriteAPI.sendChatMessage);
+
+// Document collaboration
+api.post("/api/presence/documents/:document_id/comments", presenceWriteAPI.addDocumentComment);
+
+// Space audio configuration
+api.put("/api/presence/spaces/:space_type/:space_id/audio", presenceWriteAPI.updateSpaceAudioConfig);
+api.post("/api/presence/audio/sessions", presenceWriteAPI.startAudioSession);
+api.put("/api/presence/audio/sessions/:session_id/end", presenceWriteAPI.endAudioSession);
+
+// Activity logging
+api.post("/api/presence/activity", presenceWriteAPI.logSpaceActivity);
+
+// Enhanced viral capacity system routes
+api.get("/api/presence/spaces/:space_type/:space_id/capacity", presenceWriteAPI.getSpaceCapacity);
+api.get("/api/presence/users/:socket_id/spaces", presenceWriteAPI.getUserSpaces);
+api.post("/api/presence/viral/track", presenceWriteAPI.trackViralEvent);
+api.get("/api/presence/viral/analytics", presenceWriteAPI.getViralAnalytics);
+
+// Waitlist/Queue system routes
+api.get("/api/presence/waitlist/:socket_id/status", presenceWriteAPI.getWaitlistStatus);
+api.get("/api/presence/spaces/:space_type/:space_id/queue", presenceWriteAPI.getSpaceQueueInfo);
+api.delete("/api/presence/waitlist/:socket_id/leave", presenceWriteAPI.leaveWaitlist);
+api.get("/api/presence/waitlist/analytics", presenceWriteAPI.getWaitlistAnalytics);
+
+// Test endpoint for viral capacity system
+api.get("/api/presence/test/viral-capacity", presenceWriteAPI.testViralCapacitySystem);
+
+// ==================================================================
+// SUBSCRIPTION SYSTEM API ROUTES
+// ==================================================================
+
+const subscriptionAPI = require('./api/subscription-api');
+
+// Public subscription endpoints
+api.get("/api/subscriptions/tiers", subscriptionAPI.getSubscriptionTiers);
+api.get("/api/subscriptions/user/:userAccount", subscriptionAPI.getUserSubscription);
+api.get("/api/subscriptions/user/:userAccount/access", subscriptionAPI.checkSubscriptionAccess);
+api.get("/api/subscriptions/user/:userAccount/payments", subscriptionAPI.getPaymentHistory);
+api.post("/api/subscriptions/calculate-price", subscriptionAPI.calculateSubscriptionPrice);
+
+// Admin subscription endpoints (should have proper auth in production)
+api.get("/api/admin/subscriptions/stats", subscriptionAPI.getSubscriptionStats);
+api.post("/api/admin/subscriptions/promo-codes", subscriptionAPI.createPromoCode);
+api.get("/api/admin/subscriptions/promo-codes", subscriptionAPI.getPromoCodes);
+
+// Payment notification endpoints (admin)
+api.get("/api/admin/subscriptions/notifications/stats", subscriptionAPI.getNotificationStats);
+api.post("/api/admin/subscriptions/notifications/run-checks", subscriptionAPI.runNotificationChecks);
+
+// Subscription monitoring status endpoint
+api.get("/api/subscriptions/monitor/stats", async (req, res) => {
+  try {
+    const SubscriptionMonitor = require('./subscription-monitor');
+    const subscriptionMonitor = require('./subscription-monitor-instance');
+    const stats = await subscriptionMonitor.getStats();
+    res.json(stats);
+  } catch (error) {
+    console.error('Error getting subscription monitor stats:', error);
+    res.status(500).json({ error: 'Failed to get subscription monitor stats' });
+  }
+});
 
 http.listen(config.port, async function () {
 
@@ -667,6 +742,21 @@ http.listen(config.port, async function () {
   
   // Start Hive blockchain monitoring
   await hiveMonitor.start();
+  
+  // Initialize and start subscription monitoring
+  const SubscriptionMonitor = require('./subscription-monitor');
+  const subscriptionMonitor = new SubscriptionMonitor();
+  await subscriptionMonitor.initialize(hiveMonitor);
+  
+  // Store subscription monitor instance for API access
+  const fs = require('fs');
+  const path = require('path');
+  fs.writeFileSync(
+    path.join(__dirname, 'subscription-monitor-instance.js'),
+    `module.exports = ${JSON.stringify(subscriptionMonitor)};`
+  );
+  
+  console.log('✅ Subscription monitoring system initialized');
   
   // Graceful shutdown
   process.on('SIGTERM', async () => {

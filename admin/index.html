@@ -193,6 +193,13 @@
                                 </a>
                             </li>
                             <li class="nav-item">
+                                <a class="nav-link" :class="{ active: currentView === 'subscriptions' }" 
+                                   @click="setView('subscriptions')">
+                                    <i class="bi bi-credit-card"></i>
+                                    Subscriptions
+                                </a>
+                            </li>
+                            <li class="nav-item">
                                 <a class="nav-link" :class="{ active: currentView === 'blockchain' }" 
                                    @click="setView('blockchain')">
                                     <i class="bi bi-link-45deg"></i>

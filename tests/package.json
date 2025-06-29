@@ -1,0 +1,28 @@
+{
+  "name": "dlux-subscription-tests",
+  "version": "1.0.0",
+  "description": "Integration tests for DLUX subscription system",
+  "scripts": {
+    "test": "jest --verbose --detectOpenHandles",
+    "test:watch": "jest --watch --verbose",
+    "test:coverage": "jest --coverage --verbose",
+    "test:subscription": "jest subscription-integration.test.js --verbose"
+  },
+  "dependencies": {
+    "jest": "^29.0.0",
+    "supertest": "^6.3.0",
+    "pg": "^8.8.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "setupFilesAfterEnv": ["<rootDir>/setup.js"],
+    "testTimeout": 30000,
+    "collectCoverageFrom": [
+      "../api/*.js",
+      "../subscription-monitor.js",
+      "!../node_modules/**"
+    ],
+    "coverageDirectory": "./coverage",
+    "verbose": true
+  }
+} 
