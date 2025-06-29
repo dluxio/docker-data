@@ -290,7 +290,7 @@ class SubscriptionManager {
             this.loadPromoCodes();
             break;
           case '#nav-tiers':
-            this.loadTiers();
+            this.migrateUSDPricing().then(() => this.loadTiers());
             break;
           case '#nav-monitoring':
             this.loadMonitoringStatus();
@@ -515,7 +515,8 @@ class SubscriptionManager {
 
   async loadTiers() {
     try {
-      const response = await fetch(`${this.baseUrl}/subscriptions/tiers`);
+      // Use admin endpoint to get all tiers including inactive ones
+      const response = await fetch(`${this.baseUrl}/admin/subscriptions/tiers`);
       const data = await response.json();
       
       if (response.ok) {
@@ -532,46 +533,352 @@ class SubscriptionManager {
   renderTiers(tiers) {
     const container = document.getElementById('tiers-list');
     
+    const createNewTierForm = `
+      <div class="card mb-4 border-primary">
+        <div class="card-header bg-primary text-white">
+          <h6 class="mb-0">Create New Subscription Tier</h6>
+        </div>
+        <div class="card-body">
+          <form id="new-tier-form" class="row">
+            <div class="col-md-6">
+              <div class="mb-3">
+                <label class="form-label">Tier Name</label>
+                <input type="text" class="form-control" name="tier_name" placeholder="e.g., Basic (June 2025)" required>
+              </div>
+              <div class="mb-3">
+                <label class="form-label">Tier Code</label>
+                <input type="text" class="form-control" name="tier_code" placeholder="e.g., basic-jun-2025" required>
+              </div>
+              <div class="mb-3">
+                <label class="form-label">Description</label>
+                <textarea class="form-control" name="description" rows="3"></textarea>
+              </div>
+              <div class="row">
+                <div class="col-6">
+                  <div class="mb-3">
+                    <label class="form-label">Monthly Price (USD)</label>
+                    <input type="number" class="form-control" name="monthly_price_usd" step="0.01" min="0">
+                  </div>
+                </div>
+                <div class="col-6">
+                  <div class="mb-3">
+                    <label class="form-label">Yearly Price (USD)</label>
+                    <input type="number" class="form-control" name="yearly_price_usd" step="0.01" min="0">
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="col-md-6">
+              <div class="row">
+                <div class="col-6">
+                  <div class="mb-3">
+                    <label class="form-label">Max Presence Sessions</label>
+                    <input type="number" class="form-control" name="max_presence_sessions" value="1" min="0">
+                  </div>
+                </div>
+                <div class="col-6">
+                  <div class="mb-3">
+                    <label class="form-label">Max Collaboration Docs</label>
+                    <input type="number" class="form-control" name="max_collaboration_docs" value="5" min="0">
+                  </div>
+                </div>
+              </div>
+              <div class="row">
+                <div class="col-6">
+                  <div class="mb-3">
+                    <label class="form-label">Max Event Attendees</label>
+                    <input type="number" class="form-control" name="max_event_attendees" value="10" min="0">
+                  </div>
+                </div>
+                <div class="col-6">
+                  <div class="mb-3">
+                    <label class="form-label">Storage Limit (GB)</label>
+                    <input type="number" class="form-control" name="storage_limit_gb" value="1" min="0">
+                  </div>
+                </div>
+              </div>
+              <div class="mb-3">
+                <label class="form-label">Bandwidth Limit (GB/month)</label>
+                <input type="number" class="form-control" name="bandwidth_limit_gb" value="10" min="0">
+              </div>
+              <div class="row">
+                <div class="col-4">
+                  <div class="form-check">
+                    <input class="form-check-input" type="checkbox" name="priority_support">
+                    <label class="form-check-label">Priority Support</label>
+                  </div>
+                </div>
+                <div class="col-4">
+                  <div class="form-check">
+                    <input class="form-check-input" type="checkbox" name="custom_branding">
+                    <label class="form-check-label">Custom Branding</label>
+                  </div>
+                </div>
+                <div class="col-4">
+                  <div class="form-check">
+                    <input class="form-check-input" type="checkbox" name="api_access">
+                    <label class="form-check-label">API Access</label>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="col-12 mt-3">
+              <h6>Features</h6>
+              <div class="row">
+                <div class="col-3">
+                  <div class="form-check">
+                    <input class="form-check-input" type="checkbox" name="feature_vr_spaces" checked>
+                    <label class="form-check-label">VR Spaces</label>
+                  </div>
+                </div>
+                <div class="col-3">
+                  <div class="form-check">
+                    <input class="form-check-input" type="checkbox" name="feature_file_sharing">
+                    <label class="form-check-label">File Sharing</label>
+                  </div>
+                </div>
+                <div class="col-3">
+                  <div class="form-check">
+                    <input class="form-check-input" type="checkbox" name="feature_screen_sharing">
+                    <label class="form-check-label">Screen Sharing</label>
+                  </div>
+                </div>
+                <div class="col-3">
+                  <div class="form-check">
+                    <input class="form-check-input" type="checkbox" name="feature_recording">
+                    <label class="form-check-label">Recording</label>
+                  </div>
+                </div>
+                <div class="col-3">
+                  <div class="form-check">
+                    <input class="form-check-input" type="checkbox" name="feature_custom_avatars">
+                    <label class="form-check-label">Custom Avatars</label>
+                  </div>
+                </div>
+                <div class="col-3">
+                  <div class="form-check">
+                    <input class="form-check-input" type="checkbox" name="feature_custom_environments">
+                    <label class="form-check-label">Custom Environments</label>
+                  </div>
+                </div>
+                <div class="col-3">
+                  <div class="form-check">
+                    <input class="form-check-input" type="checkbox" name="feature_live_streaming">
+                    <label class="form-check-label">Live Streaming</label>
+                  </div>
+                </div>
+                <div class="col-3">
+                  <div class="form-check">
+                    <input class="form-check-input" type="checkbox" name="feature_api_integration">
+                    <label class="form-check-label">API Integration</label>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="col-12 mt-3">
+              <button type="submit" class="btn btn-primary">Create Tier</button>
+              <button type="button" class="btn btn-success ms-2" onclick="subscriptionManager.updateTierPricing()">Update All Pricing</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `;
+
     if (!tiers.length) {
-      container.innerHTML = '<p class="text-muted">No subscription tiers found</p>';
+      container.innerHTML = createNewTierForm + '<p class="text-muted">No subscription tiers found</p>';
+      this.setupTierFormHandlers();
       return;
     }
 
-    const html = tiers.map(tier => `
+    const tiersHtml = tiers.map(tier => `
       <div class="card mb-3">
-        <div class="card-header d-flex justify-content-between">
-          <h6 class="mb-0">${tier.tier_name} (${tier.tier_code})</h6>
-          <span class="badge ${tier.is_active ? 'bg-success' : 'bg-secondary'}">
-            ${tier.is_active ? 'Active' : 'Inactive'}
-          </span>
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <div>
+            <h6 class="mb-0">${tier.tier_name} (${tier.tier_code})</h6>
+            <small class="text-muted">${tier.active_subscribers || 0} active subscribers</small>
+          </div>
+          <div>
+            <span class="badge ${tier.is_active ? 'bg-success' : 'bg-secondary'} me-2">
+              ${tier.is_active ? 'Active' : 'Inactive'}
+            </span>
+            <button class="btn btn-sm btn-outline-primary me-1" onclick="subscriptionManager.editTier(${tier.id})">
+              Edit
+            </button>
+            <button class="btn btn-sm ${tier.is_active ? 'btn-outline-warning' : 'btn-outline-success'}" 
+                    onclick="subscriptionManager.toggleTierStatus(${tier.id})">
+              ${tier.is_active ? 'Deactivate' : 'Activate'}
+            </button>
+          </div>
         </div>
         <div class="card-body">
           <div class="row">
             <div class="col-md-6">
               <p><strong>Description:</strong> ${tier.description || 'No description'}</p>
-              <p><strong>Monthly:</strong> ${tier.monthly_price_hive} HIVE / ${tier.monthly_price_hbd} HBD</p>
-              <p><strong>Yearly:</strong> ${tier.yearly_price_hive} HIVE / ${tier.yearly_price_hbd} HBD</p>
+              <div class="row">
+                <div class="col-6">
+                  <p><strong>Monthly:</strong><br>
+                    $${(tier.monthly_price_usd || 0).toFixed(2)} USD<br>
+                    <small class="text-muted">${(tier.monthly_price_hive || 0).toFixed(3)} HIVE / ${(tier.monthly_price_hbd || 0).toFixed(2)} HBD</small>
+                  </p>
+                </div>
+                <div class="col-6">
+                  <p><strong>Yearly:</strong><br>
+                    $${(tier.yearly_price_usd || 0).toFixed(2)} USD<br>
+                    <small class="text-muted">${(tier.yearly_price_hive || 0).toFixed(3)} HIVE / ${(tier.yearly_price_hbd || 0).toFixed(2)} HBD</small>
+                  </p>
+                </div>
+              </div>
             </div>
             <div class="col-md-6">
-              <p><strong>Max Sessions:</strong> ${tier.max_presence_sessions}</p>
-              <p><strong>Max Docs:</strong> ${tier.max_collaboration_docs}</p>
-              <p><strong>Max Event Attendees:</strong> ${tier.max_event_attendees}</p>
-              <p><strong>Storage:</strong> ${tier.storage_limit_gb} GB</p>
-            </div>
-          </div>
-          <div class="mt-2">
-            <strong>Features:</strong>
-            <div class="mt-1">
-              ${Object.entries(tier.features || {}).map(([key, value]) => 
-                `<span class="badge ${value ? 'bg-success' : 'bg-secondary'} me-1">${key}</span>`
-              ).join('')}
+              <div class="row">
+                <div class="col-6">
+                  <p><strong>Max Sessions:</strong> ${tier.max_presence_sessions}</p>
+                  <p><strong>Max Docs:</strong> ${tier.max_collaboration_docs}</p>
+                </div>
+                <div class="col-6">
+                  <p><strong>Max Event Attendees:</strong> ${tier.max_event_attendees}</p>
+                  <p><strong>Storage:</strong> ${tier.storage_limit_gb} GB</p>
+                </div>
+              </div>
+              <div class="mt-2">
+                <strong>Features:</strong>
+                <div class="mt-1">
+                  ${Object.entries(tier.features || {}).map(([key, value]) => 
+                    `<span class="badge ${value ? 'bg-success' : 'bg-secondary'} me-1">${key.replace(/_/g, ' ')}</span>`
+                  ).join('')}
+                </div>
+              </div>
             </div>
           </div>
         </div>
       </div>
     `).join('');
 
-    container.innerHTML = html;
+    container.innerHTML = createNewTierForm + tiersHtml;
+    this.setupTierFormHandlers();
+  }
+
+  setupTierFormHandlers() {
+    const form = document.getElementById('new-tier-form');
+    if (form) {
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        await this.createTier(new FormData(form));
+      });
+    }
+  }
+
+  async createTier(formData) {
+    try {
+      const tierData = {
+        tier_name: formData.get('tier_name'),
+        tier_code: formData.get('tier_code'),
+        description: formData.get('description'),
+        monthly_price_usd: parseFloat(formData.get('monthly_price_usd')) || 0,
+        yearly_price_usd: parseFloat(formData.get('yearly_price_usd')) || 0,
+        max_presence_sessions: parseInt(formData.get('max_presence_sessions')) || 1,
+        max_collaboration_docs: parseInt(formData.get('max_collaboration_docs')) || 5,
+        max_event_attendees: parseInt(formData.get('max_event_attendees')) || 10,
+        storage_limit_gb: parseInt(formData.get('storage_limit_gb')) || 1,
+        bandwidth_limit_gb: parseInt(formData.get('bandwidth_limit_gb')) || 10,
+        priority_support: formData.get('priority_support') === 'on',
+        custom_branding: formData.get('custom_branding') === 'on',
+        api_access: formData.get('api_access') === 'on',
+        analytics_access: formData.get('analytics_access') === 'on',
+        features: {
+          vr_spaces: formData.get('feature_vr_spaces') === 'on',
+          file_sharing: formData.get('feature_file_sharing') === 'on',
+          screen_sharing: formData.get('feature_screen_sharing') === 'on',
+          recording: formData.get('feature_recording') === 'on',
+          custom_avatars: formData.get('feature_custom_avatars') === 'on',
+          custom_environments: formData.get('feature_custom_environments') === 'on',
+          live_streaming: formData.get('feature_live_streaming') === 'on',
+          api_integration: formData.get('feature_api_integration') === 'on'
+        }
+      };
+
+      const response = await fetch(`${this.baseUrl}/admin/subscriptions/tiers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(tierData)
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        this.showSuccess('Tier created successfully!');
+        document.getElementById('new-tier-form').reset();
+        await this.loadTiers(); // Refresh the list
+      } else {
+        this.showError('Failed to create tier: ' + data.error);
+      }
+    } catch (error) {
+      console.error('Error creating tier:', error);
+      this.showError('Error creating tier');
+    }
+  }
+
+  async toggleTierStatus(tierId) {
+    try {
+      const response = await fetch(`${this.baseUrl}/admin/subscriptions/tiers/${tierId}/toggle`, {
+        method: 'POST'
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        this.showSuccess(`Tier ${data.tier.is_active ? 'activated' : 'deactivated'} successfully!`);
+        await this.loadTiers(); // Refresh the list
+      } else {
+        this.showError('Failed to toggle tier status: ' + data.error);
+      }
+    } catch (error) {
+      console.error('Error toggling tier status:', error);
+      this.showError('Error toggling tier status');
+    }
+  }
+
+  async updateTierPricing() {
+    try {
+      const response = await fetch(`${this.baseUrl}/admin/subscriptions/pricing/update`, {
+        method: 'POST'
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        this.showSuccess(`Updated pricing for ${data.updated_tiers.length} tiers based on current HIVE price ($${data.current_prices.hive_usd.toFixed(3)})`);
+        await this.loadTiers(); // Refresh the list
+      } else {
+        this.showError('Failed to update pricing: ' + data.error);
+      }
+    } catch (error) {
+      console.error('Error updating pricing:', error);
+      this.showError('Error updating pricing');
+    }
+  }
+
+  editTier(tierId) {
+    // For now, just show an alert. Could be enhanced with a modal form
+    this.showSuccess(`Edit functionality for tier ${tierId} - to be implemented with modal form`);
+  }
+
+  async migrateUSDPricing() {
+    try {
+      const response = await fetch(`${this.baseUrl}/migrate-usd-pricing`, {
+        method: 'POST'
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.message.includes('added')) {
+        console.log('USD pricing migration completed:', data.message);
+      }
+      // Don't show success/error for already existing columns
+    } catch (error) {
+      console.error('Error migrating USD pricing:', error);
+      // Don't show error to user as this is background migration
+    }
   }
 
   async loadMonitoringStatus() {

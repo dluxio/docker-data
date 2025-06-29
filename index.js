@@ -621,6 +621,7 @@ api.get('/api/debug/read-transactions', async (req, res) => {
 // Database initialization and status endpoints
 api.get("/api/init-subscription-system", API.initSubscriptionSystem);
 api.get("/api/check-subscription-tables", API.checkSubscriptionTables);
+api.post("/api/migrate-usd-pricing", subscriptionAPI.migrateUSDPricing);
 
 const subscriptionAPI = require('./api/subscription-api');
 
@@ -635,6 +636,13 @@ api.post("/api/subscriptions/calculate-price", subscriptionAPI.calculateSubscrip
 api.get("/api/admin/subscriptions/stats", subscriptionAPI.getSubscriptionStats);
 api.post("/api/admin/subscriptions/promo-codes", subscriptionAPI.createPromoCode);
 api.get("/api/admin/subscriptions/promo-codes", subscriptionAPI.getPromoCodes);
+
+// Admin tier management endpoints
+api.get("/api/admin/subscriptions/tiers", subscriptionAPI.getAllTiers);
+api.post("/api/admin/subscriptions/tiers", subscriptionAPI.createTier);
+api.put("/api/admin/subscriptions/tiers/:tierId", subscriptionAPI.updateTier);
+api.post("/api/admin/subscriptions/tiers/:tierId/toggle", subscriptionAPI.toggleTierStatus);
+api.post("/api/admin/subscriptions/pricing/update", subscriptionAPI.updateTierPricing);
 
 // Payment notification endpoints (admin)
 api.get("/api/admin/subscriptions/notifications/stats", subscriptionAPI.getNotificationStats);

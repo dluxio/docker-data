@@ -588,9 +588,323 @@ async function validatePromoCode(promoCode, tierId, userAccount) {
   }
 }
 
+// ==================================================================
+// ADMIN TIER MANAGEMENT
+// ==================================================================
+
+// Get all tiers (including inactive ones for admin)
+exports.getAllTiers = async (req, res) => {
+  try {
+    const query = `
+      SELECT *, 
+        (SELECT COUNT(*) FROM user_subscriptions WHERE tier_id = subscription_tiers.id AND status = 'active') as active_subscribers
+      FROM subscription_tiers 
+      ORDER BY is_active DESC, sort_order ASC, created_at DESC
+    `;
+    
+    const result = await pool.query(query);
+    
+    res.json({
+      tiers: result.rows,
+      node: config.username
+    });
+  } catch (error) {
+    console.error('Error getting all tiers:', error);
+    res.status(500).json({ error: 'Failed to get tiers' });
+  }
+};
+
+// Create new subscription tier
+exports.createTier = async (req, res) => {
+  try {
+    const {
+      tier_name,
+      tier_code,
+      description,
+      monthly_price_usd,
+      yearly_price_usd,
+      max_presence_sessions,
+      max_collaboration_docs,
+      max_event_attendees,
+      storage_limit_gb,
+      bandwidth_limit_gb,
+      features,
+      priority_support,
+      custom_branding,
+      api_access,
+      analytics_access,
+      sort_order
+    } = req.body;
+
+    // Check if tier code already exists
+    const existingQuery = `SELECT id FROM subscription_tiers WHERE tier_code = $1`;
+    const existingResult = await pool.query(existingQuery, [tier_code]);
+    
+    if (existingResult.rows.length > 0) {
+      return res.status(400).json({ error: 'Tier code already exists' });
+    }
+
+    // Get current HIVE/USD price from witness feeds
+    const prices = await getCurrentPrices();
+    const monthly_price_hive = monthly_price_usd / prices.hive_usd;
+    const yearly_price_hive = yearly_price_usd / prices.hive_usd;
+    const monthly_price_hbd = monthly_price_usd; // HBD is pegged to USD
+    const yearly_price_hbd = yearly_price_usd;
+
+    const insertQuery = `
+      INSERT INTO subscription_tiers (
+        tier_name, tier_code, description, 
+        monthly_price_usd, yearly_price_usd,
+        monthly_price_hive, yearly_price_hive,
+        monthly_price_hbd, yearly_price_hbd,
+        max_presence_sessions, max_collaboration_docs, max_event_attendees,
+        storage_limit_gb, bandwidth_limit_gb, features,
+        priority_support, custom_branding, api_access, analytics_access,
+        sort_order, is_active, created_at
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, true, NOW()
+      ) RETURNING *
+    `;
+
+    const result = await pool.query(insertQuery, [
+      tier_name, tier_code, description,
+      monthly_price_usd, yearly_price_usd,
+      monthly_price_hive, yearly_price_hive,
+      monthly_price_hbd, yearly_price_hbd,
+      max_presence_sessions, max_collaboration_docs, max_event_attendees,
+      storage_limit_gb, bandwidth_limit_gb, JSON.stringify(features || {}),
+      priority_support || false, custom_branding || false, 
+      api_access || false, analytics_access || false,
+      sort_order || 0
+    ]);
+
+    res.json({
+      success: true,
+      tier: result.rows[0],
+      node: config.username
+    });
+  } catch (error) {
+    console.error('Error creating tier:', error);
+    res.status(500).json({ error: 'Failed to create tier' });
+  }
+};
+
+// Update subscription tier
+exports.updateTier = async (req, res) => {
+  try {
+    const { tierId } = req.params;
+    const updates = req.body;
+
+    // If USD prices are being updated, recalculate HIVE prices
+    if (updates.monthly_price_usd || updates.yearly_price_usd) {
+      const prices = await getCurrentPrices();
+      
+      if (updates.monthly_price_usd) {
+        updates.monthly_price_hive = updates.monthly_price_usd / prices.hive_usd;
+        updates.monthly_price_hbd = updates.monthly_price_usd;
+      }
+      
+      if (updates.yearly_price_usd) {
+        updates.yearly_price_hive = updates.yearly_price_usd / prices.hive_usd;
+        updates.yearly_price_hbd = updates.yearly_price_usd;
+      }
+    }
+
+    // Handle features JSON serialization
+    if (updates.features && typeof updates.features === 'object') {
+      updates.features = JSON.stringify(updates.features);
+    }
+
+    // Build dynamic update query
+    const setClause = Object.keys(updates)
+      .map((key, index) => `${key} = $${index + 2}`)
+      .join(', ');
+    
+    const updateQuery = `
+      UPDATE subscription_tiers 
+      SET ${setClause}, updated_at = NOW()
+      WHERE id = $1 
+      RETURNING *
+    `;
+
+    const values = [tierId, ...Object.values(updates)];
+    const result = await pool.query(updateQuery, values);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Tier not found' });
+    }
+
+    res.json({
+      success: true,
+      tier: result.rows[0],
+      node: config.username
+    });
+  } catch (error) {
+    console.error('Error updating tier:', error);
+    res.status(500).json({ error: 'Failed to update tier' });
+  }
+};
+
+// Toggle tier active status
+exports.toggleTierStatus = async (req, res) => {
+  try {
+    const { tierId } = req.params;
+    
+    const toggleQuery = `
+      UPDATE subscription_tiers 
+      SET is_active = NOT is_active, updated_at = NOW()
+      WHERE id = $1 
+      RETURNING *
+    `;
+
+    const result = await pool.query(toggleQuery, [tierId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Tier not found' });
+    }
+
+    res.json({
+      success: true,
+      tier: result.rows[0],
+      node: config.username
+    });
+  } catch (error) {
+    console.error('Error toggling tier status:', error);
+    res.status(500).json({ error: 'Failed to toggle tier status' });
+  }
+};
+
+// Update tier pricing based on current witness feeds
+exports.updateTierPricing = async (req, res) => {
+  try {
+    const prices = await getCurrentPrices();
+    
+    const updateQuery = `
+      UPDATE subscription_tiers 
+      SET 
+        monthly_price_hive = monthly_price_usd / $1,
+        yearly_price_hive = yearly_price_usd / $1,
+        monthly_price_hbd = monthly_price_usd,
+        yearly_price_hbd = yearly_price_usd,
+        updated_at = NOW()
+      WHERE monthly_price_usd > 0 OR yearly_price_usd > 0
+      RETURNING tier_name, tier_code, monthly_price_usd, monthly_price_hive, yearly_price_usd, yearly_price_hive
+    `;
+
+    const result = await pool.query(updateQuery, [prices.hive_usd]);
+
+    res.json({
+      success: true,
+      updated_tiers: result.rows,
+      current_prices: prices,
+      node: config.username
+    });
+  } catch (error) {
+    console.error('Error updating tier pricing:', error);
+    res.status(500).json({ error: 'Failed to update pricing' });
+  }
+};
+
+// ==================================================================
+// WITNESS PRICE FEED INTEGRATION
+// ==================================================================
+
+async function getCurrentPrices() {
+  try {
+    // Try to get prices from Hive API
+    const response = await fetch('https://api.hive.blog', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'database_api.get_current_price_feed',
+        id: 1
+      })
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      const priceBase = parseFloat(data.result.base.split(' ')[0]);
+      const priceQuote = parseFloat(data.result.quote.split(' ')[0]);
+      const hive_usd = priceQuote / priceBase;
+
+      return {
+        hive_usd: hive_usd,
+        hbd_usd: 1.0, // HBD is pegged to USD
+        last_updated: new Date(),
+        source: 'hive_witness_feeds'
+      };
+    }
+  } catch (error) {
+    console.error('Error fetching witness feeds:', error);
+  }
+
+  // Fallback to default price if witness feeds fail
+  return {
+    hive_usd: 0.30, // Fallback price
+    hbd_usd: 1.0,
+    last_updated: new Date(),
+    source: 'fallback'
+  };
+}
+
+// Add USD pricing migration endpoint
+exports.migrateUSDPricing = async (req, res) => {
+  try {
+    // Check if USD columns already exist
+    const checkQuery = `
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'subscription_tiers' 
+      AND column_name IN ('monthly_price_usd', 'yearly_price_usd')
+    `;
+    
+    const existingColumns = await pool.query(checkQuery);
+    
+    if (existingColumns.rows.length === 0) {
+      // Add USD pricing columns
+      const alterQuery = `
+        ALTER TABLE subscription_tiers 
+        ADD COLUMN monthly_price_usd decimal(10,2) DEFAULT 0,
+        ADD COLUMN yearly_price_usd decimal(10,2) DEFAULT 0
+      `;
+      
+      await pool.query(alterQuery);
+      
+      // Update existing tiers with estimated USD values (using $0.30 HIVE as fallback)
+      const updateQuery = `
+        UPDATE subscription_tiers 
+        SET 
+          monthly_price_usd = monthly_price_hive * 0.30,
+          yearly_price_usd = yearly_price_hive * 0.30
+        WHERE monthly_price_hive > 0 OR yearly_price_hive > 0
+      `;
+      
+      await pool.query(updateQuery);
+      
+      res.json({
+        success: true,
+        message: 'USD pricing columns added and populated',
+        node: config.username
+      });
+    } else {
+      res.json({
+        success: true,
+        message: 'USD pricing columns already exist',
+        existing_columns: existingColumns.rows.map(r => r.column_name),
+        node: config.username
+      });
+    }
+  } catch (error) {
+    console.error('Error migrating USD pricing:', error);
+    res.status(500).json({ error: 'Failed to migrate USD pricing' });
+  }
+};
+
 // Export utility functions for use by other modules
 exports.getUserActiveSubscription = getUserActiveSubscription;
 exports.checkFeatureAccess = checkFeatureAccess;
+exports.getCurrentPrices = getCurrentPrices;
 
 // Payment notification API functions
 const { paymentNotificationService } = require('./payment-notifications');
