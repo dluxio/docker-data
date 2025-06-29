@@ -577,6 +577,11 @@
                     <div v-if="currentView === 'payment-channels'">
                         <payment-channels></payment-channels>
                     </div>
+
+                    <!-- Subscriptions View -->
+                    <div v-if="currentView === 'subscriptions'" id="subscription-manager">
+                        <!-- Content will be loaded by subscription-manager.js -->
+                    </div>
                 </main>
             </div>
         </div>
@@ -597,6 +602,7 @@
     <script src="js/components/posts-view.js"></script>
     <script src="js/components/flags-view.js"></script>
     <script src="js/components/scripts-management.js"></script>
+    <script src="js/components/subscription-manager.js"></script>
     <script>
         // Mount the app after all components are loaded
         if (window.mountDLUXApp) {

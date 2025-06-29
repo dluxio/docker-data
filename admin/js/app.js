@@ -280,6 +280,13 @@ const app = createApp({
                         console.error('Failed to refresh admin account info:', error);
                     }
                 });
+            } else if (view === 'subscriptions') {
+                // Initialize subscription manager when viewing subscriptions
+                this.$nextTick(() => {
+                    if (window.subscriptionManager) {
+                        window.subscriptionManager.init();
+                    }
+                });
             }
         },
 
