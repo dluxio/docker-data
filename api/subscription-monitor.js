@@ -23,8 +23,13 @@ class SubscriptionMonitor {
     
     console.log('Subscription Monitor registered for transfer operations');
     
-    // Process any pending payments that might have been missed
+      // Process any pending payments that might have been missed
+  try {
     await this.processPendingPayments();
+  } catch (error) {
+    console.error('⚠️  Could not process pending payments (tables may not exist yet):', error.message);
+    console.log('💡 Run /api/init-subscription-system to initialize the database tables');
+  }
     
     // Start renewal checker (runs every hour)
     setInterval(() => {

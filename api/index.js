@@ -3338,4 +3338,54 @@ exports.initSubscriptionSystem = async (req, res, next) => {
   }
 };
 
+// Database status check endpoint
+exports.checkSubscriptionTables = async (req, res, next) => {
+  try {
+    console.log('🔍 Checking subscription system tables...');
+    
+    // Check if subscription tables exist
+    const tableCheck = await pool.query(`
+      SELECT table_name 
+      FROM information_schema.tables 
+      WHERE table_schema = 'public' 
+      AND table_name IN ('subscription_tiers', 'user_subscriptions', 'subscription_payments', 'promo_codes', 'promo_code_usage')
+      ORDER BY table_name
+    `);
+    
+    const existingTables = tableCheck.rows.map(row => row.table_name);
+    const expectedTables = ['promo_code_usage', 'promo_codes', 'subscription_payments', 'subscription_tiers', 'user_subscriptions'];
+    const missingTables = expectedTables.filter(table => !existingTables.includes(table));
+    
+    // Also check if subscription_tiers has data
+    let tierCount = 0;
+    if (existingTables.includes('subscription_tiers')) {
+      const tierResult = await pool.query('SELECT COUNT(*) as count FROM subscription_tiers');
+      tierCount = parseInt(tierResult.rows[0].count);
+    }
+    
+    res.json({
+      success: true,
+      message: 'Subscription table status checked',
+      tables: {
+        existing: existingTables,
+        missing: missingTables,
+        expected: expectedTables,
+        all_present: missingTables.length === 0
+      },
+      data: {
+        tier_count: tierCount
+      },
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('❌ Error checking subscription tables:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+};
+
 
