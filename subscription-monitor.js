@@ -26,7 +26,12 @@ class SubscriptionMonitor {
     console.log('Subscription Monitor registered for transfer operations');
     
     // Process any pending payments that might have been missed
-    await this.processPendingPayments();
+    try {
+      await this.processPendingPayments();
+    } catch (error) {
+      console.error('⚠️  Could not process pending payments (tables may not exist yet):', error.message);
+      console.log('💡 Run /api/init-subscription-system to initialize the database tables');
+    }
     
     // Start renewal checker (runs every hour)
     setInterval(() => {
@@ -556,35 +561,39 @@ class SubscriptionMonitor {
 
   // Check for renewals
   async checkRenewals() {
-    console.log('🔍 Checking for subscription renewals...');
-    
-    // Find subscriptions expiring in the next 3 days
-    const query = `
-      SELECT s.*, t.tier_name FROM user_subscriptions s
-      JOIN subscription_tiers t ON s.tier_id = t.id
-      WHERE s.status = 'active' 
-        AND s.expires_at <= NOW() + INTERVAL '3 days'
-        AND s.auto_renew = true
-      ORDER BY s.expires_at ASC
-    `;
+    try {
+      console.log('🔍 Checking for subscription renewals...');
+      
+      // Find subscriptions expiring in the next 3 days
+      const query = `
+        SELECT s.*, t.tier_name FROM user_subscriptions s
+        JOIN subscription_tiers t ON s.tier_id = t.id
+        WHERE s.status = 'active' 
+          AND s.expires_at <= NOW() + INTERVAL '3 days'
+          AND s.auto_renew = true
+        ORDER BY s.expires_at ASC
+      `;
 
-    const result = await pool.query(query);
-    
-    for (const subscription of result.rows) {
-      console.log(`⏰ Subscription ${subscription.id} for ${subscription.user_account} expires soon`);
-      // Here you could send notifications or mark for manual follow-up
-    }
-    
-    // Mark expired subscriptions
-    const expiredQuery = `
-      UPDATE user_subscriptions 
-      SET status = 'expired'
-      WHERE status = 'active' AND expires_at < NOW()
-    `;
-    
-    const expiredResult = await pool.query(expiredQuery);
-    if (expiredResult.rowCount > 0) {
-      console.log(`⚠️ Marked ${expiredResult.rowCount} subscriptions as expired`);
+      const result = await pool.query(query);
+      
+      for (const subscription of result.rows) {
+        console.log(`⏰ Subscription ${subscription.id} for ${subscription.user_account} expires soon`);
+        // Here you could send notifications or mark for manual follow-up
+      }
+      
+      // Mark expired subscriptions
+      const expiredQuery = `
+        UPDATE user_subscriptions 
+        SET status = 'expired'
+        WHERE status = 'active' AND expires_at < NOW()
+      `;
+      
+      const expiredResult = await pool.query(expiredQuery);
+      if (expiredResult.rowCount > 0) {
+        console.log(`⚠️ Marked ${expiredResult.rowCount} subscriptions as expired`);
+      }
+    } catch (error) {
+      console.error('⚠️  Could not check renewals (tables may not exist yet):', error.message);
     }
   }
 
@@ -602,26 +611,41 @@ class SubscriptionMonitor {
 
   // Get subscription statistics
   async getStats() {
-    const queries = [
-      "SELECT COUNT(*) as active_subs FROM user_subscriptions WHERE status = 'active'",
-      "SELECT COUNT(*) as pending_payments FROM subscription_payments WHERE status = 'pending'",
-      "SELECT COUNT(*) as processed_today FROM subscription_payments WHERE status = 'processed' AND created_at > NOW() - INTERVAL '1 day'",
-      "SELECT tier_code, COUNT(*) as count FROM user_subscriptions s JOIN subscription_tiers t ON s.tier_id = t.id WHERE s.status = 'active' GROUP BY tier_code",
-      "SELECT SUM(CASE WHEN currency = 'HIVE' THEN amount * 0.5 ELSE amount END) as revenue_hbd FROM subscription_payments WHERE status = 'processed' AND created_at > NOW() - INTERVAL '30 days'"
-    ];
+    try {
+      const queries = [
+        "SELECT COUNT(*) as active_subs FROM user_subscriptions WHERE status = 'active'",
+        "SELECT COUNT(*) as pending_payments FROM subscription_payments WHERE status = 'pending'",
+        "SELECT COUNT(*) as processed_today FROM subscription_payments WHERE status = 'processed' AND created_at > NOW() - INTERVAL '1 day'",
+        "SELECT tier_code, COUNT(*) as count FROM user_subscriptions s JOIN subscription_tiers t ON s.tier_id = t.id WHERE s.status = 'active' GROUP BY tier_code",
+        "SELECT SUM(CASE WHEN currency = 'HIVE' THEN amount * 0.5 ELSE amount END) as revenue_hbd FROM subscription_payments WHERE status = 'processed' AND created_at > NOW() - INTERVAL '30 days'"
+      ];
 
-    const results = await Promise.all(queries.map(q => pool.query(q)));
-    
-    return {
-      active_subscriptions: parseInt(results[0].rows[0].active_subs),
-      pending_payments: parseInt(results[1].rows[0].pending_payments),
-      processed_today: parseInt(results[2].rows[0].processed_today),
-      tier_distribution: results[3].rows,
-      revenue_last_30_days: parseFloat(results[4].rows[0].revenue_hbd || 0),
-      processing_queue_size: this.processingQueue.size,
-      last_updated: new Date().toISOString(),
-      target_account: this.targetAccount
-    };
+      const results = await Promise.all(queries.map(q => pool.query(q)));
+      
+      return {
+        active_subscriptions: parseInt(results[0].rows[0].active_subs),
+        pending_payments: parseInt(results[1].rows[0].pending_payments),
+        processed_today: parseInt(results[2].rows[0].processed_today),
+        tier_distribution: results[3].rows,
+        revenue_last_30_days: parseFloat(results[4].rows[0].revenue_hbd || 0),
+        processing_queue_size: this.processingQueue.size,
+        last_updated: new Date().toISOString(),
+        target_account: this.targetAccount
+      };
+    } catch (error) {
+      console.error('⚠️  Could not get subscription stats (tables may not exist yet):', error.message);
+      return {
+        active_subscriptions: 0,
+        pending_payments: 0,
+        processed_today: 0,
+        tier_distribution: [],
+        revenue_last_30_days: 0,
+        processing_queue_size: this.processingQueue.size,
+        error: 'Tables not initialized',
+        last_updated: new Date().toISOString(),
+        target_account: this.targetAccount
+      };
+    }
   }
 }
 
