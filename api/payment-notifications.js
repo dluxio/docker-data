@@ -60,16 +60,16 @@ class PaymentNotificationService {
         // Find subscriptions expiring soon that need reminders
         for (const days of this.reminderDays) {
           const query = `
-            SELECT us.*, st.name as tier_name, st.monthly_price_hive, st.yearly_price_hive,
+            SELECT us.*, st.tier_name, st.monthly_price_hive, st.yearly_price_hive,
                    st.monthly_price_hbd, st.yearly_price_hbd
             FROM user_subscriptions us
             JOIN subscription_tiers st ON us.tier_id = st.id
             WHERE us.status = 'active'
-              AND us.end_date BETWEEN NOW() AND NOW() + INTERVAL '${days} days'
-              AND us.end_date > NOW()
+              AND us.expires_at BETWEEN NOW() AND NOW() + INTERVAL '${days} days'
+              AND us.expires_at > NOW()
               AND NOT EXISTS (
                 SELECT 1 FROM user_notifications un 
-                WHERE un.username = us.username 
+                WHERE un.username = us.user_account 
                   AND un.type = '${NOTIFICATION_TYPES.PAYMENT_DUE_SOON}'
                   AND un.created_at > NOW() - INTERVAL '${days + 1} days'
                   AND un.data->>'subscription_id' = us.id::text
@@ -92,22 +92,23 @@ class PaymentNotificationService {
 
   // Send payment due soon notification
   async sendPaymentDueNotification(subscription, daysRemaining) {
-    const price = subscription.is_yearly 
+    const isYearly = subscription.subscription_type === 'yearly';
+    const price = isYearly 
       ? `${subscription.yearly_price_hive} HIVE / ${subscription.yearly_price_hbd} HBD`
       : `${subscription.monthly_price_hive} HIVE / ${subscription.monthly_price_hbd} HBD`;
 
     const title = `Payment Due in ${daysRemaining} Day${daysRemaining > 1 ? 's' : ''}`;
-    const message = `Your ${subscription.tier_name} subscription expires on ${subscription.end_date.toDateString()}. Renew now to avoid service interruption.\n\nRenewal Price: ${price}`;
+    const message = `Your ${subscription.tier_name} subscription expires on ${subscription.expires_at.toDateString()}. Renew now to avoid service interruption.\n\nRenewal Price: ${price}`;
 
     await createNotification(
-      subscription.username,
+      subscription.user_account,
       NOTIFICATION_TYPES.PAYMENT_DUE_SOON,
       title,
       message,
       {
         subscription_id: subscription.id,
         tier_name: subscription.tier_name,
-        end_date: subscription.end_date,
+        expires_at: subscription.expires_at,
         days_remaining: daysRemaining,
         renewal_price: price,
         memo_codes: {
@@ -129,15 +130,15 @@ class PaymentNotificationService {
       
       try {
         const query = `
-          SELECT us.*, st.name as tier_name
+          SELECT us.*, st.tier_name
           FROM user_subscriptions us
           JOIN subscription_tiers st ON us.tier_id = st.id
           WHERE us.status = 'active'
-            AND us.end_date < NOW()
-            AND us.end_date > NOW() - INTERVAL '${this.gracePeriodDays} days'
+            AND us.expires_at < NOW()
+            AND us.expires_at > NOW() - INTERVAL '${this.gracePeriodDays} days'
             AND NOT EXISTS (
               SELECT 1 FROM user_notifications un 
-              WHERE un.username = us.username 
+              WHERE un.username = us.user_account 
                 AND un.type = '${NOTIFICATION_TYPES.PAYMENT_OVERDUE}'
                 AND un.created_at > NOW() - INTERVAL '1 day'
                 AND un.data->>'subscription_id' = us.id::text
@@ -159,7 +160,7 @@ class PaymentNotificationService {
 
   // Send overdue payment notification
   async sendOverduePaymentNotification(subscription) {
-    const daysOverdue = Math.floor((new Date() - subscription.end_date) / (1000 * 60 * 60 * 24));
+    const daysOverdue = Math.floor((new Date() - subscription.expires_at) / (1000 * 60 * 60 * 24));
     const daysUntilSuspension = this.gracePeriodDays - daysOverdue;
     
     const title = `Payment Overdue - ${daysUntilSuspension} Days Until Suspension`;
@@ -167,14 +168,14 @@ class PaymentNotificationService {
       `Your service will be suspended in ${daysUntilSuspension} day${daysUntilSuspension > 1 ? 's' : ''} if payment is not received.`;
 
     await createNotification(
-      subscription.username,
+      subscription.user_account,
       NOTIFICATION_TYPES.PAYMENT_OVERDUE,
       title,
       message,
       {
         subscription_id: subscription.id,
         tier_name: subscription.tier_name,
-        end_date: subscription.end_date,
+        expires_at: subscription.expires_at,
         days_overdue: daysOverdue,
         days_until_suspension: daysUntilSuspension
       },
@@ -191,11 +192,11 @@ class PaymentNotificationService {
       try {
         // Find subscriptions that should be suspended
         const suspendQuery = `
-          SELECT us.*, st.name as tier_name
+          SELECT us.*, st.tier_name
           FROM user_subscriptions us
           JOIN subscription_tiers st ON us.tier_id = st.id
           WHERE us.status = 'active'
-            AND us.end_date < NOW() - INTERVAL '${this.gracePeriodDays} days'
+            AND us.expires_at < NOW() - INTERVAL '${this.gracePeriodDays} days'
         `;
         
         const suspendResult = await client.query(suspendQuery);
@@ -225,7 +226,7 @@ class PaymentNotificationService {
       `Premium features are now disabled. Renew your subscription to restore full access.`;
 
     await createNotification(
-      subscription.username,
+      subscription.user_account,
       NOTIFICATION_TYPES.SERVICE_SUSPENDED,
       title,
       message,
@@ -244,17 +245,17 @@ class PaymentNotificationService {
   async sendSubscriptionRenewedNotification(subscription, paymentDetails) {
     const title = `Subscription Renewed - ${subscription.tier_name}`;
     const message = `Your ${subscription.tier_name} subscription has been successfully renewed. ` +
-      `Your next payment is due on ${subscription.end_date.toDateString()}.`;
+      `Your next payment is due on ${subscription.expires_at.toDateString()}.`;
 
     await createNotification(
-      subscription.username,
+      subscription.user_account,
       NOTIFICATION_TYPES.SUBSCRIPTION_RENEWED,
       title,
       message,
       {
         subscription_id: subscription.id,
         tier_name: subscription.tier_name,
-        end_date: subscription.end_date,
+        expires_at: subscription.expires_at,
         payment_amount: paymentDetails.amount,
         payment_currency: paymentDetails.currency,
         transaction_id: paymentDetails.transaction_id
