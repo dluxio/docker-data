@@ -621,9 +621,11 @@ api.get('/api/debug/read-transactions', async (req, res) => {
 // Database initialization and status endpoints
 api.get("/api/init-subscription-system", API.initSubscriptionSystem);
 api.get("/api/check-subscription-tables", API.checkSubscriptionTables);
-api.post("/api/migrate-usd-pricing", subscriptionAPI.migrateUSDPricing);
 
 const subscriptionAPI = require('./api/subscription-api');
+
+// Database migration endpoints
+api.post("/api/migrate-usd-pricing", subscriptionAPI.migrateUSDPricing);
 
 // Public subscription endpoints
 api.get("/api/subscriptions/tiers", subscriptionAPI.getSubscriptionTiers);
