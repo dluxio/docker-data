@@ -494,56 +494,72 @@ class SubscriptionMonitor {
 
   // Check for renewals
   async checkRenewals() {
-    console.log('Checking for subscription renewals...');
-    
-    // Find subscriptions expiring in the next 3 days
-    const query = `
-      SELECT s.*, t.tier_name FROM user_subscriptions s
-      JOIN subscription_tiers t ON s.tier_id = t.id
-      WHERE s.status = 'active' 
-        AND s.expires_at <= NOW() + INTERVAL '3 days'
-        AND s.auto_renew = true
-      ORDER BY s.expires_at ASC
-    `;
+    try {
+      console.log('Checking for subscription renewals...');
+      
+      // Find subscriptions expiring in the next 3 days
+      const query = `
+        SELECT s.*, t.tier_name FROM user_subscriptions s
+        JOIN subscription_tiers t ON s.tier_id = t.id
+        WHERE s.status = 'active' 
+          AND s.expires_at <= NOW() + INTERVAL '3 days'
+          AND s.auto_renew = true
+        ORDER BY s.expires_at ASC
+      `;
 
-    const result = await pool.query(query);
-    
-    for (const subscription of result.rows) {
-      console.log(`Subscription ${subscription.id} for ${subscription.user_account} expires soon`);
-      // Here you could send notifications or mark for manual follow-up
-    }
-    
-    // Mark expired subscriptions
-    const expiredQuery = `
-      UPDATE user_subscriptions 
-      SET status = 'expired'
-      WHERE status = 'active' AND expires_at < NOW()
-    `;
-    
-    const expiredResult = await pool.query(expiredQuery);
-    if (expiredResult.rowCount > 0) {
-      console.log(`Marked ${expiredResult.rowCount} subscriptions as expired`);
+      const result = await pool.query(query);
+      
+      for (const subscription of result.rows) {
+        console.log(`Subscription ${subscription.id} for ${subscription.user_account} expires soon`);
+        // Here you could send notifications or mark for manual follow-up
+      }
+      
+      // Mark expired subscriptions
+      const expiredQuery = `
+        UPDATE user_subscriptions 
+        SET status = 'expired'
+        WHERE status = 'active' AND expires_at < NOW()
+      `;
+      
+      const expiredResult = await pool.query(expiredQuery);
+      if (expiredResult.rowCount > 0) {
+        console.log(`Marked ${expiredResult.rowCount} subscriptions as expired`);
+      }
+    } catch (error) {
+      console.error('⚠️  Could not check renewals (tables may not exist yet):', error.message);
     }
   }
 
   // Get subscription statistics
   async getStats() {
-    const queries = [
-      "SELECT COUNT(*) as active_subs FROM user_subscriptions WHERE status = 'active'",
-      "SELECT COUNT(*) as pending_payments FROM subscription_payments WHERE status = 'pending'",
-      "SELECT COUNT(*) as processed_today FROM subscription_payments WHERE status = 'processed' AND created_at > NOW() - INTERVAL '1 day'",
-      "SELECT tier_code, COUNT(*) as count FROM user_subscriptions s JOIN subscription_tiers t ON s.tier_id = t.id WHERE s.status = 'active' GROUP BY tier_code"
-    ];
+    try {
+      const queries = [
+        "SELECT COUNT(*) as active_subs FROM user_subscriptions WHERE status = 'active'",
+        "SELECT COUNT(*) as pending_payments FROM subscription_payments WHERE status = 'pending'",
+        "SELECT COUNT(*) as processed_today FROM subscription_payments WHERE status = 'processed' AND created_at > NOW() - INTERVAL '1 day'",
+        "SELECT tier_code, COUNT(*) as count FROM user_subscriptions s JOIN subscription_tiers t ON s.tier_id = t.id WHERE s.status = 'active' GROUP BY tier_code"
+      ];
 
-    const results = await Promise.all(queries.map(q => pool.query(q)));
-    
-    return {
-      active_subscriptions: parseInt(results[0].rows[0].active_subs),
-      pending_payments: parseInt(results[1].rows[0].pending_payments),
-      processed_today: parseInt(results[2].rows[0].processed_today),
-      tier_distribution: results[3].rows,
-      last_updated: new Date().toISOString()
-    };
+      const results = await Promise.all(queries.map(q => pool.query(q)));
+      
+      return {
+        active_subscriptions: parseInt(results[0].rows[0].active_subs),
+        pending_payments: parseInt(results[1].rows[0].pending_payments),
+        processed_today: parseInt(results[2].rows[0].processed_today),
+        tier_distribution: results[3].rows,
+        last_updated: new Date().toISOString()
+      };
+    } catch (error) {
+      console.error('⚠️  Could not get subscription stats (tables may not exist yet):', error.message);
+      return {
+        active_subscriptions: 0,
+        pending_payments: 0,
+        processed_today: 0,
+        tier_distribution: [],
+        error: 'Tables not initialized',
+        last_updated: new Date().toISOString()
+      };
+    }
   }
 }
 
