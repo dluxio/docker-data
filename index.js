@@ -702,6 +702,9 @@ api.get("/api/presence/test/viral-capacity", presenceWriteAPI.testViralCapacityS
 // SUBSCRIPTION SYSTEM API ROUTES
 // ==================================================================
 
+// Database initialization endpoint
+api.get("/api/init-subscription-system", API.initSubscriptionSystem);
+
 const subscriptionAPI = require('./api/subscription-api');
 
 // Public subscription endpoints

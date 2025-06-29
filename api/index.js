@@ -3153,4 +3153,189 @@ exports.logSpaceActivity = require('./presence-api').logSpaceActivity;
 // Presence API health check
 exports.presenceHealthCheck = require('./presence-api').presenceHealthCheck;
 
+// Add database initialization endpoint
+exports.initSubscriptionSystem = async (req, res, next) => {
+  try {
+    console.log('🔧 Initializing subscription system tables...');
+    
+    // Check if subscription tables already exist
+    const tableCheck = await pool.query(`
+      SELECT table_name 
+      FROM information_schema.tables 
+      WHERE table_schema = 'public' 
+      AND table_name IN ('subscription_tiers', 'user_subscriptions', 'subscription_payments', 'promo_codes', 'promo_code_usage')
+    `);
+    
+    const existingTables = tableCheck.rows.map(row => row.table_name);
+    
+    if (existingTables.length === 5) {
+      return res.json({
+        success: true,
+        message: 'Subscription system tables already exist',
+        tables: existingTables
+      });
+    }
+    
+    console.log(`Found ${existingTables.length}/5 subscription tables, creating missing ones...`);
+    
+    // Create subscription_tiers table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS subscription_tiers (
+        id SERIAL PRIMARY KEY,
+        tier_code varchar(50) UNIQUE NOT NULL,
+        tier_name varchar(100) NOT NULL,
+        description text,
+        features jsonb NOT NULL DEFAULT '{}',
+        monthly_price_hive decimal(10,3),
+        yearly_price_hive decimal(10,3),
+        monthly_price_hbd decimal(10,3),
+        yearly_price_hbd decimal(10,3),
+        max_presence_sessions integer DEFAULT 1,
+        max_collaboration_docs integer DEFAULT 5,
+        max_event_attendees integer DEFAULT 10,
+        storage_limit_gb integer DEFAULT 1,
+        bandwidth_limit_gb integer DEFAULT 10,
+        priority_support boolean DEFAULT false,
+        custom_branding boolean DEFAULT false,
+        api_access boolean DEFAULT false,
+        analytics_access boolean DEFAULT false,
+        is_active boolean DEFAULT true,
+        sort_order integer DEFAULT 0,
+        created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+        updated_at timestamp DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    
+    // Insert default subscription tiers
+    await pool.query(`
+      INSERT INTO subscription_tiers (tier_code, tier_name, description, features, monthly_price_hive, yearly_price_hive, monthly_price_hbd, yearly_price_hbd, max_presence_sessions, max_collaboration_docs, max_event_attendees, storage_limit_gb, bandwidth_limit_gb, priority_support, custom_branding, api_access, analytics_access, sort_order) VALUES
+      ('free', 'Free', 'Basic presence features for individual users', '{"vr_spaces": true, "basic_chat": true, "file_sharing": false, "screen_sharing": false, "recording": false}', 0, 0, 0, 0, 1, 1, 5, 0, 1, false, false, false, false, 1),
+      ('basic', 'Basic', 'Enhanced presence with file sharing and collaboration', '{"vr_spaces": true, "basic_chat": true, "file_sharing": true, "screen_sharing": true, "recording": false, "custom_avatars": true}', 5.000, 50.000, 2.500, 25.000, 2, 5, 15, 1, 5, false, false, false, false, 2),
+      ('premium', 'Premium', 'Advanced features for teams and content creators', '{"vr_spaces": true, "basic_chat": true, "file_sharing": true, "screen_sharing": true, "recording": true, "custom_avatars": true, "custom_environments": true, "live_streaming": true}', 15.000, 150.000, 7.500, 75.000, 5, 25, 50, 5, 25, true, false, true, true, 3),
+      ('pro', 'Professional', 'Everything for professional organizations', '{"vr_spaces": true, "basic_chat": true, "file_sharing": true, "screen_sharing": true, "recording": true, "custom_avatars": true, "custom_environments": true, "live_streaming": true, "api_integration": true, "webhooks": true, "sso": true}', 50.000, 500.000, 25.000, 250.000, 20, 100, 200, 25, 100, true, true, true, true, 4)
+      ON CONFLICT (tier_code) DO NOTHING
+    `);
+    
+    // Create user_subscriptions table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS user_subscriptions (
+        id SERIAL PRIMARY KEY,
+        user_account varchar(16) NOT NULL,
+        tier_id INTEGER REFERENCES subscription_tiers(id),
+        subscription_type varchar(20) NOT NULL,
+        status varchar(20) DEFAULT 'active',
+        original_price_hive decimal(10,3),
+        original_price_hbd decimal(10,3),
+        effective_price_hive decimal(10,3),
+        effective_price_hbd decimal(10,3),
+        currency_used varchar(10),
+        started_at timestamp DEFAULT CURRENT_TIMESTAMP,
+        expires_at timestamp,
+        last_payment_at timestamp,
+        next_payment_due timestamp,
+        cancelled_at timestamp,
+        payment_transaction_id varchar(255),
+        auto_renew boolean DEFAULT true,
+        renewal_failures integer DEFAULT 0,
+        promo_code_id INTEGER,
+        discount_applied decimal(5,2) DEFAULT 0,
+        features_used jsonb DEFAULT '{}',
+        usage_stats jsonb DEFAULT '{}',
+        created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+        updated_at timestamp DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_account)
+      )
+    `);
+    
+    // Create promo_codes table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS promo_codes (
+        id SERIAL PRIMARY KEY,
+        code varchar(50) UNIQUE NOT NULL,
+        description text,
+        discount_type varchar(20) NOT NULL,
+        discount_value decimal(10,3) NOT NULL,
+        applicable_tiers integer[] DEFAULT '{}',
+        min_subscription_months integer DEFAULT 1,
+        max_uses integer,
+        uses_per_user integer DEFAULT 1,
+        valid_from timestamp DEFAULT CURRENT_TIMESTAMP,
+        valid_until timestamp,
+        is_active boolean DEFAULT true,
+        total_uses integer DEFAULT 0,
+        created_by varchar(16) NOT NULL,
+        created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+        updated_at timestamp DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    
+    // Create promo_code_usage table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS promo_code_usage (
+        id SERIAL PRIMARY KEY,
+        promo_code_id INTEGER REFERENCES promo_codes(id) ON DELETE CASCADE,
+        user_account varchar(16) NOT NULL,
+        subscription_id INTEGER REFERENCES user_subscriptions(id) ON DELETE CASCADE,
+        discount_applied decimal(10,3),
+        used_at timestamp DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(promo_code_id, user_account)
+      )
+    `);
+    
+    // Create subscription_payments table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS subscription_payments (
+        id SERIAL PRIMARY KEY,
+        transaction_id varchar(255) UNIQUE NOT NULL,
+        block_num integer,
+        from_account varchar(16) NOT NULL,
+        to_account varchar(16) NOT NULL,
+        amount decimal(10,3) NOT NULL,
+        currency varchar(10) NOT NULL,
+        memo text,
+        status varchar(20) DEFAULT 'pending',
+        processed_at timestamp,
+        subscription_id INTEGER REFERENCES user_subscriptions(id),
+        expected_amount decimal(10,3),
+        amount_matches boolean DEFAULT false,
+        memo_parsed jsonb,
+        error_message text,
+        retry_count integer DEFAULT 0,
+        created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+        updated_at timestamp DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    
+    // Create indexes
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_subscription_tiers_code ON subscription_tiers(tier_code);
+      CREATE INDEX IF NOT EXISTS idx_subscription_tiers_active ON subscription_tiers(is_active);
+      CREATE INDEX IF NOT EXISTS idx_user_subscriptions_account ON user_subscriptions(user_account);
+      CREATE INDEX IF NOT EXISTS idx_user_subscriptions_tier ON user_subscriptions(tier_id);
+      CREATE INDEX IF NOT EXISTS idx_user_subscriptions_status ON user_subscriptions(status);
+      CREATE INDEX IF NOT EXISTS idx_user_subscriptions_expires ON user_subscriptions(expires_at);
+      CREATE INDEX IF NOT EXISTS idx_subscription_payments_tx ON subscription_payments(transaction_id);
+      CREATE INDEX IF NOT EXISTS idx_subscription_payments_from ON subscription_payments(from_account);
+      CREATE INDEX IF NOT EXISTS idx_subscription_payments_status ON subscription_payments(status);
+      CREATE INDEX IF NOT EXISTS idx_promo_codes_code ON promo_codes(code);
+      CREATE INDEX IF NOT EXISTS idx_promo_codes_active ON promo_codes(is_active);
+    `);
+    
+    console.log('✅ Subscription system tables initialized successfully');
+    
+    res.json({
+      success: true,
+      message: 'Subscription system tables created successfully',
+      tables_created: ['subscription_tiers', 'user_subscriptions', 'promo_codes', 'promo_code_usage', 'subscription_payments']
+    });
+    
+  } catch (error) {
+    console.error('❌ Error initializing subscription system:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
 
