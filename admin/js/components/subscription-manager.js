@@ -717,14 +717,14 @@ class SubscriptionManager {
               <div class="row">
                 <div class="col-6">
                   <p><strong>Monthly:</strong><br>
-                    $${(tier.monthly_price_usd || 0).toFixed(2)} USD<br>
-                    <small class="text-muted">${(tier.monthly_price_hive || 0).toFixed(3)} HIVE / ${(tier.monthly_price_hbd || 0).toFixed(2)} HBD</small>
+                    $${parseFloat(tier.monthly_price_usd || 0).toFixed(2)} USD<br>
+                    <small class="text-muted">${parseFloat(tier.monthly_price_hive || 0).toFixed(3)} HIVE / ${parseFloat(tier.monthly_price_hbd || 0).toFixed(2)} HBD</small>
                   </p>
                 </div>
                 <div class="col-6">
                   <p><strong>Yearly:</strong><br>
-                    $${(tier.yearly_price_usd || 0).toFixed(2)} USD<br>
-                    <small class="text-muted">${(tier.yearly_price_hive || 0).toFixed(3)} HIVE / ${(tier.yearly_price_hbd || 0).toFixed(2)} HBD</small>
+                    $${parseFloat(tier.yearly_price_usd || 0).toFixed(2)} USD<br>
+                    <small class="text-muted">${parseFloat(tier.yearly_price_hive || 0).toFixed(3)} HIVE / ${parseFloat(tier.yearly_price_hbd || 0).toFixed(2)} HBD</small>
                   </p>
                 </div>
               </div>
