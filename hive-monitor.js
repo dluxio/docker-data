@@ -1,9 +1,10 @@
 const fetch = require('node-fetch');
+const config = require('./config');
 const { pool } = require('./index');
 
 class HiveMonitor {
     constructor() {
-        this.currentAddress = 'https://hive-api.dlux.io';
+        this.currentAddress = config.clientURL;
         this.lastProcessedBlock = 0;
         this.isRunning = false;
         this.operationHandlers = new Map();

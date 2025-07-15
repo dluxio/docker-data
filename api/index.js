@@ -3049,7 +3049,7 @@ exports.testHiveAPI = async (req, res, next) => {
   res.setHeader("Content-Type", "application/json");
   try {
     const fetch = require('node-fetch');
-    const currentAddress = 'https://hive-api.dlux.io';
+    const currentAddress = config.clientURL;
     
     console.log('Testing Hive API connectivity...');
     
